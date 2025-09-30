@@ -18,6 +18,7 @@
  */
 package org.apache.cloudstack.storage.driver;
 
+
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
 import com.cloud.host.Host;
@@ -39,20 +40,24 @@ import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@Component
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
 
+    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
     @Override
     public Map<String, String> getCapabilities() {
-        logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
+        s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
         Map<String, String> mapCapabilities = new HashMap<>();
-        mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.FALSE.toString());
-        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.FALSE.toString());
+
+        mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
 
         return mapCapabilities;
     }
@@ -64,25 +69,29 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public DataStoreTO getStoreTO(DataStore store) { return null; }
+    public DataStoreTO getStoreTO(DataStore store) {
+        return null;
+    }
 
     @Override
-    public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
-        throw new UnsupportedOperationException("Create operation is not supported for ONTAP primary storage.");
+    public void createAsync(DataStore store, DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+
+        s_logger.trace("OntapPrimaryDatastoreDriver: createAsync: Store: "+store+", data: "+data);
     }
 
     @Override
     public void deleteAsync(DataStore store, DataObject data, AsyncCompletionCallback<CommandResult> callback) {
-        throw new UnsupportedOperationException("Delete operation is not supported for ONTAP primary storage.");
+
     }
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+
     }
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, Host destHost, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+
     }
 
     @Override
@@ -91,7 +100,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -100,12 +111,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean grantAccess(DataObject dataObject, Host host, DataStore dataStore) {
-       return false;
+       return true;
     }
 
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
-        throw new UnsupportedOperationException("Revoke access operation is not supported for ONTAP primary storage.");
+
     }
 
     @Override
@@ -129,17 +140,23 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void takeSnapshot(SnapshotInfo snapshot, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void takeSnapshot(SnapshotInfo snapshot, AsyncCompletionCallback<CreateCmdResult> callback) {
+
+    }
 
     @Override
-    public void revertSnapshot(SnapshotInfo snapshotOnImageStore, SnapshotInfo snapshotOnPrimaryStore, AsyncCompletionCallback<CommandResult> callback) {}
+    public void revertSnapshot(SnapshotInfo snapshotOnImageStore, SnapshotInfo snapshotOnPrimaryStore, AsyncCompletionCallback<CommandResult> callback) {
+
+    }
 
     @Override
-    public void handleQualityOfServiceForVolumeMigration(VolumeInfo volumeInfo, QualityOfServiceState qualityOfServiceState) {}
+     public void handleQualityOfServiceForVolumeMigration(VolumeInfo volumeInfo, QualityOfServiceState qualityOfServiceState) {
+
+    }
 
     @Override
     public boolean canProvideStorageStats() {
-        return false;
+        return true;
     }
 
     @Override
@@ -168,7 +185,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void provideVmInfo(long vmId, long volumeId) {}
+    public void provideVmInfo(long vmId, long volumeId) {
+
+    }
 
     @Override
     public boolean isVmTagsNeeded(String tagKey) {
@@ -176,7 +195,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void provideVmTags(long vmId, long volumeId, String tagValue) {}
+    public void provideVmTags(long vmId, long volumeId, String tagValue) {
+
+    }
 
     @Override
     public boolean isStorageSupportHA(Storage.StoragePoolType type) {
@@ -184,5 +205,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void detachVolumeFromAllStorageNodes(Volume volume) {}
+    public void detachVolumeFromAllStorageNodes(Volume volume) {
+
+    }
 }
