@@ -60,5 +60,3 @@ public class OnTapResponse<T> {
     this.numRecords = (records != null) ? records.size() : 0;
   }
 }
-
-

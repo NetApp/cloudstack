@@ -17,7 +17,7 @@
   under the License.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <artifactId>cloud-plugin-storage-volume-ontap</artifactId>
     <name>Apache CloudStack Plugin - Storage Volume ONTAP Provider</name>
@@ -29,6 +29,7 @@
     </parent>
     <properties>
         <spring-cloud.version>2021.0.7</spring-cloud.version>
+        <spring-boot.version>2.7.10</spring-boot.version>
         <openfeign.version>11.0</openfeign.version>
         <json.version>20230227</json.version>
         <swagger-annotations.version>1.6.2</swagger-annotations.version>
@@ -86,6 +87,15 @@
             <artifactId>swagger-annotations</artifactId>
             <version>${swagger-annotations.version}</version>
         </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.springframework</groupId>-->
+<!--            <artifactId>spring-web</artifactId>-->
+<!--        </dependency>-->
+<!--        <dependency>-->
+<!--            <groupId>org.springframework.boot</groupId>-->
+<!--            <artifactId>spring-boot-starter</artifactId>-->
+<!--            <version>${spring-boot.version}</version>-->
+<!--        </dependency>-->
     </dependencies>
     <build>
         <plugins>
