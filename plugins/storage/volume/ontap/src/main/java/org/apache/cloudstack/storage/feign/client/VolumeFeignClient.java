@@ -55,6 +55,4 @@ public interface VolumeFeignClient {
         @PathVariable("uuid") String uuid,
         @RequestBody org.apache.cloudstack.storage.feign.model.request.VolumeRequestDTO request
     );
-
-
 }
