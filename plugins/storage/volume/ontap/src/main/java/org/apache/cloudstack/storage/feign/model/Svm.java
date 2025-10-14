@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.feign.model;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.gson.annotations.SerializedName;
+import io.swagger.annotations.ApiModelProperty;
 
 import java.util.List;
 import java.util.Objects;
@@ -29,37 +30,30 @@ import java.util.Objects;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class Svm {
     @JsonProperty("uuid")
-    @SerializedName("uuid")
     private String uuid = null;
 
     @JsonProperty("name")
-    @SerializedName("name")
     private String name = null;
 
     @JsonProperty("iscsi.enabled")
-    @SerializedName("iscsi.enabled")
     private Boolean iscsiEnabled = null;
 
     @JsonProperty("fcp.enabled")
-    @SerializedName("fcp.enabled")
     private Boolean fcpEnabled = null;
 
     @JsonProperty("nfs.enabled")
-    @SerializedName("nfs.enabled")
     private Boolean nfsEnabled = null;
 
     @JsonProperty("aggregates")
-    @SerializedName("aggregates")
     private List<Aggregate> aggregates = null;
 
     @JsonProperty("aggregates_delegated")
-    @SerializedName("aggregates_delegated")
     private Boolean aggregatesDelegated = null;
 
     @JsonProperty("state.value")
-    @SerializedName("state.value")
     private String state = null;
 
+    @ApiModelProperty(value = "UUID of svm")
     public String getUuid() {
         return uuid;
     }
@@ -68,6 +62,7 @@ public class Svm {
         this.uuid = uuid;
     }
 
+    @ApiModelProperty(value = "name of svm")
     public String getName() {
         return name;
     }
@@ -76,6 +71,7 @@ public class Svm {
         this.name = name;
     }
 
+    @ApiModelProperty(value = "iscsi enabled or not")
     public Boolean getIscsiEnabled() {
         return iscsiEnabled;
     }
@@ -84,6 +80,7 @@ public class Svm {
         this.iscsiEnabled = iscsiEnabled;
     }
 
+    @ApiModelProperty(value = "fcp enabled or not")
     public Boolean getFcpEnabled() {
         return fcpEnabled;
     }
@@ -92,6 +89,7 @@ public class Svm {
         this.fcpEnabled = fcpEnabled;
     }
 
+    @ApiModelProperty(value = "nfs enabled or not")
     public Boolean getNfsEnabled() {
         return nfsEnabled;
     }
@@ -100,6 +98,7 @@ public class Svm {
         this.nfsEnabled = nfsEnabled;
     }
 
+    @ApiModelProperty(value = "list of aggregates")
     public List<Aggregate> getAggregates() {
         return aggregates;
     }
@@ -108,6 +107,7 @@ public class Svm {
         this.aggregates = aggregates;
     }
 
+    @ApiModelProperty(value = "are aggregates delegated or not")
     public Boolean getAggregatesDelegated() {
         return aggregatesDelegated;
     }
@@ -116,6 +116,7 @@ public class Svm {
         this.aggregatesDelegated = aggregatesDelegated;
     }
 
+    @ApiModelProperty(value = "state of svm")
     public String getState() {
         return state;
     }
