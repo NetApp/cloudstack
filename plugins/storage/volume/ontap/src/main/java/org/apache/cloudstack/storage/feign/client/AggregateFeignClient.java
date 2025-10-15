@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.feign.client;
 
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.FeignConfiguration;
+import org.apache.cloudstack.storage.feign.model.response.OnTapResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -35,7 +36,7 @@ import java.net.URI;
 public interface AggregateFeignClient {
 
 	@RequestMapping(method=RequestMethod.GET)
-	AggregateResponse getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
+	OnTapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
 	@RequestMapping(method=RequestMethod.GET, value="/{uuid}")
 	Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);

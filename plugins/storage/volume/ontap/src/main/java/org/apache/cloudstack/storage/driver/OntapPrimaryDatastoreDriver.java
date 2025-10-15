@@ -44,7 +44,6 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.Map;
 
-@Component
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
