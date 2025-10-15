@@ -27,106 +27,107 @@ import java.util.Objects;
 /**
  * Complete cluster information
  */
+@SuppressWarnings("checkstyle:RegexpSingleline")
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class Cluster {
-	@JsonProperty("name")
-	private String name = null;
-	@JsonProperty("uuid")
-	private String uuid = null;
 
-	@JsonProperty("version")
-	private Version version = null;
-	@JsonProperty("health")
-	private String health = null;
+    @JsonProperty("name")
+    private String name = null;
+    @JsonProperty("uuid")
+    private String uuid = null;
+    @JsonProperty("version")
+    private Version version = null;
+    @JsonProperty("health")
+    private String health = null;
 
-	@JsonProperty("san_optimized")
-	private Boolean sanOptimized = null;
+    @JsonProperty("san_optimized")
+    private Boolean sanOptimized = null;
 
-	@JsonProperty("disaggregated")
-	private Boolean disaggregated = null;
-
-
-	public String getHealth() {
-		return health;
-	}
-
-	public void setHealth(String health) {
-		this.health = health;
-	}
-
-	public Cluster name(String name) {
-		this.name = name;
-		return this;
-	}
+    @JsonProperty("disaggregated")
+    private Boolean disaggregated = null;
 
 
-	public String getName() {
-		return name;
-	}
+    public String getHealth() {
+        return health;
+    }
 
-	public void setName(String name) {
-		this.name = name;
-	}
+    public void setHealth(String health) {
+        this.health = health;
+    }
+
+    public Cluster name(String name) {
+        this.name = name;
+        return this;
+    }
 
 
-	public String getUuid() {
-		return uuid;
-	}
+    public String getName() {
+        return name;
+    }
 
-	public Cluster version(Version version) {
-		this.version = version;
-		return this;
-	}
+    public void setName(String name) {
+        this.name = name;
+    }
 
-	public Version getVersion() {
-		return version;
-	}
 
-	public void setVersion(Version version) {
-		this.version = version;
-	}
+    public String getUuid() {
+        return uuid;
+    }
 
-	public Boolean getSanOptimized() {
-		return sanOptimized;
-	}
+    public Cluster version(Version version) {
+        this.version = version;
+        return this;
+    }
 
-	public void setSanOptimized(Boolean sanOptimized) {
-		this.sanOptimized = sanOptimized;
-	}
+    public Version getVersion() {
+        return version;
+    }
 
-	public Boolean getDisaggregated() {
-		return disaggregated;
-	}
-	public void setDisaggregated(Boolean disaggregated) {
-		this.disaggregated = disaggregated;
-	}
+    public void setVersion(Version version) {
+        this.version = version;
+    }
 
-	@Override
-	public int hashCode() {
-		return Objects.hash(getName(), getUuid());
-	}
+    public Boolean getSanOptimized() {
+        return sanOptimized;
+    }
 
-	@Override
-	public boolean equals(java.lang.Object o) {
-		if (this == o) {
-			return true;
-		}
-		if (o == null || getClass() != o.getClass()) {
-			return false;
-		}
-		Cluster cluster = (Cluster) o;
-		return Objects.equals(this.name, cluster.name) &&
-				Objects.equals(this.uuid, cluster.uuid);
-	}
-	@Override
-	public String toString() {
-		return "Cluster{" +
-				"name='" + name + '\'' +
-				", uuid='" + uuid + '\'' +
-				", version=" + version +
-				", sanOptimized=" + sanOptimized +
-				", disaggregated=" + disaggregated +
-				'}';
-	}
+    public void setSanOptimized(Boolean sanOptimized) {
+        this.sanOptimized = sanOptimized;
+    }
+
+    public Boolean getDisaggregated() {
+        return disaggregated;
+    }
+    public void setDisaggregated(Boolean disaggregated) {
+        this.disaggregated = disaggregated;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getName(), getUuid());
+    }
+
+    @Override
+    public boolean equals(java.lang.Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        Cluster cluster = (Cluster) o;
+        return Objects.equals(this.name, cluster.name) &&
+                Objects.equals(this.uuid, cluster.uuid);
+    }
+    @Override
+    public String toString() {
+        return "Cluster{" +
+                "name='" + name + '\'' +
+                ", uuid='" + uuid + '\'' +
+                ", version=" + version +
+                ", sanOptimized=" + sanOptimized +
+                ", disaggregated=" + disaggregated +
+                '}';
+    }
 }
 

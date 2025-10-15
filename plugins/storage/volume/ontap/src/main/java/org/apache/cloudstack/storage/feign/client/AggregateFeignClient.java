@@ -34,11 +34,12 @@ import java.net.URI;
 @Lazy
 @FeignClient(name="AggregateClient", url="https://{clusterIP}/api/storage/aggregates", configuration = FeignConfiguration.class)
 public interface AggregateFeignClient {
-	@RequestMapping(method=RequestMethod.GET)
-	OnTapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
-	@RequestMapping(method=RequestMethod.GET, value="/{uuid}")
-	Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
+    @RequestMapping(method=RequestMethod.GET)
+    OnTapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
+
+    @RequestMapping(method=RequestMethod.GET, value="/{uuid}")
+    Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
 
 }
 
