@@ -11,6 +11,7 @@ import java.net.URI;
 
 @FeignClient(name="ClusterClient", url="https://{clusterIP}/api/cluster", configuration = FeignConfiguration.class)
 public interface ClusterFeignClient {
+
     @RequestMapping(method= RequestMethod.GET)
     Cluster getCluster(URI baseURL, @RequestHeader("Authorization") String header, @RequestHeader("return_records") boolean value);
 
