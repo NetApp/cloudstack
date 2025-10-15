@@ -118,7 +118,6 @@ public class Cluster {
 		return Objects.equals(this.name, cluster.name) &&
 				Objects.equals(this.uuid, cluster.uuid);
 	}
-
 	@Override
 	public String toString() {
 		return "Cluster{" +

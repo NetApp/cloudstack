@@ -22,7 +22,6 @@ package org.apache.cloudstack.storage.feign.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.swagger.annotations.ApiModelProperty;
 
 import java.util.Objects;
 
@@ -85,7 +84,6 @@ public class Version {
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class ClusterVersion {\n");
-    
     sb.append("    full: ").append(toIndentedString(full)).append("\n");
     sb.append("    generation: ").append(toIndentedString(generation)).append("\n");
     sb.append("    major: ").append(toIndentedString(major)).append("\n");

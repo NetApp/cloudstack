@@ -34,7 +34,6 @@ import java.net.URI;
 @Lazy
 @FeignClient(name="AggregateClient", url="https://{clusterIP}/api/storage/aggregates", configuration = FeignConfiguration.class)
 public interface AggregateFeignClient {
-
 	@RequestMapping(method=RequestMethod.GET)
 	OnTapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
