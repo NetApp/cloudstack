@@ -39,4 +39,3 @@ public interface SvmFeignClient {
     Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);
 
 }
-

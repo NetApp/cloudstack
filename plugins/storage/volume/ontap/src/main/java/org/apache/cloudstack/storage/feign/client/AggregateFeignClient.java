@@ -42,4 +42,3 @@ public interface AggregateFeignClient {
     Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
 
 }
-
