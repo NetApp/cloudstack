@@ -21,8 +21,8 @@ package org.apache.cloudstack.storage.feign.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.gson.annotations.SerializedName;
-import io.swagger.annotations.ApiModelProperty;
+
+import java.util.Objects;
 
 /**
  * Complete cluster information
@@ -35,7 +35,7 @@ public class Cluster {
 	private String uuid = null;
 
 	@JsonProperty("version")
-	private ClusterVersion version = null;
+	private Version version = null;
 	@JsonProperty("health")
 	private String health = null;
 
@@ -45,7 +45,7 @@ public class Cluster {
 	@JsonProperty("disaggregated")
 	private Boolean disaggregated = null;
 
-	@ApiModelProperty(example = "healthy", value = "")
+
 	public String getHealth() {
 		return health;
 	}
@@ -59,12 +59,7 @@ public class Cluster {
 		return this;
 	}
 
-	/**
-	 * Get name
-	 * 
-	 * @return name
-	 **/
-	@ApiModelProperty(example = "cluster1", value = "")
+
 	public String getName() {
 		return name;
 	}
@@ -73,35 +68,24 @@ public class Cluster {
 		this.name = name;
 	}
 
-	/**
-	 * Get uuid
-	 * 
-	 * @return uuid
-	 **/
-	@ApiModelProperty(example = "1cd8a442-86d1-11e0-ae1c-123478563412", value = "")
+
 	public String getUuid() {
 		return uuid;
 	}
 
-	public Cluster version(ClusterVersion version) {
+	public Cluster version(Version version) {
 		this.version = version;
 		return this;
 	}
 
-	/**
-	 * Get version
-	 * 
-	 * @return version
-	 **/
-	@ApiModelProperty(value = "")
-	public ClusterVersion getVersion() {
+	public Version getVersion() {
 		return version;
 	}
 
-	public void setVersion(ClusterVersion version) {
+	public void setVersion(Version version) {
 		this.version = version;
 	}
-	@ApiModelProperty(value = "")
+
 	public Boolean getSanOptimized() {
 		return sanOptimized;
 	}
@@ -109,13 +93,32 @@ public class Cluster {
 	public void setSanOptimized(Boolean sanOptimized) {
 		this.sanOptimized = sanOptimized;
 	}
-	@ApiModelProperty(value = "")
+
 	public Boolean getDisaggregated() {
 		return disaggregated;
 	}
 	public void setDisaggregated(Boolean disaggregated) {
 		this.disaggregated = disaggregated;
 	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(getName(), getUuid());
+	}
+
+	@Override
+	public boolean equals(java.lang.Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (o == null || getClass() != o.getClass()) {
+			return false;
+		}
+		Cluster cluster = (Cluster) o;
+		return Objects.equals(this.name, cluster.name) &&
+				Objects.equals(this.uuid, cluster.uuid);
+	}
+
 	@Override
 	public String toString() {
 		return "Cluster{" +
@@ -127,3 +130,4 @@ public class Cluster {
 				'}';
 	}
 }
+

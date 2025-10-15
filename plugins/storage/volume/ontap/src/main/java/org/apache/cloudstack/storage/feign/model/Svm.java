@@ -53,7 +53,6 @@ public class Svm {
     @JsonProperty("state.value")
     private String state = null;
 
-    @ApiModelProperty(value = "UUID of svm")
     public String getUuid() {
         return uuid;
     }
@@ -62,7 +61,6 @@ public class Svm {
         this.uuid = uuid;
     }
 
-    @ApiModelProperty(value = "name of svm")
     public String getName() {
         return name;
     }
@@ -71,7 +69,6 @@ public class Svm {
         this.name = name;
     }
 
-    @ApiModelProperty(value = "iscsi enabled or not")
     public Boolean getIscsiEnabled() {
         return iscsiEnabled;
     }
@@ -80,7 +77,7 @@ public class Svm {
         this.iscsiEnabled = iscsiEnabled;
     }
 
-    @ApiModelProperty(value = "fcp enabled or not")
+
     public Boolean getFcpEnabled() {
         return fcpEnabled;
     }
@@ -89,7 +86,7 @@ public class Svm {
         this.fcpEnabled = fcpEnabled;
     }
 
-    @ApiModelProperty(value = "nfs enabled or not")
+
     public Boolean getNfsEnabled() {
         return nfsEnabled;
     }
@@ -98,7 +95,7 @@ public class Svm {
         this.nfsEnabled = nfsEnabled;
     }
 
-    @ApiModelProperty(value = "list of aggregates")
+
     public List<Aggregate> getAggregates() {
         return aggregates;
     }
@@ -107,7 +104,7 @@ public class Svm {
         this.aggregates = aggregates;
     }
 
-    @ApiModelProperty(value = "are aggregates delegated or not")
+
     public Boolean getAggregatesDelegated() {
         return aggregatesDelegated;
     }
@@ -116,7 +113,7 @@ public class Svm {
         this.aggregatesDelegated = aggregatesDelegated;
     }
 
-    @ApiModelProperty(value = "state of svm")
+
     public String getState() {
         return state;
     }
@@ -137,3 +134,4 @@ public class Svm {
         return Objects.hashCode(getUuid());
     }
 }
+

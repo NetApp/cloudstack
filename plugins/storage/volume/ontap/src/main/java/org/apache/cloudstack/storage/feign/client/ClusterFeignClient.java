@@ -35,3 +35,4 @@ public interface ClusterFeignClient {
     Cluster getCluster(URI baseURL, @RequestHeader("Authorization") String header, @RequestHeader("return_records") boolean value);
 
 }
+

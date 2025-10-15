@@ -44,13 +44,6 @@ public class Aggregate {
         this.name = name;
         return this;
     }
-
-    /**
-     * Get name
-     *
-     * @return name
-     **/
-    @ApiModelProperty(value = "Name of aggregate")
     public String getName() {
         return name;
     }
@@ -64,12 +57,6 @@ public class Aggregate {
         return this;
     }
 
-    /**
-     * Get uuid
-     *
-     * @return uuid
-     **/
-    @ApiModelProperty(value = "UUID of aggregate")
     public String getUuid() {
         return uuid;
     }
@@ -109,3 +96,4 @@ public class Aggregate {
     }
 
 }
+

@@ -22,7 +22,6 @@ package org.apache.cloudstack.storage.feign.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.gson.annotations.SerializedName;
 import io.swagger.annotations.ApiModelProperty;
 
 import java.util.Objects;
@@ -31,7 +30,7 @@ import java.util.Objects;
  * This returns the cluster version information.  When the cluster has more than one node, the cluster version is equivalent to the lowest of generation, major, and minor versions on all nodes.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class ClusterVersion {
+public class Version {
   @JsonProperty("full")
   private String full = null;
 
@@ -44,38 +43,18 @@ public class ClusterVersion {
   @JsonProperty("minor")
   private Integer minor = null;
 
-   /**
-   * The full cluster version string.
-   * @return full
-  **/
-  @ApiModelProperty(example = "NetApp Release 9.4.0: Sun Nov 05 18:20:57 UTC 2017", value = "The full cluster version string.")
   public String getFull() {
     return full;
   }
 
-   /**
-   * The generation portion of the version.
-   * @return generation
-  **/
-  @ApiModelProperty(example = "9", value = "The generation portion of the version.")
   public Integer getGeneration() {
     return generation;
   }
 
-   /**
-   * The major portion of the version.
-   * @return major
-  **/
-  @ApiModelProperty(example = "4", value = "The major portion of the version.")
   public Integer getMajor() {
     return major;
   }
 
-   /**
-   * The minor portion of the version.
-   * @return minor
-  **/
-  @ApiModelProperty(example = "0", value = "The minor portion of the version.")
   public Integer getMinor() {
     return minor;
   }
@@ -89,7 +68,7 @@ public class ClusterVersion {
     if (o == null || getClass() != o.getClass()) {
       return false;
     }
-    ClusterVersion clusterVersion = (ClusterVersion) o;
+    Version clusterVersion = (Version) o;
     return Objects.equals(this.full, clusterVersion.full) &&
         Objects.equals(this.generation, clusterVersion.generation) &&
         Objects.equals(this.major, clusterVersion.major) &&

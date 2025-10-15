@@ -20,7 +20,6 @@
 package org.apache.cloudstack.storage.feign.client;
 
 import org.apache.cloudstack.storage.feign.FeignConfiguration;
-import org.apache.cloudstack.storage.feign.model.SvmResponse;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -39,3 +38,4 @@ public interface SvmFeignClient {
 	Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);
 
 }
+

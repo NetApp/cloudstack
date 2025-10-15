@@ -27,11 +27,9 @@ import com.google.gson.annotations.SerializedName;
 public class VolumeSpaceLogicalSpace {
 
     @JsonProperty("available")
-    @SerializedName("available")
     private Long available = null;
 
     @JsonProperty("used")
-    @SerializedName("used")
     private Double used = null;
 
     public Long getAvailable() {

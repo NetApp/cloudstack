@@ -19,7 +19,6 @@
 
 package org.apache.cloudstack.storage.feign.client;
 
-import org.apache.cloudstack.storage.feign.model.AggregateResponse;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -42,3 +41,4 @@ public interface AggregateFeignClient {
 	Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
 
 }
+
