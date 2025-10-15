@@ -13,7 +13,7 @@ import java.net.URI;
 @FeignClient(name = "SvmClient", url = "https://{clusterIP}/api/svm/svms", configuration = FeignConfiguration.class)
 public interface SvmFeignClient {
 	@RequestMapping(method = RequestMethod.GET)
-	SvmResponse getAllSvms(URI baseURL, @RequestHeader("Authorization") String header);
+	SvmResponse getSvmResponse(URI baseURL, @RequestHeader("Authorization") String header);
 	@RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
 	Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);
 

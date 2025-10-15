@@ -16,7 +16,7 @@ import java.net.URI;
 @FeignClient(name="AggregateClient", url="https://{clusterIP}/api/storage/aggregates", configuration = FeignConfiguration.class)
 public interface AggregateFeignClient {
 	@RequestMapping(method=RequestMethod.GET)
-	AggregateResponse getAllAggregates(URI baseURL,@RequestHeader("Authorization") String header);
+	AggregateResponse getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
 	@RequestMapping(method=RequestMethod.GET, value="/{uuid}")
 	Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
