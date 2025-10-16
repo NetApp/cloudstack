@@ -21,7 +21,7 @@ package org.apache.cloudstack.storage.feign.client;
 
 import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.feign.model.response.OnTapResponse;
+import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,8 +32,9 @@ import java.net.URI;
 @FeignClient(name = "SvmClient", url = "https://{clusterIP}/api/svm/svms", configuration = FeignConfiguration.class)
 public interface SvmFeignClient {
 
+    //this method to get all svms and also filtered svms based on query params as a part of URL
     @RequestMapping(method = RequestMethod.GET)
-    OnTapResponse<Svm> getSvmResponse(URI baseURL, @RequestHeader("Authorization") String header);
+    OntapResponse<Svm> getSvmResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
     @RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
     Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);

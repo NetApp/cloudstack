@@ -21,7 +21,7 @@ package org.apache.cloudstack.storage.feign.client;
 
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.FeignConfiguration;
-import org.apache.cloudstack.storage.feign.model.response.OnTapResponse;
+import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -35,8 +35,9 @@ import java.net.URI;
 @FeignClient(name="AggregateClient", url="https://{clusterIP}/api/storage/aggregates", configuration = FeignConfiguration.class)
 public interface AggregateFeignClient {
 
+    //this method to get all aggregates and also filtered aggregates based on query params as a part of URL
     @RequestMapping(method=RequestMethod.GET)
-    OnTapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
+    OntapResponse<Aggregate> getAggregateResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
     @RequestMapping(method=RequestMethod.GET, value="/{uuid}")
     Aggregate getAggregateByUUID(URI baseURL,@RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);

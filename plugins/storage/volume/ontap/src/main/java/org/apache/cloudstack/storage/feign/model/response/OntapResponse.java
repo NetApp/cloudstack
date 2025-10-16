@@ -27,18 +27,18 @@ import java.util.List;
  * OnTapResponse
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class OnTapResponse<T> {
+public class OntapResponse<T> {
   @JsonProperty("num_records")
   private Integer numRecords;
 
   @JsonProperty("records")
   private List<T> records;
 
-  public OnTapResponse() {
+  public OntapResponse () {
     // Default constructor
   }
 
-  public OnTapResponse(List<T> records) {
+  public OntapResponse (List<T> records) {
     this.records = records;
     this.numRecords = (records != null) ? records.size() : 0;
   }
