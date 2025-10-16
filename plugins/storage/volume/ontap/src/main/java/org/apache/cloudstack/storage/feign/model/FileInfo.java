@@ -307,6 +307,4 @@ public class FileInfo {
     }
     return o.toString().replace("\n", "\n    ");
   }
-
 }
-

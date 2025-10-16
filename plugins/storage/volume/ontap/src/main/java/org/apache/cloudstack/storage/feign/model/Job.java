@@ -100,16 +100,11 @@ public class Job {
 
     public static class JobError {
         @JsonProperty("message")
-        String messsage;
+        String errorMesssage;
         @JsonProperty("code")
         String code;
-        // Getters and Setters
-        public String getMessage() {
-            return messsage;
-        }
-        public void setMessage(String messsage) {
-            this.messsage = messsage;
-        }
+        public String getErrorMesssage () { return errorMesssage; }
+        public void setErrorMesssage (String errorMesssage) { this.errorMesssage = errorMesssage; }
         public String getCode() {
             return code;
         }
@@ -118,7 +113,7 @@ public class Job {
         }
         @Override
         public String toString() {
-            return "JobError [messsage=" + messsage + ", code=" + code + "]";
+            return "JobError [errorMesssage=" + errorMesssage + ", code=" + code + "]";
         }
     }
 }
