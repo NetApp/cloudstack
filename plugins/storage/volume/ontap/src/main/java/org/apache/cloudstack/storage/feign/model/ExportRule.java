@@ -28,7 +28,6 @@ import com.google.gson.stream.JsonWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * ExportRule
@@ -51,11 +50,7 @@ public class ExportRule {
 
         nfs3("nfs3"),
 
-        nfs4("nfs4"),
-
-        cifs("cifs"),
-
-        flexcache("flexcache");
+        nfs4("nfs4");
 
         private String value;
 
@@ -116,14 +111,6 @@ public class ExportRule {
         return this;
     }
 
-    public ExportRule addClientsItem(ExportClient clientsItem) {
-        if (this.clients == null) {
-            this.clients = new ArrayList<ExportClient>();
-        }
-        this.clients.add(clientsItem);
-        return this;
-    }
-
     public List<ExportClient> getClients() {
         return clients;
     }
@@ -160,48 +147,6 @@ public class ExportRule {
     public void setProtocols(List<ProtocolsEnum> protocols) {
         this.protocols = protocols;
     }
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        ExportRule exportRule = (ExportRule) o;
-        return Objects.equals(this.anonymousUser, exportRule.anonymousUser)
-                && Objects.equals(this.clients, exportRule.clients) && Objects.equals(this.index, exportRule.index)
-                && Objects.equals(this.protocols, exportRule.protocols);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(anonymousUser, clients, index, protocols);
-    }
-
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("class ExportRule {\n");
-
-        sb.append("    anonymousUser: ").append(toIndentedString(anonymousUser)).append("\n");
-        sb.append("    clients: ").append(toIndentedString(clients)).append("\n");
-        sb.append("    index: ").append(toIndentedString(index)).append("\n");
-        sb.append("    protocols: ").append(toIndentedString(protocols)).append("\n");
-        sb.append("}");
-        return sb.toString();
-    }
-
-    /**
-     * Convert the given object to string with each line indented by 4 spaces
-     * (except the first line).
-     */
-    private String toIndentedString(Object o) {
-        if (o == null) {
-            return "null";
-        }
-        return o.toString().replace("\n", "\n    ");
-    }
 
     public static class ExportClient {
         @JsonProperty("match")
@@ -220,4 +165,22 @@ public class ExportRule {
         }
     }
 
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("class ExportRule {\n");
+
+        sb.append("    anonymousUser: ").append(toIndentedString(anonymousUser)).append("\n");
+        sb.append("    clients: ").append(toIndentedString(clients)).append("\n");
+        sb.append("    index: ").append(toIndentedString(index)).append("\n");
+        sb.append("    protocols: ").append(toIndentedString(protocols)).append("\n");
+        sb.append("}");
+        return sb.toString();
+    }
+    private String toIndentedString(Object o) {
+        if (o == null) {
+            return "null";
+        }
+        return o.toString().replace("\n", "\n    ");
+    }
 }

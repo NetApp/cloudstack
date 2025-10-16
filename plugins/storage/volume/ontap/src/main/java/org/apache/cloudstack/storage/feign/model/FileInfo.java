@@ -62,22 +62,7 @@ public class FileInfo {
    */
   public enum TypeEnum {
     FILE("file"),
-    
-    DIRECTORY("directory"),
-    
-    BLOCKDEV("blockdev"),
-    
-    CHARDEV("chardev"),
-    
-    SYMLINK("symlink"),
-    
-    SOCKET("socket"),
-    
-    FIFO("fifo"),
-    
-    STREAM("stream"),
-    
-    LUN("lun");
+    DIRECTORY("directory");
 
     private String value;
 
