@@ -75,19 +75,6 @@ public class ExportRule {
             }
             return null;
         }
-
-        public static class Adapter extends TypeAdapter<ProtocolsEnum> {
-            @Override
-            public void write(final JsonWriter jsonWriter, final ProtocolsEnum enumeration) throws IOException {
-                jsonWriter.value(enumeration.getValue());
-            }
-
-            @Override
-            public ProtocolsEnum read(final JsonReader jsonReader) throws IOException {
-                String value = jsonReader.nextString();
-                return ProtocolsEnum.fromValue(String.valueOf(value));
-            }
-        }
     }
 
     @JsonProperty("protocols")
@@ -129,14 +116,6 @@ public class ExportRule {
 
     public ExportRule protocols(List<ProtocolsEnum> protocols) {
         this.protocols = protocols;
-        return this;
-    }
-
-    public ExportRule addProtocolsItem(ProtocolsEnum protocolsItem) {
-        if (this.protocols == null) {
-            this.protocols = new ArrayList<ProtocolsEnum>();
-        }
-        this.protocols.add(protocolsItem);
         return this;
     }
 

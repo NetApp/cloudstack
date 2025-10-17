@@ -67,13 +67,13 @@ public interface NASFeignClient {
     @RequestMapping(method = RequestMethod.GET)
     OntapResponse<ExportPolicy> getExportPolicyResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
-    @RequestMapping(method = RequestMethod.GET, value="/id}")
+    @RequestMapping(method = RequestMethod.GET, value="/{id}")
     OntapResponse<ExportPolicy> getExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
 
-    @RequestMapping(method = RequestMethod.DELETE, value="/id}")
+    @RequestMapping(method = RequestMethod.DELETE, value="/{id}")
     void deleteExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
 
-    @RequestMapping(method = RequestMethod.PATCH, value="/id}")
+    @RequestMapping(method = RequestMethod.PATCH, value="/{id}")
     OntapResponse<ExportPolicy> updateExportPolicy(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id,
                                                    @RequestBody ExportPolicy request);
 }
