@@ -19,10 +19,18 @@
 
 package org.apache.cloudstack.storage.service;
 
-public interface NASStrategy {
-    String createExportPolicy(String svmName, String policyName);
-    String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule);
-    String assignExportPolicyToVolume(String volumeUuid, String policyName);
-    String enableNFS(String svmUuid);
+import org.apache.cloudstack.storage.model.OntapStorage;
+
+import java.util.Map;
+
+public abstract class NASStrategy extends StorageStrategy {
+    public NASStrategy(OntapStorage ontapStorage) {
+        super(ontapStorage);
+    }
+
+    public abstract String createExportPolicy(String svmName, String policyName);
+    public abstract String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule);
+    public abstract String assignExportPolicyToVolume(String volumeUuid, String policyName);
+    public abstract String enableNFS(String svmUuid);
 }
 

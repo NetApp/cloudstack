@@ -39,7 +39,10 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCy
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
+import org.apache.cloudstack.storage.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderManager;
+import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -64,7 +67,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
      */
     @Override
     public DataStore initialize(Map<String, Object> dsInfos) {
-        String url = dsInfos.get("url").toString();
+        if (dsInfos == null) {
+            throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
+        }
+        String url = dsInfos.get("url").toString(); // TODO: Decide on whether should the customer enter just the Management LIF IP or https://ManagementLIF
         Long zoneId = (Long) dsInfos.get("zoneId");
         Long podId = (Long)dsInfos.get("podId");
         Long clusterId = (Long)dsInfos.get("clusterId");
@@ -73,6 +79,9 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         String tags = dsInfos.get("tags").toString();
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
         String scheme = dsInfos.get("scheme").toString();
+
+        s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
+                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", protocol: " + scheme);
 
         // Additional details requested for ONTAP primary storage pool creation
         @SuppressWarnings("unchecked")
@@ -94,6 +103,14 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
         }
 
+        if (storagePoolName == null || storagePoolName.isEmpty()) {
+            throw new CloudRuntimeException("Storage pool name is null or empty, cannot create primary storage");
+        }
+
+        if (providerName == null || providerName.isEmpty()) {
+            throw new CloudRuntimeException("Provider name is null or empty, cannot create primary storage");
+        }
+
         PrimaryDataStoreParameters parameters = new PrimaryDataStoreParameters();
         if (clusterId != null) {
             ClusterVO clusterVO = _clusterDao.findById(clusterId);
@@ -103,23 +120,30 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
-        // Validate the ONTAP details
-        StorageProviderManager storageProviderManager = new StorageProviderManager(details, scheme);
-        boolean isValid = storageProviderManager.connect(details);
-        if (isValid) {
-//            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
-            storageProviderManager.createVolume(storagePoolName, Integer.parseInt((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
-        } else {
-            throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
-        }
 
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
-        if (scheme.equalsIgnoreCase("nfs")) {
+        // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
+        if (scheme.equalsIgnoreCase(Constants.NFS)) {
             parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-        } else if (scheme.equalsIgnoreCase("iscsi")) {
+        } else if (scheme.equalsIgnoreCase(Constants.ISCSI)) {
             parameters.setType(Storage.StoragePoolType.Iscsi);
         } else {
             throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
+        }
+        details.put(Constants.MANAGEMENTLIF, url);
+//        details.put(Constants.PROTOCOL, scheme);
+
+        // Validate the ONTAP details
+        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENTLIF), details.get(Constants.SVMNAME), scheme); //TODO: Here the passing 'scheme' might need a re-look
+        StorageProviderManager storageProviderManager = new StorageProviderManager(ontapStorage);
+        StorageStrategy storageStrategy = storageProviderManager.getStrategy();
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+//            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
+            storageStrategy.createVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
+        } else {
+            throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
         parameters.setTags(tags);
@@ -138,6 +162,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
+        logger.debug("In attachCluster for ONTAP primary storage");
         PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
 
@@ -161,12 +186,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
-        List<HostVO> hostsToConnect = new ArrayList<>();
-        Hypervisor.HypervisorType[] hypervisorTypes = {Hypervisor.HypervisorType.XenServer, Hypervisor.HypervisorType.VMware, Hypervisor.HypervisorType.KVM};
-
-        for (Hypervisor.HypervisorType type : hypervisorTypes) {
-            hostsToConnect.addAll(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), type));
-        }
+        logger.debug("In attachZone for ONTAP primary storage");
+        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
 
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
         for (HostVO host : hostsToConnect) {

@@ -19,9 +19,17 @@
 
 package org.apache.cloudstack.storage.service;
 
-public interface SANStrategy {
-    String createLUN(String svmName, String volumeName, String lunName, long sizeBytes, String osType);
-    String createIgroup(String svmName, String igroupName, String[] initiators);
-    String mapLUNToIgroup(String lunName, String igroupName);
-    String enableISCSI(String svmUuid);
+import org.apache.cloudstack.storage.model.OntapStorage;
+
+import java.util.Map;
+
+public abstract class SANStrategy extends StorageStrategy {
+    public SANStrategy(OntapStorage ontapStorage) {
+        super(ontapStorage);
+    }
+
+    public abstract String createLUN(String svmName, String volumeName, String lunName, long sizeBytes, String osType);
+    public abstract String createIgroup(String svmName, String igroupName, String[] initiators);
+    public abstract String mapLUNToIgroup(String lunName, String igroupName);
+    public abstract String enableISCSI(String svmUuid);
 }

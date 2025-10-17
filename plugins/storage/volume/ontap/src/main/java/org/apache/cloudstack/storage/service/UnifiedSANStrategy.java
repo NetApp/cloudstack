@@ -19,11 +19,13 @@
 
 package org.apache.cloudstack.storage.service;
 
+import org.apache.cloudstack.storage.model.OntapStorage;
+
 import java.util.Map;
 
-public class UnifiedSANStrategy implements SANStrategy{
-    public UnifiedSANStrategy(Map<String, String> details) {
-
+public class UnifiedSANStrategy extends SANStrategy{
+    public UnifiedSANStrategy(OntapStorage ontapStorage) {
+        super(ontapStorage);
     }
 
     @Override

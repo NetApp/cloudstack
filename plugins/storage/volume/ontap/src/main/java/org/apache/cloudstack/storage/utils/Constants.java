@@ -17,34 +17,19 @@
  * under the License.
  */
 
-package org.apache.cloudstack.storage.service;
+package org.apache.cloudstack.storage.utils;
 
-import org.apache.cloudstack.storage.model.OntapStorage;
+public class Constants {
+    public static final String NFS = "nfs";
+    public static final String ISCSI = "iscsi";
+    public static final String PROTOCOL = "protocol";
+    public static final String SVMNAME = "svmName";
+    public static final String USERNAME = "username";
+    public static final String PASSWORD = "password";
+    public static final String MANAGEMENTLIF = "managementLIF";
 
-import java.util.Map;
+    public static final String RUNNING = "running";
 
-public class UnifiedNASStrategy extends NASStrategy{
-    public UnifiedNASStrategy(OntapStorage ontapStorage) {
-        super(ontapStorage);
-    }
-
-    @Override
-    public String createExportPolicy(String svmName, String policyName) {
-        return "";
-    }
-
-    @Override
-    public String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule) {
-        return "";
-    }
-
-    @Override
-    public String assignExportPolicyToVolume(String volumeUuid, String policyName) {
-        return "";
-    }
-
-    @Override
-    public String enableNFS(String svmUuid) {
-        return "";
-    }
+    public static final String HTTPS = "https://";
+    public static final String GETSVMs = "/api/svm/svms";
 }
