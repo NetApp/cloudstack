@@ -24,8 +24,6 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.gson.annotations.SerializedName;
 
-import java.util.Objects;
-
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class LunMap {
   @JsonProperty("igroup")
@@ -88,27 +86,6 @@ public class LunMap {
 
   public void setSvm (Svm svm) {
     this.svm = svm;
-  }
-
-
-  @Override
-  public boolean equals (Object o) {
-    if (this == o) {
-      return true;
-    }
-    if (o == null || getClass() != o.getClass()) {
-      return false;
-    }
-    LunMap lunMap = (LunMap) o;
-    return Objects.equals(this.igroup, lunMap.igroup) &&
-            Objects.equals(this.logicalUnitNumber, lunMap.logicalUnitNumber) &&
-            Objects.equals(this.lun, lunMap.lun) &&
-            Objects.equals(this.svm, lunMap.svm);
-  }
-
-  @Override
-  public int hashCode () {
-    return Objects.hash(igroup, logicalUnitNumber, lun, svm);
   }
 
   @Override

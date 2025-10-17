@@ -69,9 +69,9 @@ public class LunSpace {
     public Long getUsed() {
         return used;
     }
-    
+
     public Long getPhysicalUsed() {
-      return physicalUsed;
+        return physicalUsed;
     }
 
     @Override
