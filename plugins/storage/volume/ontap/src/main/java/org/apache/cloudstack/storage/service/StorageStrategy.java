@@ -20,14 +20,17 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
+import feign.FeignException;
+import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.feign.model.request.VolumeRequestDTO;
-import org.apache.cloudstack.storage.feign.model.response.JobResponseDTO;
-import org.apache.cloudstack.storage.feign.model.response.OnTapResponse;
-import org.apache.cloudstack.storage.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Volume;
+import org.apache.cloudstack.storage.feign.model.response.JobResponse;
+import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
@@ -48,6 +51,9 @@ public abstract class StorageStrategy {
     @Inject
     private SvmFeignClient svmFeignClient;
 
+    @Inject
+    private JobFeignClient jobFeignClient;
+
     private final OntapStorage storage;
 
     private List<Aggregate> aggregates;
@@ -67,7 +73,7 @@ public abstract class StorageStrategy {
             // Call the SVM API to check if the SVM exists
             Svm svm = null;
             URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() + Constants.GETSVMs);
-            OnTapResponse<Svm> svms = svmFeignClient.getSvms(url, authHeader);
+            OntapResponse<Svm> svms = svmFeignClient.getSvms(url, authHeader);
             for (Svm storageVM : svms.getRecords()) {
                 if (storageVM.getName().equals(storage.getSVM())) {
                     svm = storageVM;
@@ -118,8 +124,8 @@ public abstract class StorageStrategy {
         String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
 
         // Generate the Create Volume Request
-        VolumeRequestDTO volumeRequest = new VolumeRequestDTO();
-        VolumeRequestDTO.SvmDTO svm = new VolumeRequestDTO.SvmDTO();
+        Volume volumeRequest = new Volume();
+        Svm svm = new Svm();
         svm.setName(storage.getSVM());
 
         volumeRequest.setName(volumeName);
@@ -128,9 +134,36 @@ public abstract class StorageStrategy {
         volumeRequest.setSize(size);
         // Make the POST API call to create the volume
         try {
-            JobResponseDTO response = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
-            //TODO: Add code to poll the job status until it is completed/ a timeout of 3 mins
+            // Create URI for POST CreateVolume API
+            URI url = utils.generateURI(Constants.CREATEVOLUME);
+            // Call the VolumeFeignClient to create the volume
+            JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(url, authHeader, volumeRequest);
+            String jobUUID = jobResponse.getJob().getUuid();
 
+            //Create URI for GET Job API
+            url = utils.generateURI(Constants.GETJOBBYUUID);
+            int jobRetryCount = 0, maxJobRetries = Constants.JOBMAXRETRIES;
+            Job createVolumeJob = null;
+            while(createVolumeJob == null || createVolumeJob.getState().equals(Constants.JOBRUNNING) || createVolumeJob.getState().equals(Constants.JOBQUEUE) || createVolumeJob.getState().equals(Constants.JOBPAUSED)) {
+                if(jobRetryCount >= maxJobRetries) {
+                    s_logger.error("Job to create volume " + volumeName + " did not complete within expected time.");
+                    throw new CloudRuntimeException("Job to create volume " + volumeName + " did not complete within expected time.");
+                }
+
+                try {
+                    createVolumeJob = jobFeignClient.getJobByUUID(url, authHeader, jobUUID);
+                    if (createVolumeJob == null) {
+                        s_logger.warn("Job with UUID " + jobUUID + " not found. Retrying...");
+                    } else if (createVolumeJob.getState().equals(Constants.JOBFAILURE)) {
+                        throw new CloudRuntimeException("Job to create volume " + volumeName + " failed with error: " + createVolumeJob.getMessage());
+                    }
+                } catch (FeignException.FeignClientException e) {
+                    throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
+                }
+
+                jobRetryCount++;
+                Thread.sleep(Constants.CREATEVOLUMECHECKSLEEPTIME); // Sleep for 2 seconds before polling again
+            }
         } catch (Exception e) {
             s_logger.error("Exception while creating volume: ", e);
             throw new CloudRuntimeException("Failed to create volume: " + e.getMessage());

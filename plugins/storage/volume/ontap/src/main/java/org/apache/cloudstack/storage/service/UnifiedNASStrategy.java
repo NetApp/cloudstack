@@ -19,9 +19,7 @@
 
 package org.apache.cloudstack.storage.service;
 
-import org.apache.cloudstack.storage.model.OntapStorage;
-
-import java.util.Map;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
 
 public class UnifiedNASStrategy extends NASStrategy{
     public UnifiedNASStrategy(OntapStorage ontapStorage) {

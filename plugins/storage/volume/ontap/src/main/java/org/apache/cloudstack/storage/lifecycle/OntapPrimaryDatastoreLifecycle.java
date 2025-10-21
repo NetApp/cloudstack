@@ -39,8 +39,8 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCy
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
-import org.apache.cloudstack.storage.model.OntapStorage;
-import org.apache.cloudstack.storage.provider.StorageProviderManager;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
@@ -48,7 +48,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -123,20 +122,29 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
         // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
-        if (scheme.equalsIgnoreCase(Constants.NFS)) {
-            parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-        } else if (scheme.equalsIgnoreCase(Constants.ISCSI)) {
-            parameters.setType(Storage.StoragePoolType.Iscsi);
-        } else {
-            throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
+        String protocol = details.get(Constants.PROTOCOL);
+        switch (protocol.toLowerCase()) {
+            case Constants.NFS:
+                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                break;
+            case Constants.ISCSI:
+                parameters.setType(Storage.StoragePoolType.Iscsi);
+                break;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
         }
+
         details.put(Constants.MANAGEMENTLIF, url);
-//        details.put(Constants.PROTOCOL, scheme);
 
         // Validate the ONTAP details
+        if(details.get(Constants.ISDISAGGREGATED) == null || details.get(Constants.ISDISAGGREGATED).isEmpty()) {
+            details.put(Constants.ISDISAGGREGATED, "false");
+        }
+
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENTLIF), details.get(Constants.SVMNAME), scheme); //TODO: Here the passing 'scheme' might need a re-look
-        StorageProviderManager storageProviderManager = new StorageProviderManager(ontapStorage);
+                details.get(Constants.MANAGEMENTLIF), details.get(Constants.SVMNAME), details.get(Constants.PROTOCOL),
+                Boolean.parseBoolean(details.get(Constants.ISDISAGGREGATED)));
+        StorageProviderFactory storageProviderManager = new StorageProviderFactory(ontapStorage);
         StorageStrategy storageStrategy = storageProviderManager.getStrategy();
         boolean isValid = storageStrategy.connect();
         if (isValid) {

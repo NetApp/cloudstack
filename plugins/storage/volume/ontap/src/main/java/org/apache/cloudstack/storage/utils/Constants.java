@@ -27,9 +27,20 @@ public class Constants {
     public static final String USERNAME = "username";
     public static final String PASSWORD = "password";
     public static final String MANAGEMENTLIF = "managementLIF";
-
+    public static final String ISDISAGGREGATED = "isDisaggregated";
     public static final String RUNNING = "running";
+
+    public static final String JOBRUNNING = "running";
+    public static final String JOBQUEUE = "queued";
+    public static final String JOBPAUSED = "paused";
+    public static final String JOBFAILURE = "failure";
+    public static final String JOBSUCCESS = "success";
+
+    public static final int JOBMAXRETRIES = 100;
+    public static final int CREATEVOLUMECHECKSLEEPTIME = 2000;
 
     public static final String HTTPS = "https://";
     public static final String GETSVMs = "/api/svm/svms";
+    public static final String CREATEVOLUME = "/api/storage/volumes";
+    public static final String GETJOBBYUUID = "/api/cluster/jobs";
 }

@@ -20,7 +20,7 @@
 package org.apache.cloudstack.storage.provider;
 
 import com.cloud.utils.exception.CloudRuntimeException;
-import org.apache.cloudstack.storage.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
@@ -30,22 +30,32 @@ import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 
 @Component
-public class StorageProviderManager {
+public class StorageProviderFactory {
     private final StorageStrategy storageStrategy;
-    private static final Logger s_logger = (Logger) LogManager.getLogger(StorageProviderManager.class);
+    private static final Logger s_logger = (Logger) LogManager.getLogger(StorageProviderFactory.class);
 
-    public StorageProviderManager(OntapStorage ontapStorage) {
+    public StorageProviderFactory(OntapStorage ontapStorage) {
         String protocol = ontapStorage.getProtocol();
-        s_logger.info("Initializing StorageProviderManager with protocol: " + protocol);
-        if (protocol.equalsIgnoreCase(Constants.NFS)) {
-            this.storageStrategy = new UnifiedNASStrategy(ontapStorage);
-        } else if (protocol.equalsIgnoreCase(Constants.ISCSI)) {
-            this.storageStrategy = new UnifiedSANStrategy(ontapStorage);
-        } else {
-            this.storageStrategy = null;
-            throw new CloudRuntimeException("Unsupported protocol: " + protocol);
+        s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
+        switch (protocol.toLowerCase()) {
+            case Constants.NFS:
+                if(!ontapStorage.getIsDisaggregated()) {
+                    this.storageStrategy = new UnifiedNASStrategy(ontapStorage);
+                } else {
+                    throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
+                }
+                break;
+            case Constants.ISCSI:
+                if (!ontapStorage.getIsDisaggregated()) {
+                    this.storageStrategy = new UnifiedSANStrategy(ontapStorage);
+                } else {
+                    throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
+                }
+                break;
+            default:
+                this.storageStrategy = null;
+                throw new CloudRuntimeException("Unsupported protocol: " + protocol);
         }
-
     }
 
     public StorageStrategy getStrategy() {

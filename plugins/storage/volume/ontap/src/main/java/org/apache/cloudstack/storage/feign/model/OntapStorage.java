@@ -17,21 +17,23 @@
  * under the License.
  */
 
-package org.apache.cloudstack.storage.model;
+package org.apache.cloudstack.storage.feign.model;
 
 public class OntapStorage {
     public static String Username;
     public static String Password;
     public static String ManagementLIF;
-    public static String SVM;
+    public static String Svm;
     public static String Protocol;
+    public static Boolean IsDisaggregated;
 
-    public OntapStorage(String username, String password, String managementLIF, String SVM, String protocol) {
+    public OntapStorage(String username, String password, String managementLIF, String svm, String protocol, Boolean isDisaggregated) {
         Username = username;
         Password = password;
         ManagementLIF = managementLIF;
-        OntapStorage.SVM = SVM;
+        Svm = svm;
         Protocol = protocol;
+        IsDisaggregated = isDisaggregated;
     }
 
     public String getUsername() {
@@ -59,11 +61,11 @@ public class OntapStorage {
     }
 
     public String getSVM() {
-        return SVM;
+        return Svm;
     }
 
-    public void setSVM(String SVM) {
-        this.SVM = SVM;
+    public void setSVM(String svm) {
+        Svm = svm;
     }
 
     public String getProtocol() {
@@ -72,5 +74,13 @@ public class OntapStorage {
 
     public void setProtocol(String protocol) {
         Protocol = protocol;
+    }
+
+    public Boolean getIsDisaggregated() {
+        return IsDisaggregated;
+    }
+
+    public void setIsDisaggregated(Boolean isDisaggregated) {
+        IsDisaggregated = isDisaggregated;
     }
 }
