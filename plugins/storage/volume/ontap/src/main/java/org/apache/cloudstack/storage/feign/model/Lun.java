@@ -40,11 +40,7 @@ public class Lun {
      * The class of LUN.&lt;br/&gt; Optional in POST.
      */
     public enum PropertyClassEnum {
-        REGULAR("regular"),
-
-        PROTOCOL_ENDPOINT("protocol_endpoint"),
-
-        VVOL("vvol");
+        REGULAR("regular");
 
         private String value;
 
@@ -89,29 +85,13 @@ public class Lun {
      * The operating system type of the LUN.&lt;br/&gt; Required in POST when creating a LUN that is not a clone of another. Disallowed in POST when creating a LUN clone.
      */
     public enum OsTypeEnum {
-        AIX("aix"),
-
-        HPUX("hpux"),
-
         HYPER_V("hyper_v"),
 
         LINUX("linux"),
 
-        NETWARE("netware"),
-
-        OPENVMS("openvms"),
-
-        SOLARIS("solaris"),
-
-        SOLARIS_EFI("solaris_efi"),
-
         VMWARE("vmware"),
 
         WINDOWS("windows"),
-
-        WINDOWS_2008("windows_2008"),
-
-        WINDOWS_GPT("windows_gpt"),
 
         XEN("xen");
 
