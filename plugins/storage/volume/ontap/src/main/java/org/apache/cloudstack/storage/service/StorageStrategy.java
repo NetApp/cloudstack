@@ -37,6 +37,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
+import java.util.Map;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
@@ -69,42 +70,37 @@ public abstract class StorageStrategy {
         s_logger.info("Attempting to connect to ONTAP cluster at " + storage.getManagementLIF());
         //Get AuthHeader
         String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        String svmName = storage.getSvmName();
         try {
             // Call the SVM API to check if the SVM exists
             Svm svm = null;
-            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() + Constants.GETSVMs);
-            OntapResponse<Svm> svms = svmFeignClient.getSvms(url, authHeader);
-            for (Svm storageVM : svms.getRecords()) {
-                if (storageVM.getName().equals(storage.getSVM())) {
-                    svm = storageVM;
-                    s_logger.info("Found SVM: " + storage.getSVM());
-                    break;
-                }
+            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() + Constants.GET_SVMs);
+            Map<String, String> queryParams = Map.of("name", svmName);
+            OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(url, authHeader, queryParams);
+            if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
+                svm = svms.getRecords().get(0);
+            } else {
+                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
             }
 
             // Validations
-            if (svm == null) {
-                s_logger.error("SVM with name " + storage.getSVM() + " not found.");
-                throw new CloudRuntimeException("SVM with name " + storage.getSVM() + " not found.");
-            } else {
-                if (svm.getState() != Constants.RUNNING) {
-                    s_logger.error("SVM " + storage.getSVM() + " is not in running state.");
-                    throw new CloudRuntimeException("SVM " + storage.getSVM() + " is not in running state.");
-                }
-                if (Objects.equals(storage.getProtocol(), Constants.NFS) && !svm.getNfsEnabled()) {
-                    s_logger.error("NFS protocol is not enabled on SVM " + storage.getSVM());
-                    throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + storage.getSVM());
-                } else if (Objects.equals(storage.getProtocol(), Constants.ISCSI) && !svm.getIscsiEnabled()) {
-                    s_logger.error("iSCSI protocol is not enabled on SVM " + storage.getSVM());
-                    throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + storage.getSVM());
-                }
-                List<Aggregate> aggrs = svm.getAggregates();
-                if (aggrs == null || aggrs.isEmpty()) {
-                    s_logger.error("No aggregates are assigned to SVM " + storage.getSVM());
-                    throw new CloudRuntimeException("No aggregates are assigned to SVM " + storage.getSVM());
-                }
-                this.aggregates = aggrs;
+            if (!Objects.equals(svm.getState(), Constants.RUNNING)) {
+                s_logger.error("SVM " + svmName + " is not in running state.");
+                throw new CloudRuntimeException("SVM " + svmName + " is not in running state.");
             }
+            if (Objects.equals(storage.getProtocol(), Constants.NFS) && !svm.getNfsEnabled()) {
+                s_logger.error("NFS protocol is not enabled on SVM " + svmName);
+                throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+            } else if (Objects.equals(storage.getProtocol(), Constants.ISCSI) && !svm.getIscsiEnabled()) {
+                s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
+                throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
+            }
+            List<Aggregate> aggrs = svm.getAggregates();
+            if (aggrs == null || aggrs.isEmpty()) {
+                s_logger.error("No aggregates are assigned to SVM " + svmName);
+                throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
+            }
+            this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage());
@@ -116,9 +112,10 @@ public abstract class StorageStrategy {
     public void createVolume(String volumeName, Long size) {
         s_logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
 
+        String svmName = storage.getSvmName();
         if (aggregates == null || aggregates.isEmpty()) {
-            s_logger.error("No aggregates available to create volume on SVM " + storage.getSVM());
-            throw new CloudRuntimeException("No aggregates available to create volume on SVM " + storage.getSVM());
+            s_logger.error("No aggregates available to create volume on SVM " + svmName);
+            throw new CloudRuntimeException("No aggregates available to create volume on SVM " + svmName);
         }
         // Get the AuthHeader
         String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -126,7 +123,7 @@ public abstract class StorageStrategy {
         // Generate the Create Volume Request
         Volume volumeRequest = new Volume();
         Svm svm = new Svm();
-        svm.setName(storage.getSVM());
+        svm.setName(svmName);
 
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
@@ -135,17 +132,20 @@ public abstract class StorageStrategy {
         // Make the POST API call to create the volume
         try {
             // Create URI for POST CreateVolume API
-            URI url = utils.generateURI(Constants.CREATEVOLUME);
+            URI url = utils.generateURI(Constants.CREATE_VOLUME);
             // Call the VolumeFeignClient to create the volume
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(url, authHeader, volumeRequest);
+            if (jobResponse == null || jobResponse.getJob() == null) {
+                throw new CloudRuntimeException("Failed to initiate volume creation for " + volumeName);
+            }
             String jobUUID = jobResponse.getJob().getUuid();
 
             //Create URI for GET Job API
-            url = utils.generateURI(Constants.GETJOBBYUUID);
-            int jobRetryCount = 0, maxJobRetries = Constants.JOBMAXRETRIES;
+            url = utils.generateURI(Constants.GET_JOB_BY_UUID);
+            int jobRetryCount = 0;
             Job createVolumeJob = null;
-            while(createVolumeJob == null || createVolumeJob.getState().equals(Constants.JOBRUNNING) || createVolumeJob.getState().equals(Constants.JOBQUEUE) || createVolumeJob.getState().equals(Constants.JOBPAUSED)) {
-                if(jobRetryCount >= maxJobRetries) {
+            while(createVolumeJob == null || !createVolumeJob.getState().equals(Constants.JOB_SUCCESS)) {
+                if(jobRetryCount >= Constants.JOB_MAX_RETRIES) {
                     s_logger.error("Job to create volume " + volumeName + " did not complete within expected time.");
                     throw new CloudRuntimeException("Job to create volume " + volumeName + " did not complete within expected time.");
                 }
@@ -154,7 +154,7 @@ public abstract class StorageStrategy {
                     createVolumeJob = jobFeignClient.getJobByUUID(url, authHeader, jobUUID);
                     if (createVolumeJob == null) {
                         s_logger.warn("Job with UUID " + jobUUID + " not found. Retrying...");
-                    } else if (createVolumeJob.getState().equals(Constants.JOBFAILURE)) {
+                    } else if (createVolumeJob.getState().equals(Constants.JOB_FAILURE)) {
                         throw new CloudRuntimeException("Job to create volume " + volumeName + " failed with error: " + createVolumeJob.getMessage());
                     }
                 } catch (FeignException.FeignClientException e) {
@@ -162,7 +162,7 @@ public abstract class StorageStrategy {
                 }
 
                 jobRetryCount++;
-                Thread.sleep(Constants.CREATEVOLUMECHECKSLEEPTIME); // Sleep for 2 seconds before polling again
+                Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
             }
         } catch (Exception e) {
             s_logger.error("Exception while creating volume: ", e);

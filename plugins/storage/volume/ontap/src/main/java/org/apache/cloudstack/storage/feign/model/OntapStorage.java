@@ -19,19 +19,21 @@
 
 package org.apache.cloudstack.storage.feign.model;
 
+import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
+
 public class OntapStorage {
     public static String Username;
     public static String Password;
     public static String ManagementLIF;
-    public static String Svm;
-    public static String Protocol;
+    public static String SvmName;
+    public static ProtocolType Protocol;
     public static Boolean IsDisaggregated;
 
-    public OntapStorage(String username, String password, String managementLIF, String svm, String protocol, Boolean isDisaggregated) {
+    public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocol, Boolean isDisaggregated) {
         Username = username;
         Password = password;
         ManagementLIF = managementLIF;
-        Svm = svm;
+        SvmName = svmName;
         Protocol = protocol;
         IsDisaggregated = isDisaggregated;
     }
@@ -60,19 +62,19 @@ public class OntapStorage {
         ManagementLIF = managementLIF;
     }
 
-    public String getSVM() {
-        return Svm;
+    public String getSvmName() {
+        return SvmName;
     }
 
-    public void setSVM(String svm) {
-        Svm = svm;
+    public void setSvmName(String svmName) {
+        SvmName = svmName;
     }
 
-    public String getProtocol() {
+    public ProtocolType getProtocol() {
         return Protocol;
     }
 
-    public void setProtocol(String protocol) {
+    public void setProtocol(ProtocolType protocol) {
         Protocol = protocol;
     }
 

@@ -43,6 +43,7 @@ import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -70,12 +71,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
         String url = dsInfos.get("url").toString(); // TODO: Decide on whether should the customer enter just the Management LIF IP or https://ManagementLIF
-        Long zoneId = (Long) dsInfos.get("zoneId");
-        Long podId = (Long)dsInfos.get("podId");
-        Long clusterId = (Long)dsInfos.get("clusterId");
-        String storagePoolName = dsInfos.get("name").toString();
-        String providerName = dsInfos.get("providerName").toString();
-        String tags = dsInfos.get("tags").toString();
+        Long zoneId =  dsInfos.get("zoneId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
+        Long podId = dsInfos.get("podId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
+        Long clusterId = dsInfos.get("clusterId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("clusterId");
+        String storagePoolName = dsInfos.get("name").toString().trim();
+        String providerName = dsInfos.get("providerName").toString().trim();
+        String tags = dsInfos.get("tags").toString().trim();
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
         String scheme = dsInfos.get("scheme").toString();
 
@@ -86,12 +87,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         @SuppressWarnings("unchecked")
         Map<String, String> details = (Map<String, String>)dsInfos.get("details");
         // Validations
-        if (podId != null && clusterId == null) {
-            s_logger.error("Cluster Id is null, cannot create primary storage");
-            return null;
-        } else if (podId == null && clusterId != null) {
-            s_logger.error("Pod Id is null, cannot create primary storage");
-            return null;
+        if (podId == null ^ clusterId == null) {
+            throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
         }
 
         if (podId == null && clusterId == null) {
@@ -122,28 +119,28 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
         // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
-        String protocol = details.get(Constants.PROTOCOL);
-        switch (protocol.toLowerCase()) {
-            case Constants.NFS:
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        switch (protocol) {
+            case NFS:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 break;
-            case Constants.ISCSI:
+            case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 break;
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
         }
 
-        details.put(Constants.MANAGEMENTLIF, url);
+        details.put(Constants.MANAGEMENT_LIF, url);
 
         // Validate the ONTAP details
-        if(details.get(Constants.ISDISAGGREGATED) == null || details.get(Constants.ISDISAGGREGATED).isEmpty()) {
-            details.put(Constants.ISDISAGGREGATED, "false");
+        if(details.get(Constants.IS_DISAGGREGATED) == null || details.get(Constants.IS_DISAGGREGATED).isEmpty()) {
+            details.put(Constants.IS_DISAGGREGATED, "false");
         }
 
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENTLIF), details.get(Constants.SVMNAME), details.get(Constants.PROTOCOL),
-                Boolean.parseBoolean(details.get(Constants.ISDISAGGREGATED)));
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), protocol,
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
         StorageProviderFactory storageProviderManager = new StorageProviderFactory(ontapStorage);
         StorageStrategy storageStrategy = storageProviderManager.getStrategy();
         boolean isValid = storageStrategy.connect();

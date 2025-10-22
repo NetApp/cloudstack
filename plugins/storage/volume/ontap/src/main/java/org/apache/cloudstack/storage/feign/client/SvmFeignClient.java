@@ -26,15 +26,17 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.net.URI;
+import java.util.Map;
 
 @FeignClient(name = "SvmClient", url = "https://{clusterIP}/api/svm/svms", configuration = FeignConfiguration.class)
 public interface SvmFeignClient {
 
     //this method to get all svms and also filtered svms based on query params as a part of URL
     @RequestMapping(method = RequestMethod.GET)
-    OntapResponse<Svm> getSvms(URI baseURL, @RequestHeader("Authorization") String header);
+    OntapResponse<Svm> getSvmResponse(URI baseURL, @RequestHeader("Authorization") String header, @RequestParam Map<String, String> queryParams);
 
     @RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
     Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);
