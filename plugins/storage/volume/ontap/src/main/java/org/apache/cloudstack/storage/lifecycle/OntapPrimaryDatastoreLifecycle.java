@@ -112,7 +112,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             ClusterVO clusterVO = _clusterDao.findById(clusterId);
             Preconditions.checkNotNull(clusterVO, "Unable to locate the specified cluster");
             if (clusterVO.getHypervisorType() != Hypervisor.HypervisorType.KVM) {
-                throw new CloudRuntimeException("ONTAP primary storage is not supported for KVM hypervisor");
+                throw new CloudRuntimeException("ONTAP primary storage is supported only for KVM hypervisor");
             }
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
@@ -141,8 +141,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), protocol,
                 Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageProviderFactory storageProviderManager = new StorageProviderFactory(ontapStorage);
-        StorageStrategy storageStrategy = storageProviderManager.getStrategy();
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
 //            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention

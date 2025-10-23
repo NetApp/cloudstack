@@ -25,6 +25,7 @@ import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
@@ -34,18 +35,18 @@ public class StorageProviderFactory {
     private final StorageStrategy storageStrategy;
     private static final Logger s_logger = (Logger) LogManager.getLogger(StorageProviderFactory.class);
 
-    public StorageProviderFactory(OntapStorage ontapStorage) {
-        String protocol = ontapStorage.getProtocol();
+    private StorageProviderFactory(OntapStorage ontapStorage) {
+        ProtocolType protocol = ontapStorage.getProtocol();
         s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
-        switch (protocol.toLowerCase()) {
-            case Constants.NFS:
+        switch (protocol) {
+            case NFS:
                 if(!ontapStorage.getIsDisaggregated()) {
                     this.storageStrategy = new UnifiedNASStrategy(ontapStorage);
                 } else {
                     throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
                 }
                 break;
-            case Constants.ISCSI:
+            case ISCSI:
                 if (!ontapStorage.getIsDisaggregated()) {
                     this.storageStrategy = new UnifiedSANStrategy(ontapStorage);
                 } else {
@@ -58,7 +59,7 @@ public class StorageProviderFactory {
         }
     }
 
-    public StorageStrategy getStrategy() {
-        return storageStrategy;
+    public static StorageStrategy getStrategy(OntapStorage ontapStorage) {
+        return new StorageProviderFactory(ontapStorage).storageStrategy;
     }
 }
