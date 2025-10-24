@@ -22,67 +22,67 @@ package org.apache.cloudstack.storage.feign.model;
 import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 
 public class OntapStorage {
-    public static String Username;
-    public static String Password;
-    public static String ManagementLIF;
-    public static String SvmName;
-    public static ProtocolType Protocol;
-    public static Boolean IsDisaggregated;
+    public static String _username;
+    public static String _password;
+    public static String _managementLIF;
+    public static String _svmName;
+    public static ProtocolType _protocolType;
+    public static Boolean _isDisaggregated;
 
-    public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocol, Boolean isDisaggregated) {
-        Username = username;
-        Password = password;
-        ManagementLIF = managementLIF;
-        SvmName = svmName;
-        Protocol = protocol;
-        IsDisaggregated = isDisaggregated;
+    public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocolType, Boolean isDisaggregated) {
+        _username = username;
+        _password = password;
+        _managementLIF = managementLIF;
+        _svmName = svmName;
+        _protocolType = protocolType;
+        _isDisaggregated = isDisaggregated;
     }
 
     public String getUsername() {
-        return Username;
+        return _username;
     }
 
     public void setUsername(String username) {
-        Username = username;
+        _username = username;
     }
 
     public String getPassword() {
-        return Password;
+        return _password;
     }
 
     public void setPassword(String password) {
-        Password = password;
+        _password = password;
     }
 
     public String getManagementLIF() {
-        return ManagementLIF;
+        return _managementLIF;
     }
 
     public void setManagementLIF(String managementLIF) {
-        ManagementLIF = managementLIF;
+        _managementLIF = managementLIF;
     }
 
     public String getSvmName() {
-        return SvmName;
+        return _svmName;
     }
 
     public void setSvmName(String svmName) {
-        SvmName = svmName;
+        _svmName = svmName;
     }
 
     public ProtocolType getProtocol() {
-        return Protocol;
+        return _protocolType;
     }
 
-    public void setProtocol(ProtocolType protocol) {
-        Protocol = protocol;
+    public void setProtocol(ProtocolType protocolType) {
+        _protocolType = protocolType;
     }
 
     public Boolean getIsDisaggregated() {
-        return IsDisaggregated;
+        return _isDisaggregated;
     }
 
     public void setIsDisaggregated(Boolean isDisaggregated) {
-        IsDisaggregated = isDisaggregated;
+        _isDisaggregated = isDisaggregated;
     }
 }

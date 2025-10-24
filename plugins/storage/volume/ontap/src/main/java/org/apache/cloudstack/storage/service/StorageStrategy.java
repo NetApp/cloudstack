@@ -73,10 +73,9 @@ public abstract class StorageStrategy {
         String svmName = storage.getSvmName();
         try {
             // Call the SVM API to check if the SVM exists
-            Svm svm = null;
-            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() + Constants.GET_SVMs);
-            Map<String, String> queryParams = Map.of("name", svmName);
-            OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(url, authHeader, queryParams);
+            Svm svm = new Svm();
+            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() + Constants.GET_SVMs + "?name=" + svmName);
+            OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(url, authHeader);
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
             } else {
