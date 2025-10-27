@@ -43,17 +43,17 @@ public interface NASFeignClient {
     //File Operations
 
     @RequestMapping(method = RequestMethod.GET, value="/{volume.uuid}/files/{path}")
-    OntapResponse<FileInfo> getFileResponse(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                                            @PathVariable(name = "path", required = true) String filePath);
+    OntapResponse<FileInfo> getFileResponse(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid") String volumeUUID,
+                                            @PathVariable(name = "path") String filePath);
     @RequestMapping(method = RequestMethod.DELETE, value="/{volume.uuid}/files/{path}")
-    void deleteFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath);
+    void deleteFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid") String volumeUUID,
+                    @PathVariable(name = "path") String filePath);
     @RequestMapping(method = RequestMethod.PATCH, value="/{volume.uuid}/files/{path}")
-    void updateFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath, @RequestBody FileInfo fileInfo);
+    void updateFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid") String volumeUUID,
+                    @PathVariable(name = "path") String filePath, @RequestBody FileInfo fileInfo);
     @RequestMapping(method = RequestMethod.POST, value="/{volume.uuid}/files/{path}")
-    void createFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath, @RequestBody FileInfo file);
+    void createFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid") String volumeUUID,
+                    @PathVariable(name = "path") String filePath, @RequestBody FileInfo file);
 
 
 
@@ -68,12 +68,12 @@ public interface NASFeignClient {
     OntapResponse<ExportPolicy> getExportPolicyResponse(URI baseURL, @RequestHeader("Authorization") String header);
 
     @RequestMapping(method = RequestMethod.GET, value="/{id}")
-    OntapResponse<ExportPolicy> getExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
+    OntapResponse<ExportPolicy> getExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id") String id);
 
     @RequestMapping(method = RequestMethod.DELETE, value="/{id}")
-    void deleteExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
+    void deleteExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id") String id);
 
     @RequestMapping(method = RequestMethod.PATCH, value="/{id}")
-    OntapResponse<ExportPolicy> updateExportPolicy(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id,
+    OntapResponse<ExportPolicy> updateExportPolicy(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id") String id,
                                                    @RequestBody ExportPolicy request);
 }

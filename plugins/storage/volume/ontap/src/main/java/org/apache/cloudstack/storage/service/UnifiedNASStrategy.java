@@ -219,4 +219,145 @@ public class UnifiedNASStrategy extends NASStrategy{
             throw new CloudRuntimeException("Failed to enable NFS: " + e.getMessage());
         }
     }
+
+    // TODO should we return boolean or string ?
+    private boolean createFile(String volumeUuid, String filePath, Long fileSize) {
+        s_logger.info("Creating file: {} in volume: {}", filePath, volumeUuid);
+
+        try {
+            String authHeader = utils.generateAuthHeader(OntapStorage.Username, OntapStorage.Password);
+            
+            FileInfo fileInfo = new FileInfo();
+            fileInfo.setPath(filePath);
+            fileInfo.setType(FileInfo.TypeEnum.FILE);
+            
+            if (fileSize != null && fileSize > 0) {
+                fileInfo.setSize(fileSize);
+            }
+
+            URI createFileUrl = URI.create(Constants.HTTPS + OntapStorage.ManagementLIF +
+                    "/api/storage/volumes/" + volumeUuid + "/files" + filePath);
+
+            nasFeignClient.createFile(createFileUrl, authHeader, volumeUuid, filePath, fileInfo);
+
+            s_logger.info("File created successfully: {} in volume: {}", filePath, volumeUuid);
+            return true;
+
+        } catch (FeignException e) {
+            s_logger.error("Failed to create file: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        } catch (Exception e) {
+            s_logger.error("Exception while creating file: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        }
+    }
+
+    private boolean deleteFile(String volumeUuid, String filePath) {
+        s_logger.info("Deleting file: {} from volume: {}", filePath, volumeUuid);
+
+        try {
+            String authHeader = utils.generateAuthHeader(OntapStorage.Username, OntapStorage.Password);
+            
+            // Check if file exists first
+            if (!fileExists(volumeUuid, filePath)) {
+                s_logger.warn("File does not exist: {} in volume: {}", filePath, volumeUuid);
+                return false;
+            }
+
+            URI deleteFileUrl = URI.create(Constants.HTTPS + OntapStorage.ManagementLIF +
+                    "/api/storage/volumes/" + volumeUuid + "/files" + filePath);
+
+            nasFeignClient.deleteFile(deleteFileUrl, authHeader, volumeUuid, filePath);
+
+            s_logger.info("File deleted successfully: {} from volume: {}", filePath, volumeUuid);
+            return true;
+
+        } catch (FeignException e) {
+            s_logger.error("Failed to delete file: {} from volume: {}", filePath, volumeUuid, e);
+            return false;
+        } catch (Exception e) {
+            s_logger.error("Exception while deleting file: {} from volume: {}", filePath, volumeUuid, e);
+            return false;
+        }
+    }
+
+    private boolean fileExists(String volumeUuid, String filePath) {
+        s_logger.debug("Checking if file exists: {} in volume: {}", filePath, volumeUuid);
+
+        try {
+            String authHeader = utils.generateAuthHeader(OntapStorage.Username, OntapStorage.Password);
+            
+            // Build URI for file info retrieval - volume-specific endpoint
+            URI getFileUrl = URI.create(Constants.HTTPS + OntapStorage.ManagementLIF + 
+                    "/api/storage/volumes/" + volumeUuid + "/files" + filePath);
+
+            nasFeignClient.getFileResponse(getFileUrl, authHeader, volumeUuid, filePath);
+            
+            s_logger.debug("File exists: {} in volume: {}", filePath, volumeUuid);
+            return true;
+
+        } catch (FeignException e) {
+            // TODO check the status code while testing for file not found error
+            if (e.status() == 404) {
+                s_logger.debug("File does not exist: {} in volume: {}", filePath, volumeUuid);
+                return false;
+            }
+            s_logger.error("Error checking file existence: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        } catch (Exception e) {
+            s_logger.error("Exception while checking file existence: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        }
+    }
+
+    private OntapResponse<FileInfo> getFileInfo(String volumeUuid, String filePath) {
+        s_logger.debug("Getting file info for: {} in volume: {}", filePath, volumeUuid);
+
+        try {
+            String authHeader = utils.generateAuthHeader(OntapStorage.Username, OntapStorage.Password);
+            
+            URI getFileUrl = URI.create(Constants.HTTPS + OntapStorage.ManagementLIF +
+                    "/api/storage/volumes/" + volumeUuid + "/files" + filePath);
+
+            OntapResponse<FileInfo> response = nasFeignClient.getFileResponse(getFileUrl, authHeader, volumeUuid, filePath);
+            
+            s_logger.debug("Retrieved file info for: {} in volume: {}", filePath, volumeUuid);
+            return response;
+
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                s_logger.debug("File not found: {} in volume: {}", filePath, volumeUuid);
+                return null;
+            }
+            s_logger.error("Failed to get file info: {} in volume: {}", filePath, volumeUuid, e);
+            throw new CloudRuntimeException("Failed to get file info: " + e.getMessage());
+        } catch (Exception e) {
+            s_logger.error("Exception while getting file info: {} in volume: {}", filePath, volumeUuid, e);
+            throw new CloudRuntimeException("Failed to get file info: " + e.getMessage());
+        }
+    }
+
+    private boolean updateFile(String volumeUuid, String filePath, FileInfo fileInfo) {
+        s_logger.info("Updating file: {} in volume: {}", filePath, volumeUuid);
+
+        try {
+            String authHeader = utils.generateAuthHeader(OntapStorage.Username, OntapStorage.Password);
+            
+            URI updateFileUrl = URI.create(Constants.HTTPS + OntapStorage.ManagementLIF +
+                    "/api/storage/volumes/" + volumeUuid + "/files" + filePath);
+
+            nasFeignClient.updateFile(updateFileUrl, authHeader, volumeUuid, filePath, fileInfo);
+
+            s_logger.info("File updated successfully: {} in volume: {}", filePath, volumeUuid);
+            return true;
+
+        } catch (FeignException e) {
+            s_logger.error("Failed to update file: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        } catch (Exception e) {
+            s_logger.error("Exception while updating file: {} in volume: {}", filePath, volumeUuid, e);
+            return false;
+        }
+    }
+
 }
