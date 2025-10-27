@@ -78,7 +78,8 @@ public class UnifiedSANStrategy extends SANStrategy {
                 throw new CloudRuntimeException("Failed to create Lun: " + lunName);
             }
             Lun lun = createdLun.getRecords().get(0);
-            logger.info("LUN created successfully. Lun: {}", lun);
+            logger.debug("LUN created successfully. Lun: {}", lun);
+            logger.info("LUN created successfully. LunName: {}", lun.getName());
             return lun;
         } catch (Exception e) {
             logger.error("Exception occurred while creating LUN: {} under volume {} for SVM: {}. Exception: {}", lunName, volumeName, svmName, e.getMessage());

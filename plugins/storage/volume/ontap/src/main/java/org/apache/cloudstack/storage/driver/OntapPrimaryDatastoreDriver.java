@@ -104,7 +104,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
 
        try {
-           logger.info("createAsync: Volume creation starting for data store [{}] and data object [{}] of type [{}]",
+           logger.info("createAsync starting for data store [{}] and data object [{}] of type [{}]",
                     dataStore, dataObject, dataObject.getType());
            if (dataObject.getType() == DataObjectType.VOLUME) {
                 path = createCloudStackVolume(dataStore.getId(), dataObject);
@@ -116,15 +116,17 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
            }
        } catch (Exception e) {
             errMsg = e.getMessage();
-            logger.error("createAsync: Volume creation failed for dataObject [{}]: {}", dataObject, errMsg);
+            logger.error("createAsync failed for dataObject [{}]: {}", dataObject, errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
             createCmdResult.setResult(e.toString());
        } finally {
+           logger.info("createAsync completed");
             callback.complete(createCmdResult);
        }
     }
 
     private String createCloudStackVolume(long storagePoolId, DataObject dataObject) {
+        logger.info("createCloudStackVolume starting for storagePoolId {} and data object [{}]", storagePoolId, dataObject);
         String path = null;
         StoragePoolVO storagePool = storagePoolDao.findById(storagePoolId);
         if(storagePool == null) {
@@ -156,6 +158,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         } else {
             throw new CloudRuntimeException("createCloudStackVolume : ONTAP details validation failed, cannot connect to ONTAP cluster");
         }
+        logger.info("createCloudStackVolume completed with path {}", path);
         return path;
     }
 
