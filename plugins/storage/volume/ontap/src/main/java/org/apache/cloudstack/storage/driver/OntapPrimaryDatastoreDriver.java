@@ -24,6 +24,7 @@ import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
+import com.cloud.hypervisor.Hypervisor;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
@@ -58,6 +59,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.cloud.hypervisor.Hypervisor.HypervisorType.KVM;
+import static com.cloud.hypervisor.Hypervisor.HypervisorType.VMware;
 
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
@@ -145,11 +149,22 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String lunOrFileName = dataObject.getName();
             Long size = dataObject.getSize();
             String volName = storagePool.getName();
+            String hypervisorType = storagePool.getHypervisor().name();
+            String osType = null;
+            switch (hypervisorType) {
+                case Constants.KVM:
+                    osType = Lun.OsTypeEnum.LINUX.getValue();
+                    break;
+                default:
+                    String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                    logger.error(errMsg);
+                    throw new CloudRuntimeException(errMsg);
+            }
 
             // Create LUN based on protocol
             if (ontapStorage.getProtocol().equals(Constants.ISCSI)) {
                 SANStrategy sanStrategy = StorageProviderFactory.getSANStrategy(ontapStorage);
-                Lun lun = sanStrategy.createLUN(svmName, volName, lunOrFileName, size , Lun.OsTypeEnum.LINUX.getValue());
+                Lun lun = sanStrategy.createLUN(svmName, volName, lunOrFileName, size , osType);
                 if(lun.getName() == null || lun.getName().isEmpty()) {
                     throw new CloudRuntimeException("createCloudStackVolume : LUN Name is invalid");
                 }

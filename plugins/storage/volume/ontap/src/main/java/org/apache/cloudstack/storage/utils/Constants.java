@@ -52,5 +52,6 @@ public class Constants {
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
     public static final String PATH_SEPARATOR = "/";
+    public static final String KVM = "KVM";
     public static final String GET_JOB_BY_UUID = "/api/cluster/jobs";
 }
