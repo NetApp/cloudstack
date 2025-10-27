@@ -55,7 +55,7 @@ public abstract class StorageStrategy {
     @Inject
     private JobFeignClient jobFeignClient;
 
-    private final OntapStorage storage;
+    protected final OntapStorage storage;
 
     private List<Aggregate> aggregates;
 
