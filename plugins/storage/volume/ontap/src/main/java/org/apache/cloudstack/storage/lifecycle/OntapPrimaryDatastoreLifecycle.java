@@ -67,6 +67,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
      */
     @Override
     public DataStore initialize(Map<String, Object> dsInfos) {
+        s_logger.info("initialize {}", dsInfos);
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
@@ -149,7 +150,9 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
+        String storagePath = url + ":/" + storagePoolName;
 
+        parameters.setPath(storagePath);
         parameters.setTags(tags);
         parameters.setIsTagARule(isTagARule);
         parameters.setDetails(details);
