@@ -37,7 +37,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
-import java.util.Map;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
