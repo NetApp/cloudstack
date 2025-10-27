@@ -50,8 +50,4 @@ public class Utility {
         String uriString = Constants.HTTPS + ontapStorage.getManagementLIF() + path;
         return URI.create(uriString);
     }
-
-    public Job pollJob(Job job) {
-        return null;
-    }
 }

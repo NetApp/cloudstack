@@ -191,15 +191,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean grantAccess(DataObject dataObject, Host host, DataStore dataStore) {
-        if (dataStore == null) {
-            throw new CloudRuntimeException("grantAccess: dataStore should not be null");
-        }
-        if (dataObject == null) {
-            throw new CloudRuntimeException("grantAccess: dataObject should not be null");
-        }
-        if (host == null) {
-            throw new CloudRuntimeException("grantAccess: host should not be null");
-        }
         return true;
     }
 
