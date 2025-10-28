@@ -31,47 +31,47 @@ public class UnifiedSANStrategy extends SANStrategy{
     }
 
     @Override
-    public CloudStackVolume createCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    CloudStackVolume updateCloudStackVolume(Map<String, String> values) {
+    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    void deleteCloudStackVolume(Map<String, String> values) {
+    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
 
     }
 
     @Override
-    CloudStackVolume getCloudStackVolume(Map<String, String> values) {
+    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    public AccessGroup createAccessGroup(Map<String, String> values) {
+    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
     @Override
-    public void deleteAccessGroup(Map<String, String> values) {
+    public void deleteAccessGroup(AccessGroup accessGroup) {
 
     }
 
     @Override
-    public AccessGroup updateAccessGroup(Map<String, String> values) {
+    public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
     @Override
-    public AccessGroup getAccessGroup(Map<String, String> values) {
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }

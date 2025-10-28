@@ -42,8 +42,8 @@ import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLif
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
-import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

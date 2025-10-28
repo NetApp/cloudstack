@@ -19,14 +19,15 @@
 
 package org.apache.cloudstack.storage.feign.model;
 
-import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
+
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 
 public class OntapStorage {
     private  String username;
     private  String password;
     private  String managementLIF;
     private  String svmName;
-    private  ProtocolType protocolType;
+    private ProtocolType protocolType;
     private  Boolean isDisaggregated;
 
     public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocolType, Boolean isDisaggregated) {

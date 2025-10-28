@@ -1,12 +1,12 @@
 package org.apache.cloudstack.storage.service.model;
 
+import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Policy;
 
 public class AccessGroup {
 
-    Igroup igroup;
-    Policy policy;
+    private Igroup igroup;
+    private ExportPolicy exportPolicy;
 
     public Igroup getIgroup() {
         return igroup;
@@ -16,11 +16,11 @@ public class AccessGroup {
         this.igroup = igroup;
     }
 
-    public Policy getPolicy() {
-        return policy;
+    public ExportPolicy getPolicy() {
+        return exportPolicy;
     }
 
-    public void setPolicy(Policy policy) {
-        this.policy = policy;
+    public void setPolicy(ExportPolicy policy) {
+        this.exportPolicy = policy;
     }
 }

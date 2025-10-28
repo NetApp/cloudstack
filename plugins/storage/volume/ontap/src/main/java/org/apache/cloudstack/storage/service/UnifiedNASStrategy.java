@@ -31,47 +31,47 @@ public class UnifiedNASStrategy extends NASStrategy{
     }
 
     @Override
-    public CloudStackVolume createCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    public CloudStackVolume updateCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    public void deleteCloudStackVolume(Map<String, String> values) {
+    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
 
     }
 
     @Override
-    public CloudStackVolume getCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    public AccessGroup createAccessGroup(Map<String, String> values) {
+    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
     @Override
-    public void deleteAccessGroup(Map<String, String> values) {
+    public void deleteAccessGroup(AccessGroup accessGroup) {
 
     }
 
     @Override
-    public AccessGroup updateAccessGroup(Map<String, String> values) {
+    public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
     @Override
-    public AccessGroup getAccessGroup(Map<String, String> values) {
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }

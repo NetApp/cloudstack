@@ -73,14 +73,6 @@ public abstract class StorageStrategy {
 
     private static final Logger s_logger = (Logger) LogManager.getLogger(StorageStrategy.class);
 
-    protected enum PROTOCOLS
-          { NFS30,
-            NFS41,
-            FC,
-            iSCSI,
-            NvmeTCP,
-            NvmeFC };
-
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
 
@@ -209,7 +201,7 @@ public abstract class StorageStrategy {
      *
      * @param values
      */
-    public Volume updateStorageVolume(Map<String,String> values)
+    public Volume updateStorageVolume(Volume volume)
     {
         //TODO
         return null;
@@ -222,7 +214,7 @@ public abstract class StorageStrategy {
      *
      * @param values
      */
-    public void deleteStorageVolume(Map<String,String> values)
+    public void deleteStorageVolume(Volume volume)
     {
         //TODO
     }
@@ -234,7 +226,7 @@ public abstract class StorageStrategy {
      *
      * @param values
      */
-    public Volume getStorageVolume(Map<String,String> values)
+    public Volume getStorageVolume(Volume volume)
     {
         //TODO
         return null;
@@ -248,7 +240,7 @@ public abstract class StorageStrategy {
      *     createNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract public CloudStackVolume createCloudStackVolume(Map<String,String> values);
+    abstract public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -258,7 +250,7 @@ public abstract class StorageStrategy {
      *     updateNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract CloudStackVolume updateCloudStackVolume(Map<String,String> values);
+    abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -268,7 +260,7 @@ public abstract class StorageStrategy {
      *     deleteNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract void deleteCloudStackVolume(Map<String,String> values);
+    abstract void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -278,7 +270,7 @@ public abstract class StorageStrategy {
      *     getNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract CloudStackVolume getCloudStackVolume(Map<String,String> values);
+    abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -287,7 +279,7 @@ public abstract class StorageStrategy {
      *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract AccessGroup createAccessGroup(Map<String,String> values);
+    abstract AccessGroup createAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -296,7 +288,7 @@ public abstract class StorageStrategy {
      *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void deleteAccessGroup(Map<String,String> values);
+    abstract void deleteAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -305,7 +297,7 @@ public abstract class StorageStrategy {
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract AccessGroup updateAccessGroup(Map<String,String> values);
+    abstract AccessGroup updateAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -314,7 +306,7 @@ public abstract class StorageStrategy {
      *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract AccessGroup getAccessGroup(Map<String,String> values);
+    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses

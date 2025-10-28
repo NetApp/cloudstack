@@ -5,8 +5,8 @@ import org.apache.cloudstack.storage.feign.model.Lun;
 
 public class CloudStackVolume {
 
-    FileInfo file;
-    Lun lun;
+    private FileInfo file;
+    private Lun lun;
 
     public FileInfo getFile() {
         return file;
