@@ -22,20 +22,20 @@ package org.apache.cloudstack.storage.feign.model;
 import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 
 public class OntapStorage {
-    public static String username;
-    public static String password;
-    public static String managementLIF;
-    public static String svmName;
-    public static ProtocolType protocolType;
-    public static Boolean isDisaggregated;
+    private  String username;
+    private  String password;
+    private  String managementLIF;
+    private  String svmName;
+    private  ProtocolType protocolType;
+    private  Boolean isDisaggregated;
 
     public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocolType, Boolean isDisaggregated) {
-        username = username;
-        password = password;
-        managementLIF = managementLIF;
-        svmName = svmName;
-        protocolType = protocolType;
-        isDisaggregated = isDisaggregated;
+        this.username = username;
+        this.password = password;
+        this.managementLIF = managementLIF;
+        this.svmName = svmName;
+        this.protocolType = protocolType;
+        this.isDisaggregated = isDisaggregated;
     }
 
     public String getUsername() {
