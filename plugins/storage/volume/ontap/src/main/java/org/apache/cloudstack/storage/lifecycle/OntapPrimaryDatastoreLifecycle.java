@@ -323,6 +323,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
+            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
