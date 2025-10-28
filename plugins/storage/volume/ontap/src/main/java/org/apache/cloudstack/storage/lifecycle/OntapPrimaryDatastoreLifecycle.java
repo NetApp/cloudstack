@@ -42,8 +42,8 @@ import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLif
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
-import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -145,7 +145,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         boolean isValid = storageStrategy.connect();
         if (isValid) {
 //            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
-            storageStrategy.createVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
+            storageStrategy.createStorageVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }

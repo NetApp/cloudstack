@@ -20,6 +20,10 @@
 package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+
+import java.util.Map;
 
 public class UnifiedNASStrategy extends NASStrategy{
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
@@ -27,22 +31,59 @@ public class UnifiedNASStrategy extends NASStrategy{
     }
 
     @Override
-    public String createExportPolicy(String svmName, String policyName) {
-        return "";
+    public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
 
     @Override
-    public String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule) {
-        return "";
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
 
     @Override
-    public String assignExportPolicyToVolume(String volumeUuid, String policyName) {
-        return "";
+    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+
     }
 
     @Override
-    public String enableNFS(String svmUuid) {
-        return "";
+    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
+
+    @Override
+    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public void deleteAccessGroup(AccessGroup accessGroup) {
+
+    }
+
+    @Override
+    public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    void enableLogicalAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableLogicalAccess(Map<String, String> values) {
+
+    }
+
 }

@@ -20,10 +20,6 @@
 package org.apache.cloudstack.storage.utils;
 
 public class Constants {
-    public enum ProtocolType {
-        NFS,
-        ISCSI
-    }
 
     public static final String NFS = "nfs";
     public static final String ISCSI = "iscsi";

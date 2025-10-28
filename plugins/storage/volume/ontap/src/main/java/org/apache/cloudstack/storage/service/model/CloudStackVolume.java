@@ -17,13 +17,29 @@
  * under the License.
  */
 
-package org.apache.cloudstack.storage.service;
+package org.apache.cloudstack.storage.service.model;
 
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
+import org.apache.cloudstack.storage.feign.model.Lun;
 
-public abstract class NASStrategy extends StorageStrategy {
-    public NASStrategy(OntapStorage ontapStorage) {
-        super(ontapStorage);
+public class CloudStackVolume {
+
+    private FileInfo file;
+    private Lun lun;
+
+    public FileInfo getFile() {
+        return file;
     }
 
+    public void setFile(FileInfo file) {
+        this.file = file;
+    }
+
+    public Lun getLun() {
+        return lun;
+    }
+
+    public void setLun(Lun lun) {
+        this.lun = lun;
+    }
 }

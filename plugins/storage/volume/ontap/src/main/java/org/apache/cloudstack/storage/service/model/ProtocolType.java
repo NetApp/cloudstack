@@ -17,13 +17,9 @@
  * under the License.
  */
 
-package org.apache.cloudstack.storage.service;
+package org.apache.cloudstack.storage.service.model;
 
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
-
-public abstract class NASStrategy extends StorageStrategy {
-    public NASStrategy(OntapStorage ontapStorage) {
-        super(ontapStorage);
-    }
-
+public enum ProtocolType {
+        NFS,
+        ISCSI
 }

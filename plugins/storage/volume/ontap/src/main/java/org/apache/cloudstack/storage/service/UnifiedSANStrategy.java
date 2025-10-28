@@ -20,6 +20,10 @@
 package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+
+import java.util.Map;
 
 public class UnifiedSANStrategy extends SANStrategy{
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
@@ -27,22 +31,59 @@ public class UnifiedSANStrategy extends SANStrategy{
     }
 
     @Override
-    public String createLUN(String svmName, String volumeName, String lunName, long sizeBytes, String osType) {
-        return "";
+    public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
 
     @Override
-    public String createIgroup(String svmName, String igroupName, String[] initiators) {
-        return "";
+    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
 
     @Override
-    public String mapLUNToIgroup(String lunName, String igroupName) {
-        return "";
+    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+
     }
 
     @Override
-    public String enableISCSI(String svmUuid) {
-        return "";
+    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO
+        return null;
     }
+
+    @Override
+    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public void deleteAccessGroup(AccessGroup accessGroup) {
+
+    }
+
+    @Override
+    public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    void enableLogicalAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableLogicalAccess(Map<String, String> values) {
+
+    }
+
 }
