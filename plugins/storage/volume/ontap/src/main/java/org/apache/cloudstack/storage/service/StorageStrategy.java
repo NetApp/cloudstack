@@ -31,6 +31,8 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
@@ -81,6 +83,7 @@ public abstract class StorageStrategy {
 
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
+
     }
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
@@ -135,7 +138,7 @@ public abstract class StorageStrategy {
      * @param volumeName
      * @param size
      */
-    public void createStorageVolume(String volumeName, Long size) {
+    public Volume createStorageVolume(String volumeName, Long size) {
         s_logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
 
         String svmName = storage.getSvmName();
@@ -195,6 +198,8 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Failed to create volume: " + e.getMessage());
         }
         s_logger.info("Volume created successfully: " + volumeName);
+        //TODO
+        return null;
     }
 
     /**
@@ -204,7 +209,7 @@ public abstract class StorageStrategy {
      *
      * @param values
      */
-    public void updateStorageVolume(Map<String,String> values)
+    public Volume updateStorageVolume(Map<String,String> values)
     {
         //TODO
     }
@@ -228,9 +233,10 @@ public abstract class StorageStrategy {
      *
      * @param values
      */
-    public void getStorageVolume(Map<String,String> values)
+    public Volume getStorageVolume(Map<String,String> values)
     {
         //TODO
+        return null;
     }
 
     /**
@@ -241,7 +247,7 @@ public abstract class StorageStrategy {
      *     createNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract public void createCloudStackVolume(Map<String,String> values);
+    abstract public CloudStackVolume createCloudStackVolume(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -251,7 +257,7 @@ public abstract class StorageStrategy {
      *     updateNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract void updateCloudStackVolume(Map<String,String> values);
+    abstract CloudStackVolume updateCloudStackVolume(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -271,7 +277,7 @@ public abstract class StorageStrategy {
      *     getNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param values
      */
-    abstract void getCloudStackVolume(Map<String,String> values);
+    abstract CloudStackVolume getCloudStackVolume(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -280,7 +286,7 @@ public abstract class StorageStrategy {
      *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void enableAccess(Map<String,String> values);
+    abstract AccessGroup createAccessGroup(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -289,7 +295,7 @@ public abstract class StorageStrategy {
      *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void disableAccess(Map<String,String> values);
+    abstract void deleteAccessGroup(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -298,7 +304,7 @@ public abstract class StorageStrategy {
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void updateAccess(Map<String,String> values);
+    abstract AccessGroup updateAccessGroup(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -307,7 +313,7 @@ public abstract class StorageStrategy {
      *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void getAccess(Map<String,String> values);
+    abstract AccessGroup getAccessGroup(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
