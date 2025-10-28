@@ -21,28 +21,61 @@ package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 
+import java.util.Map;
+
 public class UnifiedNASStrategy extends NASStrategy{
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
     }
 
     @Override
-    public String createExportPolicy(String svmName, String policyName) {
-        return "";
+    public void createCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule) {
-        return "";
+    void updateCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String assignExportPolicyToVolume(String volumeUuid, String policyName) {
-        return "";
+    void deleteCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String enableNFS(String svmUuid) {
-        return "";
+    void getCloudStackVolume(Map<String, String> values) {
+
     }
+
+    @Override
+    void enableAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void updateAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void getAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void enableLogicalAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableLogicalAccess(Map<String, String> values) {
+
+    }
+
 }

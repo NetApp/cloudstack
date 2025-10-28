@@ -24,7 +24,6 @@ import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
-import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;

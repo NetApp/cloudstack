@@ -26,9 +26,5 @@ public abstract class NASStrategy extends StorageStrategy {
         super(ontapStorage);
     }
 
-    public abstract String createExportPolicy(String svmName, String policyName);
-    public abstract String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule);
-    public abstract String assignExportPolicyToVolume(String volumeUuid, String policyName);
-    public abstract String enableNFS(String svmUuid);
 }
 

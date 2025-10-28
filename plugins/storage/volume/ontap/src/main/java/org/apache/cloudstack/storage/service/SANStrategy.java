@@ -26,8 +26,4 @@ public abstract class SANStrategy extends StorageStrategy {
         super(ontapStorage);
     }
 
-    public abstract String createLUN(String svmName, String volumeName, String lunName, long sizeBytes, String osType);
-    public abstract String createIgroup(String svmName, String igroupName, String[] initiators);
-    public abstract String mapLUNToIgroup(String lunName, String igroupName);
-    public abstract String enableISCSI(String svmUuid);
 }

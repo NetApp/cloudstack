@@ -21,28 +21,61 @@ package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 
+import java.util.Map;
+
 public class UnifiedSANStrategy extends SANStrategy{
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
     }
 
     @Override
-    public String createLUN(String svmName, String volumeName, String lunName, long sizeBytes, String osType) {
-        return "";
+    public void createCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String createIgroup(String svmName, String igroupName, String[] initiators) {
-        return "";
+    void updateCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String mapLUNToIgroup(String lunName, String igroupName) {
-        return "";
+    void deleteCloudStackVolume(Map<String, String> values) {
+
     }
 
     @Override
-    public String enableISCSI(String svmUuid) {
-        return "";
+    void getCloudStackVolume(Map<String, String> values) {
+
     }
+
+    @Override
+    void enableAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void updateAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void getAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void enableLogicalAccess(Map<String, String> values) {
+
+    }
+
+    @Override
+    void disableLogicalAccess(Map<String, String> values) {
+
+    }
+
 }

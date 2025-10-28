@@ -145,7 +145,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         boolean isValid = storageStrategy.connect();
         if (isValid) {
 //            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
-            storageStrategy.createVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
+            storageStrategy.createStorageVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }

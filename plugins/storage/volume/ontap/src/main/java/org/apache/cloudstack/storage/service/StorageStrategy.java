@@ -42,6 +42,13 @@ import java.net.URI;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Storage Strategy represents the communication path for all the ONTAP storage options
+ *
+ * ONTAP storage operation would vary based on
+ *      Supported protocols: NFS3.0, NFS4.1, FC, iSCSI, Nvme/TCP and Nvme/FC
+ *      Supported platform:  Unified and Disaggregated
+ */
 public abstract class StorageStrategy {
     @Inject
     private Utility utils;
@@ -57,9 +64,20 @@ public abstract class StorageStrategy {
 
     private final OntapStorage storage;
 
+    /**
+     * Presents aggregate object for the unified storage, not eligible for disaggregated
+     */
     private List<Aggregate> aggregates;
 
     private static final Logger s_logger = (Logger) LogManager.getLogger(StorageStrategy.class);
+
+    protected enum PROTOCOLS
+          { NFS30,
+            NFS41,
+            FC,
+            iSCSI,
+            NvmeTCP,
+            NvmeFC };
 
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
@@ -108,7 +126,16 @@ public abstract class StorageStrategy {
     }
 
     // Common methods like create/delete etc., should be here
-    public void createVolume(String volumeName, Long size) {
+
+    /**
+     * Creates ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param volumeName
+     * @param size
+     */
+    public void createStorageVolume(String volumeName, Long size) {
         s_logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
 
         String svmName = storage.getSvmName();
@@ -169,4 +196,133 @@ public abstract class StorageStrategy {
         }
         s_logger.info("Volume created successfully: " + volumeName);
     }
+
+    /**
+     * Updates ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param values
+     */
+    public void updateStorageVolume(Map<String,String> values)
+    {
+        //TODO
+    }
+
+    /**
+     * Delete ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param values
+     */
+    public void deleteStorageVolume(Map<String,String> values)
+    {
+        //TODO
+    }
+
+    /**
+     * Updates ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param values
+     */
+    public void getStorageVolume(Map<String,String> values)
+    {
+        //TODO
+    }
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     createLun       for iSCSI, FC protocols
+     *     createFile      for NFS3.0 and NFS4.1 protocols
+     *     createNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param values
+     */
+    abstract public void createCloudStackVolume(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     updateLun       for iSCSI, FC protocols
+     *     updateFile      for NFS3.0 and NFS4.1 protocols
+     *     updateNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param values
+     */
+    abstract void updateCloudStackVolume(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     deleteLun       for iSCSI, FC protocols
+     *     deleteFile      for NFS3.0 and NFS4.1 protocols
+     *     deleteNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param values
+     */
+    abstract void deleteCloudStackVolume(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     getLun       for iSCSI, FC protocols
+     *     getFile      for NFS3.0 and NFS4.1 protocols
+     *     getNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param values
+     */
+    abstract void getCloudStackVolume(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     createiGroup       for iSCSI and FC protocols
+     *     createExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void enableAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     deleteiGroup       for iSCSI and FC protocols
+     *     deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void disableAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
+     *     updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void updateAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     getiGroup       for iSCSI and FC protocols
+     *     getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void getAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunMap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void enableLogicalAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunUnmap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void disableLogicalAccess(Map<String,String> values);
+
 }
