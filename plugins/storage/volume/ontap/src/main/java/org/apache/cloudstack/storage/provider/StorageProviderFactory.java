@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class StorageProviderFactory {
     private final StorageStrategy storageStrategy;
-    private static final Logger s_logger = (Logger) LogManager.getLogger(StorageProviderFactory.class);
+    private static final Logger s_logger = LogManager.getLogger(StorageProviderFactory.class);
 
     private StorageProviderFactory(OntapStorage ontapStorage) {
         ProtocolType protocol = ontapStorage.getProtocol();
