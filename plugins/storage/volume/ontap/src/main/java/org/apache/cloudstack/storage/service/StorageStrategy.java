@@ -212,6 +212,7 @@ public abstract class StorageStrategy {
     public Volume updateStorageVolume(Map<String,String> values)
     {
         //TODO
+        return null;
     }
 
     /**

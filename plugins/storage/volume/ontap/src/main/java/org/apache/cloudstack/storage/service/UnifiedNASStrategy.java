@@ -20,6 +20,8 @@
 package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 
 import java.util.Map;
 
@@ -29,43 +31,49 @@ public class UnifiedNASStrategy extends NASStrategy{
     }
 
     @Override
-    public void createCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume createCloudStackVolume(Map<String, String> values) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public CloudStackVolume updateCloudStackVolume(Map<String, String> values) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public void deleteCloudStackVolume(Map<String, String> values) {
 
     }
 
     @Override
-    void updateCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume getCloudStackVolume(Map<String, String> values) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public AccessGroup createAccessGroup(Map<String, String> values) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public void deleteAccessGroup(Map<String, String> values) {
 
     }
 
     @Override
-    void deleteCloudStackVolume(Map<String, String> values) {
-
+    public AccessGroup updateAccessGroup(Map<String, String> values) {
+        //TODO
+        return null;
     }
 
     @Override
-    void getCloudStackVolume(Map<String, String> values) {
-
-    }
-
-    @Override
-    void enableAccess(Map<String, String> values) {
-
-    }
-
-    @Override
-    void disableAccess(Map<String, String> values) {
-
-    }
-
-    @Override
-    void updateAccess(Map<String, String> values) {
-
-    }
-
-    @Override
-    void getAccess(Map<String, String> values) {
-
+    public AccessGroup getAccessGroup(Map<String, String> values) {
+        //TODO
+        return null;
     }
 
     @Override
