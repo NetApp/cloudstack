@@ -45,7 +45,7 @@ import java.util.Map;
 @Component
 public class Utility {
 
-    private static final Logger s_logger = (Logger) LogManager.getLogger(Utility.class);
+    private static final Logger s_logger = LogManager.getLogger(Utility.class);
     @Inject private OntapStorage ontapStorage;
     @Inject private PrimaryDataStoreDao storagePoolDao;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
@@ -109,6 +109,10 @@ public class Utility {
     }
 
     public StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+        if (details == null || details.isEmpty()) {
+            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+        }
         String protocol = details.get(Constants.PROTOCOL);
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
@@ -119,8 +123,8 @@ public class Utility {
             s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
             return storageStrategy;
         } else {
-            s_logger.error("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-            throw new CloudRuntimeException("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
         }
     }
 }

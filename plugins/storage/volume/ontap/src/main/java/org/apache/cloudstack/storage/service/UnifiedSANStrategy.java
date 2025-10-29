@@ -37,7 +37,7 @@ import java.util.Map;
 
 public class UnifiedSANStrategy extends SANStrategy {
 
-    private static final Logger s_logger = (Logger) LogManager.getLogger(UnifiedSANStrategy.class);
+    private static final Logger s_logger = LogManager.getLogger(UnifiedSANStrategy.class);
     @Inject private Utility utils;
     @Inject private SANFeignClient sanFeignClient;
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
@@ -56,7 +56,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
             URI url = utils.generateURI(Constants.CREATE_LUN);
-            //TODO: there is possible that Lun creation will take time and we may need to handle through async job.
+            //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
             OntapResponse<Lun> createdLun = sanFeignClient.createLun(url, authHeader, true, cloudstackVolume.getLun());
             if (createdLun == null || createdLun.getRecords() == null || createdLun.getRecords().size() == 0) {
                 s_logger.error("createCloudStackVolume: LUN creation failed for Lun {}", cloudstackVolume.getLun().getName());

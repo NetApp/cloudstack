@@ -58,7 +58,7 @@ import java.util.Map;
 
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
 
     @Inject private Utility utils;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
@@ -126,10 +126,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
         }
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
-        if(details == null || details.isEmpty()) {
-            s_logger.error("createCloudStackVolume : Storage Details not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("createCloudStackVolume : Storage Details not found for id: " + dataStore.getId());
-        }
         StorageStrategy storageStrategy = utils.getStrategyByStoragePoolDetails(details);
         s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
         CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
