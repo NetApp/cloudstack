@@ -41,7 +41,9 @@ import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -62,6 +64,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Inject private Utility utils;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject private PrimaryDataStoreDao storagePoolDao;
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
@@ -119,7 +122,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     private String createCloudStackVolumeForTypeVolume(DataStore dataStore, DataObject dataObject) {
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if(storagePool == null) {
+            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+        }
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+        if(details == null || details.isEmpty()) {
+            throw new CloudRuntimeException("createCloudStackVolume : Storage Details not found for id: " + dataStore.getId());
+        }
         String protocol = details.get(Constants.PROTOCOL);
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
@@ -128,7 +138,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         boolean isValid = storageStrategy.connect();
         if (isValid) {
             s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
-            CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(dataStore.getId(), details, dataObject);
+            CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
             CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
                 return cloudStackVolume.getLun().getName();

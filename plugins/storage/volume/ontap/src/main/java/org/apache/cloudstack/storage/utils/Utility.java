@@ -25,13 +25,10 @@ import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.provider.StorageProviderFactory;
-import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
@@ -71,11 +68,7 @@ public class Utility {
         return URI.create(uriString);
     }
 
-    public CloudStackVolume createCloudStackVolumeRequestByProtocol(Long storagePoolId, Map<String, String> details, DataObject dataObject) {
-       StoragePoolVO storagePool = storagePoolDao.findById(storagePoolId);
-        if(storagePool == null) {
-            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + storagePoolId);
-        }
+    public CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
        CloudStackVolume cloudStackVolumeRequest = null;
 
        String protocol = details.get(Constants.PROTOCOL);
