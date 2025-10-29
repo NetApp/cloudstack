@@ -18,13 +18,17 @@
  */
 package org.apache.cloudstack.storage.driver;
 
+import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
 import com.cloud.utils.Pair;
+import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
@@ -37,15 +41,27 @@ import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import javax.inject.Inject;
 import java.util.HashMap;
 import java.util.Map;
 
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
+
+    @Inject private Utility utils;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
@@ -68,9 +84,64 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void createAsync(DataStore store, DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+    public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
+        CreateCmdResult createCmdResult = null;
+        String path = null;
+        String errMsg = null;
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("createAsync: dataStore should not be null");
+        }
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("createAsync: dataObject should not be null");
+        }
+        if (callback == null) {
+            throw new InvalidParameterValueException("createAsync: callback should not be null");
+        }
+        try {
+            s_logger.info("createAsync: Volume creation starting for data store [{}] and data object [{}] of type [{}]",
+                    dataStore, dataObject, dataObject.getType());
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                path = createCloudStackVolumeForTypeVolume(dataStore, dataObject);
+                createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
+            } else {
+                errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
+                s_logger.error(errMsg);
+                throw new CloudRuntimeException(errMsg);
+            }
+        } catch (Exception e) {
+            errMsg = e.getMessage();
+            s_logger.error("createAsync: Volume creation failed for dataObject [{}]: {}", dataObject, errMsg);
+            createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
+            createCmdResult.setResult(e.toString());
+        } finally {
+            callback.complete(createCmdResult);
+        }
+    }
 
-        s_logger.trace("OntapPrimaryDatastoreDriver: createAsync: Store: "+store+", data: "+data);
+    private String createCloudStackVolumeForTypeVolume(DataStore dataStore, DataObject dataObject) {
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+        String protocol = details.get(Constants.PROTOCOL);
+        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+            s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
+            CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(dataStore.getId(), details, dataObject);
+            CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
+            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
+                return cloudStackVolume.getLun().getName();
+            } else {
+                String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + dataObject;
+                s_logger.error(errMsg);
+                throw new CloudRuntimeException(errMsg);
+            }
+        } else {
+            String errMsg = "createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed";
+            s_logger.error(errMsg);
+            throw new CloudRuntimeException(errMsg);
+        }
     }
 
     @Override

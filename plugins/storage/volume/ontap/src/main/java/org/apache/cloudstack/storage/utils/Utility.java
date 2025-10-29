@@ -20,33 +20,96 @@
 package org.apache.cloudstack.storage.utils;
 
 import com.cloud.utils.StringUtils;
+import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
+import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Base64Utils;
 
 import javax.inject.Inject;
 import java.net.URI;
+import java.util.Map;
 
 @Component
 public class Utility {
-    @Inject
-    OntapStorage ontapStorage;
+
+    private static final Logger s_logger = (Logger) LogManager.getLogger(Utility.class);
+    @Inject private OntapStorage ontapStorage;
+    @Inject private PrimaryDataStoreDao storagePoolDao;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
 
     private static final String BASIC = "Basic";
     private static final String AUTH_HEADER_COLON = ":";
+
     /**
      * Method generates authentication headers using storage backend credentials passed as normal string
-     * @param username  -->> username of the storage backend
-     * @param password  -->> normal decoded password of the storage backend
+     *
+     * @param username -->> username of the storage backend
+     * @param password -->> normal decoded password of the storage backend
      * @return
      */
-    public String generateAuthHeader(String username, String password) {
+    public String generateAuthHeader (String username, String password) {
         byte[] encodedBytes = Base64Utils.encode((username + AUTH_HEADER_COLON + password).getBytes());
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public URI generateURI(String path) {
+    public URI generateURI (String path) {
         String uriString = Constants.HTTPS + ontapStorage.getManagementLIF() + path;
         return URI.create(uriString);
+    }
+
+    public CloudStackVolume createCloudStackVolumeRequestByProtocol(Long storagePoolId, Map<String, String> details, DataObject dataObject) {
+       StoragePoolVO storagePool = storagePoolDao.findById(storagePoolId);
+        if(storagePool == null) {
+            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + storagePoolId);
+        }
+       CloudStackVolume cloudStackVolumeRequest = null;
+
+       String protocol = details.get(Constants.PROTOCOL);
+       if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+           cloudStackVolumeRequest = new CloudStackVolume();
+           Lun lunRequest = new Lun();
+           Svm svm = new Svm();
+           svm.setName(details.get(Constants.SVM_NAME));
+           lunRequest.setSvm(svm);
+
+           LunSpace lunSpace = new LunSpace();
+           lunSpace.setSize(dataObject.getSize());
+           lunRequest.setSpace(lunSpace);
+
+           String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.PATH_SEPARATOR + dataObject.getName();
+           lunRequest.setName(lunFullName);
+
+           String hypervisorType = storagePool.getHypervisor().name();
+           String osType = null;
+           switch (hypervisorType) {
+               case Constants.KVM:
+                   osType = Lun.OsTypeEnum.LINUX.getValue();
+                   break;
+               default:
+                   String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                   s_logger.error(errMsg);
+                   throw new CloudRuntimeException(errMsg);
+           }
+           lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+
+           cloudStackVolumeRequest.setLun(lunRequest);
+           return cloudStackVolumeRequest;
+       } else {
+           throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
+       }
     }
 }
