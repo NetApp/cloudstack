@@ -29,6 +29,8 @@ import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
@@ -82,7 +84,7 @@ public class Utility {
            LunSpace lunSpace = new LunSpace();
            lunSpace.setSize(dataObject.getSize());
            lunRequest.setSpace(lunSpace);
-
+           //Lun name is full path like in unified "/vol/VolumeName/LunName"
            String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.PATH_SEPARATOR + dataObject.getName();
            lunRequest.setName(lunFullName);
 
@@ -104,5 +106,21 @@ public class Utility {
        } else {
            throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
        }
+    }
+
+    public StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+        String protocol = details.get(Constants.PROTOCOL);
+        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
+            return storageStrategy;
+        } else {
+            s_logger.error("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+            throw new CloudRuntimeException("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+        }
     }
 }

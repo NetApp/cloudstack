@@ -44,8 +44,6 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
-import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -101,7 +99,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
         try {
-            s_logger.info("createAsync: Volume creation starting for data store [{}] and data object [{}] of type [{}]",
+            s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]",
                     dataStore, dataObject, dataObject.getType());
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 path = createCloudStackVolumeForTypeVolume(dataStore, dataObject);
@@ -113,7 +111,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
         } catch (Exception e) {
             errMsg = e.getMessage();
-            s_logger.error("createAsync: Volume creation failed for dataObject [{}]: {}", dataObject, errMsg);
+            s_logger.error("createAsync: Failed for dataObject [{}]: {}", dataObject, errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
             createCmdResult.setResult(e.toString());
         } finally {
@@ -124,31 +122,22 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private String createCloudStackVolumeForTypeVolume(DataStore dataStore, DataObject dataObject) {
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if(storagePool == null) {
+            s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
         }
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
         if(details == null || details.isEmpty()) {
+            s_logger.error("createCloudStackVolume : Storage Details not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("createCloudStackVolume : Storage Details not found for id: " + dataStore.getId());
         }
-        String protocol = details.get(Constants.PROTOCOL);
-        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
-        if (isValid) {
-            s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
-            CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
-            CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
-            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
-                return cloudStackVolume.getLun().getName();
-            } else {
-                String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + dataObject;
-                s_logger.error(errMsg);
-                throw new CloudRuntimeException(errMsg);
-            }
+        StorageStrategy storageStrategy = utils.getStrategyByStoragePoolDetails(details);
+        s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
+        CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
+        CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
+            return cloudStackVolume.getLun().getName();
         } else {
-            String errMsg = "createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed";
+            String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + dataObject;
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }

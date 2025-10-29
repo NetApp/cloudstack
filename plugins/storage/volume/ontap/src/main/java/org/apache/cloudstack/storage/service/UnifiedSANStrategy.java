@@ -48,14 +48,15 @@ public class UnifiedSANStrategy extends SANStrategy {
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         s_logger.info("createCloudStackVolume : Creating Lun with cloudstackVolume request {} ", cloudstackVolume);
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
-            s_logger.error("createCloudStackVolume: LUN creation failed. Invalid cloudstackVolume request: {}", cloudstackVolume);
-            throw new CloudRuntimeException("createCloudStackVolume : Failed to create Lun, invalid cloudstackVolume request");
+            s_logger.error("createCloudStackVolume: LUN creation failed. Invalid request: {}", cloudstackVolume);
+            throw new CloudRuntimeException("createCloudStackVolume : Failed to create Lun, invalid request");
         }
         try {
             // Get AuthHeader
             String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
             URI url = utils.generateURI(Constants.CREATE_LUN);
+            //TODO: there is possible that Lun creation will take time and we may need to handle through async job.
             OntapResponse<Lun> createdLun = sanFeignClient.createLun(url, authHeader, true, cloudstackVolume.getLun());
             if (createdLun == null || createdLun.getRecords() == null || createdLun.getRecords().size() == 0) {
                 s_logger.error("createCloudStackVolume: LUN creation failed for Lun {}", cloudstackVolume.getLun().getName());
