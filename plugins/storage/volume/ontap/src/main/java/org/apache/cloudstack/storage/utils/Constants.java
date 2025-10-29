@@ -40,8 +40,16 @@ public class Constants {
     public static final int JOB_MAX_RETRIES = 100;
     public static final int CREATE_VOLUME_CHECK_SLEEP_TIME = 2000;
 
+    public static final String PATH_SEPARATOR = "/";
+
+    public static final String VOLUME_PATH_PREFIX = "/vol/";
+
+    public static final String KVM = "KVM";
+
     public static final String HTTPS = "https://";
     public static final String GET_SVMs = "/api/svm/svms";
     public static final String CREATE_VOLUME = "/api/storage/volumes";
     public static final String GET_JOB_BY_UUID = "/api/cluster/jobs";
+    public static final String CREATE_LUN = "/api/storage/luns";
+
 }
