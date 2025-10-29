@@ -64,7 +64,7 @@ public abstract class StorageStrategy {
     @Inject
     private JobFeignClient jobFeignClient;
 
-    private final OntapStorage storage;
+    protected final OntapStorage storage;
 
     /**
      * Presents aggregate object for the unified storage, not eligible for disaggregated
