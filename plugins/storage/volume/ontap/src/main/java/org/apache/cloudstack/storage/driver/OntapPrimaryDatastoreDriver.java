@@ -60,7 +60,7 @@ import javax.inject.Inject;
 import java.util.HashMap;
 import java.util.Map;
 
-public abstract class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
+public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
 

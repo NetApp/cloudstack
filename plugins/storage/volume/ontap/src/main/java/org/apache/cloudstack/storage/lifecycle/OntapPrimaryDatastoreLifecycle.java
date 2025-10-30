@@ -200,6 +200,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
             throw new CloudRuntimeException("Not all hosts in the cluster support the protocol: " + protocol.toString());
         }
+        //TODO - check if no host to connect then also need to create access group without initiators
         if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
             AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
