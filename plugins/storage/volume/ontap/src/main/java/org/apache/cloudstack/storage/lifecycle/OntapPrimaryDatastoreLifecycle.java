@@ -23,6 +23,7 @@ package org.apache.cloudstack.storage.lifecycle;
 import com.cloud.agent.api.StoragePoolInfo;
 import com.cloud.dc.ClusterVO;
 import com.cloud.dc.dao.ClusterDao;
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.resource.ResourceManager;
@@ -38,17 +39,23 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -58,7 +65,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
+    @Inject private Utility utils;
+    @Inject private PrimaryDataStoreDao storagePoolDao;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     /**
      * Creates primary storage on NetApp storage
@@ -167,12 +177,34 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("attachCluster: dataStore should not be null");
+        }
+        if (scope == null) {
+            throw new InvalidParameterValueException("attachCluster: clusterScope should not be null");
+        }
+        List<String> hostsIdentifier = new ArrayList<>();
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if(storagePool == null) {
+            s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+        }
         PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
-
+        // TODO- need to check if no host to connect then throw exception or just continue
         logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primarystore.getClusterId()));
+
+        Map<String, String> details = primarystore.getDetails();
+        StorageStrategy strategy = utils.getStrategyByStoragePoolDetails(details);
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
+            throw new CloudRuntimeException("Not all hosts in the cluster support the protocol: " + protocol.toString());
+        }
+        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
+            AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+            strategy.createAccessGroup(accessGroupRequest);
+        }
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
@@ -180,6 +212,25 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
         }
         _dataStoreHelper.attachCluster(dataStore);
+        return true;
+    }
+
+    private boolean isProtocolSupportedByAllHosts(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
+        String protocolPrefix;
+        switch (protocolType) {
+            case ISCSI:
+                protocolPrefix = Constants.IQN;
+                for (HostVO host : hosts) {
+                    if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty()
+                            || !host.getStorageUrl().startsWith(protocolPrefix)) {
+                        return false;
+                    }
+                    hostIdentifiers.add(host.getStorageUrl());
+                }
+                break;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol: " + protocolType.toString());
+        }
         return true;
     }
 
@@ -191,9 +242,32 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
         logger.debug("In attachZone for ONTAP primary storage");
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("attachZone: dataStore should not be null");
+        }
+        if (scope == null) {
+            throw new InvalidParameterValueException("attachZone: clusterScope should not be null");
+        }
+        List<String> hostsIdentifier = new ArrayList<>();
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if(storagePool == null) {
+            s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+        }
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
-
+        // TODO- need to check if no host to connect then throw exception or just continue
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+        StorageStrategy strategy = utils.getStrategyByStoragePoolDetails(details);
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
+            throw new CloudRuntimeException("Not all hosts in the zone support the protocol: " + protocol.toString());
+        }
+        if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
+            AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+            strategy.createAccessGroup(accessGroupRequest);
+        }
         for (HostVO host : hostsToConnect) {
             // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {

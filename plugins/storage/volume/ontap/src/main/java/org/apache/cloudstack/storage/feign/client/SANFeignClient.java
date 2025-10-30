@@ -65,21 +65,17 @@ public interface SANFeignClient {
 
     //this method to get all igroups and also filtered igroups based on query params as a part of URL
     @RequestMapping(method = RequestMethod.GET)
-    OntapResponse<Igroup> getIgroupResponse(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
+    OntapResponse<Igroup> getIgroupResponse(URI baseURL, @RequestHeader("Authorization") String header);
     @RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
     Igroup getIgroupByUUID(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
     @RequestMapping(method = RequestMethod.DELETE, value = "/{uuid}")
     void deleteIgroup(URI baseUri, @RequestHeader("Authorization") String authHeader, @PathVariable(name = "uuid", required = true) String uuid);
 
-    @RequestMapping(method = RequestMethod.POST, value = "/{uuid}/igroups")
-    OntapResponse<Igroup> addNestedIgroups(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid,
-                                                 @RequestBody Igroup igroupNestedRequest, @RequestHeader(value="return_records", defaultValue = "true") boolean value);
-
-
     //Lun Maps Operation APIs
 
     @RequestMapping(method = RequestMethod.POST)
-    OntapResponse<LunMap> createLunMap(URI baseURL, @RequestHeader("Authorization") String authHeader, @RequestBody LunMap lunMap);
+    OntapResponse<LunMap> createLunMap(URI baseURL, @RequestHeader("Authorization") String authHeader, @RequestHeader("return_records") boolean value,
+                                       @RequestBody LunMap lunMap);
 
     @RequestMapping(method = RequestMethod.GET)
     OntapResponse<LunMap> getLunMapResponse(URI baseURL, @RequestHeader("Authorization") String authHeader);
