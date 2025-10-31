@@ -219,43 +219,100 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = utils.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
+        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
         if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-            Map<String, String> getCloudStackVolumeMap = new HashMap<>();
-            getCloudStackVolumeMap.put(Constants.NAME, volumeVO.getPath());
-            getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
-            CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
-            if(cloudStackVolume ==  null ||cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
-                s_logger.error("grantAccess: Failed to get LUN details [{}]", volumeVO.getName());
-                throw new CloudRuntimeException("grantAccess: Failed to get LUN [" + volumeVO.getName() + "]");
-            }
-
-            long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
-            String igroupName = utils.getIgroupName(svmName, scopeId);
-            Map<String, String> getAccessGroupMap = new HashMap<>();
-            getAccessGroupMap.put(Constants.NAME, igroupName);
-            getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
-            AccessGroup accessGroup = storageStrategy.getAccessGroup(getAccessGroupMap);
-            if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null) {
-                s_logger.error("grantAccess: Failed to get iGroup details for host [{}]", host.getName());
-                throw new CloudRuntimeException("grantAccess: Failed to get iGroup details for host [" + host.getName() + "]");
-            }
+            String accessGroupName = utils.getIgroupName(svmName, scopeId);
+            CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
+            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
             if(!accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
-                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), igroupName);
-                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + igroupName);
+                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
             }
 
             Map<String, String> enableLogicalAccessMap = new HashMap<>();
             enableLogicalAccessMap.put(Constants.LUN_DOT_NAME, volumeVO.getPath());
             enableLogicalAccessMap.put(Constants.SVM_DOT_NAME, svmName);
-            enableLogicalAccessMap.put(Constants.IGROUP_DOT_NAME, igroupName);
+            enableLogicalAccessMap.put(Constants.IGROUP_DOT_NAME, accessGroupName);
             storageStrategy.enableLogicalAccess(enableLogicalAccessMap);
         }
     }
 
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("revokeAccess: data store should not be null");
+        }
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("revokeAccess: data object should not be null");
+        }
+        if (host == null) {
+            throw new InvalidParameterValueException("revokeAccess: host should not be null");
+        }
+        try {
+            StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+            if(storagePool == null) {
+                s_logger.error("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
+            }
 
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
+                if(volumeVO == null) {
+                    s_logger.error("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                }
+                revokeAccessForVolume(storagePool, volumeVO, host);
+            } else {
+                s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
+                throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
+            }
+        } catch(Exception e){
+            s_logger.error("revokeAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
+            throw new CloudRuntimeException("revokeAccess: Failed with error :" + e.getMessage());
+        }
+    }
+
+    private void revokeAccessForVolume(StoragePoolVO storagePool, VolumeVO volumeVO, Host host) {
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = utils.getStrategyByStoragePoolDetails(details);
+        String svmName = details.get(Constants.SVM_NAME);
+        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
+
+        if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            String accessGroupName = utils.getIgroupName(svmName, scopeId);
+            CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
+            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
+
+            Map<String, String> enableLogicalAccessMap = new HashMap<>();
+            enableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid().toString());
+            enableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
+            storageStrategy.disableLogicalAccess(enableLogicalAccessMap);
+        }
+    }
+
+    private CloudStackVolume getCloudStackVolumeByName(StorageStrategy storageStrategy, String svmName, String cloudStackVolumeName) {
+        Map<String, String> getCloudStackVolumeMap = new HashMap<>();
+        getCloudStackVolumeMap.put(Constants.NAME, cloudStackVolumeName);
+        getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
+        CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
+        if(cloudStackVolume ==  null ||cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
+            s_logger.error("revokeAccessForVolume: Failed to get LUN details [{}]", cloudStackVolumeName);
+            throw new CloudRuntimeException("revokeAccessForVolume: Failed to get LUN [" + cloudStackVolumeName + "]");
+        }
+        return cloudStackVolume;
+    }
+
+    private AccessGroup getAccessGroupByName(StorageStrategy storageStrategy, String svmName, String accessGroupName) {
+        Map<String, String> getAccessGroupMap = new HashMap<>();
+        getAccessGroupMap.put(Constants.NAME, accessGroupName);
+        getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
+        AccessGroup accessGroup = storageStrategy.getAccessGroup(getAccessGroupMap);
+        if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null) {
+            s_logger.error("revokeAccessForVolume: Failed to get iGroup details [{}]", accessGroupName);
+            throw new CloudRuntimeException("revokeAccessForVolume: Failed to get iGroup details [" + accessGroupName + "]");
+        }
+        return accessGroup;
     }
 
     @Override

@@ -322,6 +322,6 @@ public abstract class StorageStrategy {
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void disableLogicalAccess(Map<String,String> values);
+    abstract public void disableLogicalAccess(Map<String,String> values);
 
 }

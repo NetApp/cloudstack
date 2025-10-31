@@ -226,7 +226,24 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    void disableLogicalAccess(Map<String, String> values) {
-
+    public void disableLogicalAccess(Map<String, String> values) {
+        s_logger.info("disableLogicalAccess : Deleting LunMap with values {} ", values);
+        String lunUUID = values.get(Constants.LUN_DOT_UUID);
+        String igroupUUID = values.get(Constants.IGROUP_DOT_UUID);
+        if(lunUUID == null || igroupUUID == null || lunUUID.isEmpty() || igroupUUID.isEmpty()) {
+            s_logger.error("disableLogicalAccess: LunMap deletion failed. Invalid request values: {}", values);
+            throw new CloudRuntimeException("disableLogicalAccess : Failed to delete LunMap, invalid request");
+        }
+        try {
+            // Get AuthHeader
+            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // URI for Igroup delete
+            URI url = utils.generateURI(Constants.CREATE_LUNMAP);
+            sanFeignClient.deleteLunMap(url, authHeader, lunUUID, igroupUUID);
+            s_logger.info("disableLogicalAccess: LunMap deleted successfully.");
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while deleting LunMap: {}. Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to delete LunMap: " + e.getMessage());
+        }
     }
 }

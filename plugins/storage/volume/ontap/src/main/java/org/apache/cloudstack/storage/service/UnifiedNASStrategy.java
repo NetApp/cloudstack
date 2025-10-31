@@ -82,7 +82,7 @@ public class UnifiedNASStrategy extends NASStrategy{
     }
 
     @Override
-    void disableLogicalAccess(Map<String, String> values) {
+    public void disableLogicalAccess(Map<String, String> values) {
 
     }
 
