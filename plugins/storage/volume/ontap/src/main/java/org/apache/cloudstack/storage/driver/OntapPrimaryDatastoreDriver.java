@@ -231,7 +231,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
-            String igroupName = utils.getIgroupName(storagePool.getName(), scopeId);
+            String igroupName = utils.getIgroupName(svmName, scopeId);
             Map<String, String> getAccessGroupMap = new HashMap<>();
             getAccessGroupMap.put(Constants.NAME, igroupName);
             getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
