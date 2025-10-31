@@ -123,10 +123,10 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
-        s_logger.info("createAccessGroup : Creating Igroup with accessGroup request {} ", accessGroup);
+        s_logger.info("createAccessGroup : Creating Igroup with access group request {} ", accessGroup);
         if (accessGroup == null || accessGroup.getIgroup() == null) {
             s_logger.error("createAccessGroup: Igroup creation failed. Invalid request: {}", accessGroup);
-            throw new CloudRuntimeException("createAccessGroup : Failed to create Lun, invalid request");
+            throw new CloudRuntimeException("createAccessGroup : Failed to create Igroup, invalid request");
         }
         try {
             // Get AuthHeader
@@ -176,7 +176,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             URI url = utils.generateURI(Constants.CREATE_IGROUP);
             url = utils.addQueryParamsToURI(url, values);
             s_logger.info("getAccessGroup: URL: {}", url);
-            //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
+
             OntapResponse<Igroup> igroupResponse = sanFeignClient.getIgroupResponse(url, authHeader);
             if (igroupResponse == null || igroupResponse.getRecords() == null || igroupResponse.getRecords().size() == 0) {
                 s_logger.error("getAccessGroup: Failed to fetch Igroup");
@@ -213,8 +213,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             URI url = utils.generateURI(Constants.CREATE_LUNMAP);
             OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(url, authHeader, true, lunMapRequest);
             if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
-                s_logger.error("enableLogicalAccess: LunMap creation failed for Lun {} and igroup ", lunName, igroupName);
-                throw new CloudRuntimeException("Failed to create LunMap: creation failed for Lun: " +lunName+ "and igroup: " + igroupName);
+                s_logger.error("enableLogicalAccess: LunMap failed for Lun {} and igroup ", lunName, igroupName);
+                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " +lunName+ "and igroup: " + igroupName);
             }
             LunMap lunMap = createdLunMap.getRecords().get(0);
             s_logger.debug("enableLogicalAccess: LunMap created successfully. LunMap: {}", lunMap);

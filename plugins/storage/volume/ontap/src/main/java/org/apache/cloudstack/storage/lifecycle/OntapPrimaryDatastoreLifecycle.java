@@ -181,7 +181,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new InvalidParameterValueException("attachCluster: dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachCluster: clusterScope should not be null");
+            throw new InvalidParameterValueException("attachCluster: scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
@@ -189,49 +189,33 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
         }
-        PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
-        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
+        PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
+        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
         // TODO- need to check if no host to connect then throw exception or just continue
-        logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primarystore.getClusterId()));
+        logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
 
-        Map<String, String> details = primarystore.getDetails();
+        Map<String, String> details = primaryStore.getDetails();
         StorageStrategy strategy = utils.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        //TODO- Check if we have to handle heterogeneous host within the cluster
         if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
-            throw new CloudRuntimeException("Not all hosts in the cluster support the protocol: " + protocol.toString());
+            s_logger.error("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
+            throw new CloudRuntimeException("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
         }
         //TODO - check if no host to connect then also need to create access group without initiators
         if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
             AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
         }
+        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: %s", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
-                logger.warn("Unable to establish a connection between " + host + " and " + dataStore, e);
+                logger.warn("attachCluster: Unable to establish a connection between " + host + " and " + dataStore, e);
             }
         }
         _dataStoreHelper.attachCluster(dataStore);
-        return true;
-    }
-
-    private boolean isProtocolSupportedByAllHosts(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
-        String protocolPrefix;
-        switch (protocolType) {
-            case ISCSI:
-                protocolPrefix = Constants.IQN;
-                for (HostVO host : hosts) {
-                    if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty()
-                            || !host.getStorageUrl().startsWith(protocolPrefix)) {
-                        return false;
-                    }
-                    hostIdentifiers.add(host.getStorageUrl());
-                }
-                break;
-            default:
-                throw new CloudRuntimeException("Unsupported protocol: " + protocolType.toString());
-        }
         return true;
     }
 
@@ -247,30 +231,31 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new InvalidParameterValueException("attachZone: dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachZone: clusterScope should not be null");
+            throw new InvalidParameterValueException("attachZone: scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if(storagePool == null) {
-            s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
         }
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         // TODO- need to check if no host to connect then throw exception or just continue
-        logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
+        logger.debug("attachZone: Eligible Up and Enabled hosts: {}", hostsToConnect);
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
         StorageStrategy strategy = utils.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        //TODO- Check if we have to handle heterogeneous host within the zone
         if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
-            throw new CloudRuntimeException("Not all hosts in the zone support the protocol: " + protocol.toString());
+            s_logger.error("attachZone: Not all hosts in the cluster support the protocol: " + protocol.name());
+            throw new CloudRuntimeException("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
         }
         if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
             AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
         }
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
@@ -278,6 +263,24 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
         }
         _dataStoreHelper.attachZone(dataStore);
+        return true;
+    }
+
+    private boolean isProtocolSupportedByAllHosts(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
+        switch (protocolType) {
+            case ISCSI:
+                String protocolPrefix = Constants.IQN;
+                for (HostVO host : hosts) {
+                    if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty()
+                            || !host.getStorageUrl().startsWith(protocolPrefix)) {
+                        return false;
+                    }
+                    hostIdentifiers.add(host.getStorageUrl());
+                }
+                break;
+            default:
+                throw new CloudRuntimeException("isProtocolSupportedByAllHosts : Unsupported protocol: " + protocolType.name());
+        }
         return true;
     }
 

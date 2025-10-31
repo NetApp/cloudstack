@@ -47,6 +47,7 @@ public class Constants {
 
     public static final String PATH_SEPARATOR = "/";
     public static final String UNDERSCORE = "_";
+    public static final String CS = "cs";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 

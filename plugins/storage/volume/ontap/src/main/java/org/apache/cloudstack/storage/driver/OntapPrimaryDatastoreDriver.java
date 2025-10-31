@@ -192,18 +192,17 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("grantAccess : Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("grantAccess : Storage Pool not found for id: " + dataStore.getId());
             }
-            if (storagePool.getScope() != ScopeType.CLUSTER || storagePool.getScope() != ScopeType.ZONE) {
-                s_logger.error("grantAccess: Only Cluster and ZONE scoped primary storage is supported. Storage Pool: " + storagePool.getName());
-                throw new CloudRuntimeException("grantAccess: Only Cluster and ZONE scoped primary storage is supported. Storage Pool: " + storagePool.getName());
-            }
-
-            VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
-            if(volumeVO == null) {
-                s_logger.error("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
-                throw new CloudRuntimeException("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+            if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
+                s_logger.error("grantAccess: Only Cluster and ZONE scoped primary storage is supported for storage Pool: " + storagePool.getName());
+                throw new CloudRuntimeException("grantAccess: Only Cluster and ZONE scoped primary storage is supported for Storage Pool: " + storagePool.getName());
             }
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
+                VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
+                if(volumeVO == null) {
+                    s_logger.error("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                }
                 grantAccessForVolume(storagePool, volumeVO, host);
             } else {
                 s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");

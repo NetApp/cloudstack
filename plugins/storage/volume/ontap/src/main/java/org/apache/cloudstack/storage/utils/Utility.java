@@ -171,10 +171,8 @@ public class Utility {
         String svmName = details.get(Constants.SVM_NAME);
         switch (protocol) {
             case ISCSI:
-                String storagePoolName = storagePool.getName();
-                //TODO: Check if we have to change the access group name format
-                // Access group name format: StoragePoolName_ScopeId
-                String igroupName = getIgroupName(storagePoolName, scopeId);
+                // Access group name format: cs_svmName_scopeId
+                String igroupName = getIgroupName(svmName, scopeId);
                 Hypervisor.HypervisorType hypervisorType = storagePool.getHypervisor();
                 return createSANAccessGroupRequest(svmName, igroupName, hypervisorType, hostsIdentifier);
             default:
@@ -193,7 +191,7 @@ public class Utility {
             igroup.setSvm(svm);
         }
 
-        if(igroupName == null || igroupName.isEmpty()) {
+        if(igroupName != null || !igroupName.isEmpty()) {
             igroup.setName(igroupName);
         }
 
@@ -211,7 +209,6 @@ public class Utility {
             }
             igroup.setInitiators(initiators);
         }
-
         return accessGroupRequest;
     }
 
@@ -220,8 +217,8 @@ public class Utility {
         return Constants.VOLUME_PATH_PREFIX + volName + Constants.PATH_SEPARATOR + lunName;
     }
 
-    public String getIgroupName(String storagePoolName, long scopeId) {
+    public String getIgroupName(String svmName, long scopeId) {
         // Igroup name format: StoragePoolName_ScopeId
-        return storagePoolName + Constants.UNDERSCORE + scopeId;
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeId;
     }
 }
