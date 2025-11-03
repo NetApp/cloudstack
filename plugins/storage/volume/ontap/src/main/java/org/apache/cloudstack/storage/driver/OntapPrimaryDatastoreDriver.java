@@ -193,8 +193,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 throw new CloudRuntimeException("grantAccess : Storage Pool not found for id: " + dataStore.getId());
             }
             if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
-                s_logger.error("grantAccess: Only Cluster and ZONE scoped primary storage is supported for storage Pool: " + storagePool.getName());
-                throw new CloudRuntimeException("grantAccess: Only Cluster and ZONE scoped primary storage is supported for Storage Pool: " + storagePool.getName());
+                s_logger.error("grantAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
+                throw new CloudRuntimeException("grantAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
             }
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
@@ -255,6 +255,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
             }
+            if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
+                s_logger.error("revokeAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
+                throw new CloudRuntimeException("revokeAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
+            }
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
@@ -283,11 +287,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String accessGroupName = utils.getIgroupName(svmName, scopeId);
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
+            //TODO check if initiator does exits in igroup, will throw the error ?
+            if(!accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
+                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+            }
 
-            Map<String, String> enableLogicalAccessMap = new HashMap<>();
-            enableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid().toString());
-            enableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
-            storageStrategy.disableLogicalAccess(enableLogicalAccessMap);
+            Map<String, String> disableLogicalAccessMap = new HashMap<>();
+            disableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid().toString());
+            disableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
+            storageStrategy.disableLogicalAccess(disableLogicalAccessMap);
         }
     }
 
@@ -297,8 +306,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
         CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
         if(cloudStackVolume ==  null ||cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
-            s_logger.error("revokeAccessForVolume: Failed to get LUN details [{}]", cloudStackVolumeName);
-            throw new CloudRuntimeException("revokeAccessForVolume: Failed to get LUN [" + cloudStackVolumeName + "]");
+            s_logger.error("getCloudStackVolumeByName: Failed to get LUN details [{}]", cloudStackVolumeName);
+            throw new CloudRuntimeException("getCloudStackVolumeByName: Failed to get LUN [" + cloudStackVolumeName + "]");
         }
         return cloudStackVolume;
     }
@@ -309,8 +318,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
         AccessGroup accessGroup = storageStrategy.getAccessGroup(getAccessGroupMap);
         if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null) {
-            s_logger.error("revokeAccessForVolume: Failed to get iGroup details [{}]", accessGroupName);
-            throw new CloudRuntimeException("revokeAccessForVolume: Failed to get iGroup details [" + accessGroupName + "]");
+            s_logger.error("getAccessGroupByName: Failed to get iGroup details [{}]", accessGroupName);
+            throw new CloudRuntimeException("getAccessGroupByName: Failed to get iGroup details [" + accessGroupName + "]");
         }
         return accessGroup;
     }

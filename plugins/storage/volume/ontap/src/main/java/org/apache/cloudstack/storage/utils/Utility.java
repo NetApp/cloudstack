@@ -213,11 +213,11 @@ public class Utility {
 
     public String getLunName(String volName, String lunName) {
         //Lun name in unified "/vol/VolumeName/LunName"
-        return Constants.VOLUME_PATH_PREFIX + volName + Constants.PATH_SEPARATOR + lunName;
+        return Constants.VOLUME_PATH_PREFIX + volName + Constants.SLASH + lunName;
     }
 
     public String getIgroupName(String svmName, long scopeId) {
-        // Igroup name format: StoragePoolName_ScopeId
+        // Igroup name format: cs_svmName_scopeId
         return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeId;
     }
 }
