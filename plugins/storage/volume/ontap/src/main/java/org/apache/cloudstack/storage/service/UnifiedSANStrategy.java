@@ -19,7 +19,9 @@
 
 package org.apache.cloudstack.storage.service;
 
+import com.cloud.utils.component.ComponentContext;
 import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -38,10 +40,18 @@ import java.util.Map;
 public class UnifiedSANStrategy extends SANStrategy {
 
     private static final Logger s_logger = LogManager.getLogger(UnifiedSANStrategy.class);
-    @Inject private Utility utils;
-    @Inject private SANFeignClient sanFeignClient;
+    private Utility utils;
+
+    // Replace @Inject Feign client with FeignClientFactory
+    private final FeignClientFactory feignClientFactory;
+    private final SANFeignClient sanFeignClient;
+
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
+        this.utils = ComponentContext.inject(Utility.class);
+        // Initialize FeignClientFactory and create SAN client
+        this.feignClientFactory = new FeignClientFactory();
+        this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class);
     }
 
     @Override
@@ -55,7 +65,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             // Get AuthHeader
             String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
-            URI url = utils.generateURI(Constants.CREATE_LUN);
+            URI url = utils.generateURI(storage.getManagementLIF(), Constants.CREATE_LUN);
             //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
             OntapResponse<Lun> createdLun = sanFeignClient.createLun(url, authHeader, true, cloudstackVolume.getLun());
             if (createdLun == null || createdLun.getRecords() == null || createdLun.getRecords().size() == 0) {
@@ -109,20 +119,16 @@ public class UnifiedSANStrategy extends SANStrategy {
         return null;
     }
 
-    @Override
     public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
-    @Override
     void enableLogicalAccess(Map<String, String> values) {
 
     }
 
-    @Override
     void disableLogicalAccess(Map<String, String> values) {
 
     }
-
 }

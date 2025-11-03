@@ -51,6 +51,7 @@ import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import com.cloud.utils.component.ComponentContext;
 
 import javax.inject.Inject;
 import java.util.HashMap;
@@ -60,9 +61,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
 
-    @Inject private Utility utils;
+    private Utility utils;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
+
+    public OntapPrimaryDatastoreDriver() {
+        utils = ComponentContext.inject(Utility.class);
+    }
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");

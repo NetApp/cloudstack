@@ -27,38 +27,37 @@ import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.stereotype.Component;
 
-@Component
 public class StorageProviderFactory {
-    private final StorageStrategy storageStrategy;
     private static final Logger s_logger = LogManager.getLogger(StorageProviderFactory.class);
 
-    private StorageProviderFactory(OntapStorage ontapStorage) {
+    private StorageProviderFactory() {
+        // Private constructor to prevent instantiation
+    }
+
+    public static StorageStrategy getStrategy(OntapStorage ontapStorage) {
         ProtocolType protocol = ontapStorage.getProtocol();
         s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
+
+        StorageStrategy storageStrategy;
         switch (protocol) {
             case NFS:
                 if(!ontapStorage.getIsDisaggregated()) {
-                    this.storageStrategy = new UnifiedNASStrategy(ontapStorage);
+                    storageStrategy = new UnifiedNASStrategy(ontapStorage);
                 } else {
                     throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
                 }
                 break;
             case ISCSI:
                 if (!ontapStorage.getIsDisaggregated()) {
-                    this.storageStrategy = new UnifiedSANStrategy(ontapStorage);
+                    storageStrategy = new UnifiedSANStrategy(ontapStorage);
                 } else {
                     throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
                 }
                 break;
             default:
-                this.storageStrategy = null;
                 throw new CloudRuntimeException("Unsupported protocol: " + protocol);
         }
-    }
-
-    public static StorageStrategy getStrategy(OntapStorage ontapStorage) {
-        return new StorageProviderFactory(ontapStorage).storageStrategy;
+        return storageStrategy;
     }
 }

@@ -19,36 +19,55 @@
 
 package org.apache.cloudstack.storage.service;
 
+import com.cloud.utils.component.ComponentContext;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
+import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.utils.Utility;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
+import javax.inject.Inject;
 import java.util.Map;
 
-public class UnifiedNASStrategy extends NASStrategy{
+public class UnifiedNASStrategy extends NASStrategy {
+
+    private static final Logger s_logger = LogManager.getLogger(UnifiedNASStrategy.class);
+    private Utility utils;
+
+    // Add missing Feign client setup for NAS operations
+    private final FeignClientFactory feignClientFactory;
+    private final NASFeignClient nasFeignClient;
+
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
+        this.utils = ComponentContext.inject(Utility.class);
+        // Initialize FeignClientFactory and create NAS client
+        this.feignClientFactory = new FeignClientFactory();
+        this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class);
     }
 
     @Override
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        //TODO: Implement NAS volume creation using nasFeignClient
+        return null;
+    }
+
+    @Override
+    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
 
     @Override
-    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
-        return null;
     }
 
     @Override
-    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
-
-    }
-
-    @Override
-    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
@@ -61,7 +80,7 @@ public class UnifiedNASStrategy extends NASStrategy{
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
-
+        //TODO
     }
 
     @Override
@@ -70,20 +89,17 @@ public class UnifiedNASStrategy extends NASStrategy{
         return null;
     }
 
-    @Override
+    // Remove @Override - these methods don't exist in parent classes
     public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
-    @Override
     void enableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
 
-    @Override
     void disableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
-
 }

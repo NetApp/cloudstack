@@ -19,16 +19,15 @@
 
 package org.apache.cloudstack.storage.feign.model;
 
-
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 
 public class OntapStorage {
-    private  String username;
-    private  String password;
-    private  String managementLIF;
-    private  String svmName;
+    private String username;
+    private String password;
+    private String managementLIF;
+    private String svmName;
     private ProtocolType protocolType;
-    private  Boolean isDisaggregated;
+    private Boolean isDisaggregated;
 
     public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocolType, Boolean isDisaggregated) {
         this.username = username;
@@ -44,7 +43,7 @@ public class OntapStorage {
     }
 
     public void setUsername(String username) {
-        username = username;
+        this.username = username;
     }
 
     public String getPassword() {
@@ -52,7 +51,7 @@ public class OntapStorage {
     }
 
     public void setPassword(String password) {
-        password = password;
+        this.password = password;
     }
 
     public String getManagementLIF() {
@@ -60,7 +59,7 @@ public class OntapStorage {
     }
 
     public void setManagementLIF(String managementLIF) {
-        managementLIF = managementLIF;
+        this.managementLIF = managementLIF;
     }
 
     public String getSvmName() {
@@ -68,7 +67,7 @@ public class OntapStorage {
     }
 
     public void setSvmName(String svmName) {
-        svmName = svmName;
+        this.svmName = svmName;
     }
 
     public ProtocolType getProtocol() {
@@ -76,7 +75,7 @@ public class OntapStorage {
     }
 
     public void setProtocol(ProtocolType protocolType) {
-        protocolType = protocolType;
+        this.protocolType = protocolType;
     }
 
     public Boolean getIsDisaggregated() {
@@ -84,6 +83,6 @@ public class OntapStorage {
     }
 
     public void setIsDisaggregated(Boolean isDisaggregated) {
-        isDisaggregated = isDisaggregated;
+        this.isDisaggregated = isDisaggregated;
     }
 }

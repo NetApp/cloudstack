@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
@@ -33,13 +34,13 @@ import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
-import java.util.Map;
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
@@ -55,14 +56,11 @@ public abstract class StorageStrategy {
     @Inject
     private Utility utils;
 
-    @Inject
-    private VolumeFeignClient volumeFeignClient;
-
-    @Inject
-    private SvmFeignClient svmFeignClient;
-
-    @Inject
-    private JobFeignClient jobFeignClient;
+    // Replace @Inject Feign clients with FeignClientFactory
+    private final FeignClientFactory feignClientFactory;
+    private final VolumeFeignClient volumeFeignClient;
+    private final SvmFeignClient svmFeignClient;
+    private final JobFeignClient jobFeignClient;
 
     protected final OntapStorage storage;
 
@@ -71,11 +69,15 @@ public abstract class StorageStrategy {
      */
     private List<Aggregate> aggregates;
 
-    private static final Logger s_logger = (Logger) LogManager.getLogger(StorageStrategy.class);
+    private static final Logger s_logger = LogManager.getLogger(StorageStrategy.class);
 
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
-
+        // Initialize FeignClientFactory and create clients
+        this.feignClientFactory = new FeignClientFactory();
+        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class);
+        this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class);
+        this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class);
     }
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
@@ -100,10 +102,10 @@ public abstract class StorageStrategy {
                 s_logger.error("SVM " + svmName + " is not in running state.");
                 throw new CloudRuntimeException("SVM " + svmName + " is not in running state.");
             }
-            if (Objects.equals(storage.getProtocol(), Constants.NFS) && !svm.getNfsEnabled()) {
+            if (storage.getProtocol() == ProtocolType.NFS && !svm.getNfsEnabled()) {
                 s_logger.error("NFS protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
-            } else if (Objects.equals(storage.getProtocol(), Constants.ISCSI) && !svm.getIscsiEnabled()) {
+            } else if (storage.getProtocol() == ProtocolType.ISCSI && !svm.getIscsiEnabled()) {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
             }
@@ -127,8 +129,9 @@ public abstract class StorageStrategy {
      * Eligible only for Unified ONTAP storage
      * throw exception in case of disaggregated ONTAP storage
      *
-     * @param volumeName
-     * @param size
+     * @param volumeName the name of the volume to create
+     * @param size the size of the volume in bytes
+     * @return the created Volume object
      */
     public Volume createStorageVolume(String volumeName, Long size) {
         s_logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
@@ -153,7 +156,7 @@ public abstract class StorageStrategy {
         // Make the POST API call to create the volume
         try {
             // Create URI for POST CreateVolume API
-            URI url = utils.generateURI(Constants.CREATE_VOLUME);
+            URI url = utils.generateURI(storage.getManagementLIF(), Constants.CREATE_VOLUME);
             // Call the VolumeFeignClient to create the volume
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(url, authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
@@ -162,7 +165,7 @@ public abstract class StorageStrategy {
             String jobUUID = jobResponse.getJob().getUuid();
 
             //Create URI for GET Job API
-            url = utils.generateURI(Constants.GET_JOB_BY_UUID);
+            url = utils.generateURI(storage.getManagementLIF(), Constants.GET_JOB_BY_UUID);
             int jobRetryCount = 0;
             Job createVolumeJob = null;
             while(createVolumeJob == null || !createVolumeJob.getState().equals(Constants.JOB_SUCCESS)) {
@@ -199,7 +202,8 @@ public abstract class StorageStrategy {
      * Eligible only for Unified ONTAP storage
      * throw exception in case of disaggregated ONTAP storage
      *
-     * @param values
+     * @param volume the volume to update
+     * @return the updated Volume object
      */
     public Volume updateStorageVolume(Volume volume)
     {
@@ -212,7 +216,7 @@ public abstract class StorageStrategy {
      * Eligible only for Unified ONTAP storage
      * throw exception in case of disaggregated ONTAP storage
      *
-     * @param values
+     * @param volume the volume to delete
      */
     public void deleteStorageVolume(Volume volume)
     {
@@ -220,11 +224,12 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Updates ONTAP Flex-Volume
+     * Gets ONTAP Flex-Volume
      * Eligible only for Unified ONTAP storage
      * throw exception in case of disaggregated ONTAP storage
      *
-     * @param values
+     * @param volume the volume to retrieve
+     * @return the retrieved Volume object
      */
     public Volume getStorageVolume(Volume volume)
     {
@@ -238,7 +243,8 @@ public abstract class StorageStrategy {
      *     createLun       for iSCSI, FC protocols
      *     createFile      for NFS3.0 and NFS4.1 protocols
      *     createNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param values
+     * @param cloudstackVolume the CloudStack volume to create
+     * @return the created CloudStackVolume object
      */
     abstract public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume);
 
@@ -248,7 +254,8 @@ public abstract class StorageStrategy {
      *     updateLun       for iSCSI, FC protocols
      *     updateFile      for NFS3.0 and NFS4.1 protocols
      *     updateNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param values
+     * @param cloudstackVolume the CloudStack volume to update
+     * @return the updated CloudStackVolume object
      */
     abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
 
@@ -258,7 +265,7 @@ public abstract class StorageStrategy {
      *     deleteLun       for iSCSI, FC protocols
      *     deleteFile      for NFS3.0 and NFS4.1 protocols
      *     deleteNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param values
+     * @param cloudstackVolume the CloudStack volume to delete
      */
     abstract void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
 
@@ -268,7 +275,8 @@ public abstract class StorageStrategy {
      *     getLun       for iSCSI, FC protocols
      *     getFile      for NFS3.0 and NFS4.1 protocols
      *     getNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param values
+     * @param cloudstackVolume the CloudStack volume to retrieve
+     * @return the retrieved CloudStackVolume object
      */
     abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
 
@@ -277,7 +285,8 @@ public abstract class StorageStrategy {
      *     createiGroup       for iSCSI and FC protocols
      *     createExportPolicy for NFS 3.0 and NFS 4.1 protocols
      *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
-     * @param values
+     * @param accessGroup the access group to create
+     * @return the created AccessGroup object
      */
     abstract AccessGroup createAccessGroup(AccessGroup accessGroup);
 
@@ -286,7 +295,7 @@ public abstract class StorageStrategy {
      *     deleteiGroup       for iSCSI and FC protocols
      *     deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
      *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
-     * @param values
+     * @param accessGroup the access group to delete
      */
     abstract void deleteAccessGroup(AccessGroup accessGroup);
 
@@ -295,33 +304,8 @@ public abstract class StorageStrategy {
      *     updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
      *     updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
-     * @param values
+     * @param accessGroup the access group to update
+     * @return the updated AccessGroup object
      */
     abstract AccessGroup updateAccessGroup(AccessGroup accessGroup);
-
-    /**
-     * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     getiGroup       for iSCSI and FC protocols
-     *     getExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
-     * @param values
-     */
-    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
-
-    /**
-     * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     lunMap  for iSCSI and FC protocols
-     *     //TODO  for Nvme/TCP and Nvme/FC protocols
-     * @param values
-     */
-    abstract void enableLogicalAccess(Map<String,String> values);
-
-    /**
-     * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     lunUnmap  for iSCSI and FC protocols
-     *     //TODO  for Nvme/TCP and Nvme/FC protocols
-     * @param values
-     */
-    abstract void disableLogicalAccess(Map<String,String> values);
-
 }

@@ -19,41 +19,45 @@
 
 package org.apache.cloudstack.storage.feign;
 
-
 import feign.RequestInterceptor;
-import feign.RequestTemplate;
 import feign.Retryer;
-import org.springframework.cloud.commons.httpclient.ApacheHttpClientFactory;
+import feign.Client;
+import feign.httpclient.ApacheHttpClient;
+import feign.codec.Decoder;
+import feign.codec.Encoder;
+//import feign.slf4j.Slf4jLogger;
+import feign.Response;
+import feign.codec.DecodeException;
+import feign.codec.EncodeException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.conn.ssl.TrustAllStrategy;
 import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.ssl.SSLContexts;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import feign.Client;
-import feign.httpclient.ApacheHttpClient;
+
 import javax.net.ssl.SSLContext;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
-@Configuration
 public class FeignConfiguration {
-    private static Logger logger = LogManager.getLogger(FeignConfiguration.class);
+    private static final Logger logger = LogManager.getLogger(FeignConfiguration.class);
 
-    private int retryMaxAttempt = 3;
+    private final int retryMaxAttempt = 3;
+    private final int retryMaxInterval = 5;
+    private final String ontapFeignMaxConnection = "80";
+    private final String ontapFeignMaxConnectionPerRoute = "20";
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private int retryMaxInterval = 5;
-
-    private String ontapFeignMaxConnection = "80";
-
-    private String ontapFeignMaxConnectionPerRoute = "20";
-
-    @Bean
-    public Client client(ApacheHttpClientFactory httpClientFactory) {
-
+    public Client createClient() {
         int maxConn;
         int maxConnPerRoute;
         try {
@@ -68,10 +72,11 @@ public class FeignConfiguration {
             logger.error("ontapFeignClient: encounter exception while parse the max connection per route from env. setting default value");
             maxConnPerRoute = 2;
         }
+
         // Disable Keep Alive for Http Connection
         logger.debug("ontapFeignClient: Setting the feign client config values as max connection: {}, max connections per route: {}", maxConn, maxConnPerRoute);
         ConnectionKeepAliveStrategy keepAliveStrategy = (response, context) -> 0;
-        CloseableHttpClient httpClient = httpClientFactory.createBuilder()
+        CloseableHttpClient httpClient = HttpClientBuilder.create()
                 .setMaxConnTotal(maxConn)
                 .setMaxConnPerRoute(maxConnPerRoute)
                 .setKeepAliveStrategy(keepAliveStrategy)
@@ -91,22 +96,54 @@ public class FeignConfiguration {
         }
     }
 
-
-    @Bean
-    public RequestInterceptor requestInterceptor() {
-        return new RequestInterceptor() {
-            @Override
-            public void apply(RequestTemplate template) {
-                logger.info("Feign Request URL: {}", template.url());
-                logger.info("HTTP Method: {}", template.method());
-                logger.info("Headers: {}", template.headers());
-                logger.info("Body: {}", template.requestBody().asString());
+    public RequestInterceptor createRequestInterceptor() {
+        return template -> {
+            logger.info("Feign Request URL: {}", template.url());
+            logger.info("HTTP Method: {}", template.method());
+            logger.info("Headers: {}", template.headers());
+            if (template.body() != null) {
+                logger.info("Body: {}", new String(template.body()));
             }
         };
     }
 
-    @Bean
-    public Retryer feignRetryer() {
+    public Retryer createRetryer() {
         return new Retryer.Default(1000L, retryMaxInterval * 1000L, retryMaxAttempt);
     }
+
+    public Encoder createEncoder() {
+        return new Encoder() {
+            @Override
+            public void encode(Object object, Type bodyType, feign.RequestTemplate template) throws EncodeException {
+                try {
+                    String json = objectMapper.writeValueAsString(object);
+                    template.body(Arrays.toString(json.getBytes(StandardCharsets.UTF_8)));
+                    template.header("Content-Type", "application/json");
+                } catch (JsonProcessingException e) {
+                    throw new EncodeException("Error encoding object to JSON", e);
+                }
+            }
+        };
+    }
+
+    public Decoder createDecoder() {
+        return new Decoder() {
+            @Override
+            public Object decode(Response response, Type type) throws IOException, DecodeException {
+                if (response.body() == null) {
+                    return null;
+                }
+                try {
+                    String json = new String(response.body().asInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
+                } catch (IOException e) {
+                    throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
+                }
+            }
+        };
+    }
+
+//    public Slf4jLogger createLogger() {
+//        return new Slf4jLogger();
+//    }
 }

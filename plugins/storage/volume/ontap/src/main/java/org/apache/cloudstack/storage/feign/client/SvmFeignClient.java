@@ -19,23 +19,20 @@
 
 package org.apache.cloudstack.storage.feign.client;
 
-import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
-import org.springframework.cloud.openfeign.FeignClient;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
+import feign.Headers;
+import feign.Param;
+import feign.RequestLine;
 import java.net.URI;
 
-@FeignClient(name = "SvmClient", url = "https://{clusterIP}/api/svm/svms", configuration = FeignConfiguration.class)
 public interface SvmFeignClient {
 
-    //this method to get all svms and also filtered svms based on query params as a part of URL
-    @RequestMapping(method = RequestMethod.GET)
-    OntapResponse<Svm> getSvmResponse(URI baseURL, @RequestHeader("Authorization") String header);
+    @RequestLine("GET /")
+    @Headers("Authorization: {authHeader}")
+    OntapResponse<Svm> getSvmResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
 
-    @RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
-    Svm getSvmByUUID(URI baseURL, @RequestHeader("Authorization") String header);
-
+    @RequestLine("GET /{uuid}")
+    @Headers("Authorization: {authHeader}")
+    Svm getSvmByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }

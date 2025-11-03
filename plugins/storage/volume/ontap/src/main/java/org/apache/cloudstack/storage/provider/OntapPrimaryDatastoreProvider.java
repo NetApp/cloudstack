@@ -28,7 +28,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreProvid
 import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.lifecycle.OntapPrimaryDatastoreLifecycle;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 
 import java.util.HashSet;
@@ -38,7 +38,7 @@ import java.util.Set;
 @Component
 public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
 
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreProvider.class);
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreProvider.class);
     private OntapPrimaryDatastoreDriver primaryDatastoreDriver;
     private OntapPrimaryDatastoreLifecycle primaryDatastoreLifecycle;
 

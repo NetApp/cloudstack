@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.utils;
 
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.cloud.utils.component.ComponentContext;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
@@ -35,20 +36,21 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.stereotype.Component;
 import org.springframework.util.Base64Utils;
 
-import javax.inject.Inject;
 import java.net.URI;
 import java.util.Map;
 
-@Component
 public class Utility {
 
     private static final Logger s_logger = LogManager.getLogger(Utility.class);
-    @Inject private OntapStorage ontapStorage;
-    @Inject private PrimaryDataStoreDao storagePoolDao;
-    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
+    private PrimaryDataStoreDao storagePoolDao;
+    private StoragePoolDetailsDao storagePoolDetailsDao;
+
+    public Utility() {
+        this.storagePoolDao = ComponentContext.inject(PrimaryDataStoreDao.class);
+        this.storagePoolDetailsDao = ComponentContext.inject(StoragePoolDetailsDao.class);
+    }
 
     private static final String BASIC = "Basic";
     private static final String AUTH_HEADER_COLON = ":";
@@ -65,8 +67,8 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public URI generateURI (String path) {
-        String uriString = Constants.HTTPS + ontapStorage.getManagementLIF() + path;
+    public URI generateURI (String managementLIF, String path) {
+        String uriString = Constants.HTTPS + managementLIF + path;
         return URI.create(uriString);
     }
 
