@@ -108,7 +108,7 @@ public class Utility {
         CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
         Lun lunRequest = new Lun();
 
-        if(svmName != null || !svmName.isEmpty()) {
+        if(svmName != null && !svmName.isEmpty()) {
             Svm svm = new Svm();
             svm.setName(svmName);
             lunRequest.setSvm(svm);
@@ -121,7 +121,7 @@ public class Utility {
         }
 
         //Lun name is full path like in unified "/vol/VolumeName/LunName"
-        if(lunName != null || !lunName.isEmpty()) {
+        if(lunName != null && !lunName.isEmpty()) {
             String lunFullName = getLunName(volName, lunName);
             lunRequest.setName(lunFullName);
         }
@@ -139,7 +139,7 @@ public class Utility {
             case Constants.KVM:
                 return Lun.OsTypeEnum.LINUX.getValue();
             default:
-                String errMsg = "getOStypeFromHypervisorType : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                String errMsg = "getOSTypeFromHypervisor : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
                 s_logger.error(errMsg);
                 throw new CloudRuntimeException(errMsg);
         }
@@ -184,13 +184,13 @@ public class Utility {
         AccessGroup accessGroupRequest = new AccessGroup();
         Igroup igroup = new Igroup();
 
-        if(svmName != null || !svmName.isEmpty()) {
+        if(svmName != null && !svmName.isEmpty()) {
             Svm svm = new Svm();
             svm.setName(svmName);
             igroup.setSvm(svm);
         }
 
-        if(igroupName != null || !igroupName.isEmpty()) {
+        if(igroupName != null && !igroupName.isEmpty()) {
             igroup.setName(igroupName);
         }
 
@@ -208,6 +208,7 @@ public class Utility {
             }
             igroup.setInitiators(initiators);
         }
+        accessGroupRequest.setIgroup(igroup);
         return accessGroupRequest;
     }
 

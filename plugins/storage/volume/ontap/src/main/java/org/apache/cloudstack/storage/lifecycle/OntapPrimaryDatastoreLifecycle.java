@@ -207,7 +207,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             AccessGroup accessGroupRequest = utils.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
         }
-        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: %s", primaryStore.getClusterId());
+        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
@@ -237,7 +237,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if(storagePool == null) {
             s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("attachZone : Storage Pool not found for id: " + dataStore.getId());
         }
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         // TODO- need to check if no host to connect then throw exception or just continue

@@ -225,7 +225,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String accessGroupName = utils.getIgroupName(svmName, scopeId);
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
-            if(!accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
+            if(accessGroup.getIgroup().getInitiators() == null || accessGroup.getIgroup().getInitiators().size() == 0 || !accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
                 s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
                 throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
             }
@@ -268,8 +268,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 }
                 revokeAccessForVolume(storagePool, volumeVO, host);
             } else {
-                s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
-                throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
+                s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
+                throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
             }
         } catch(Exception e){
             s_logger.error("revokeAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
@@ -305,7 +305,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         getCloudStackVolumeMap.put(Constants.NAME, cloudStackVolumeName);
         getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
         CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
-        if(cloudStackVolume ==  null ||cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
+        if(cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
             s_logger.error("getCloudStackVolumeByName: Failed to get LUN details [{}]", cloudStackVolumeName);
             throw new CloudRuntimeException("getCloudStackVolumeByName: Failed to get LUN [" + cloudStackVolumeName + "]");
         }

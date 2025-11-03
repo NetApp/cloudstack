@@ -213,8 +213,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             URI url = utils.generateURI(Constants.CREATE_LUNMAP);
             OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(url, authHeader, true, lunMapRequest);
             if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
-                s_logger.error("enableLogicalAccess: LunMap failed for Lun {} and igroup ", lunName, igroupName);
-                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " +lunName+ "and igroup: " + igroupName);
+                s_logger.error("enableLogicalAccess: LunMap failed for Lun: {} and igroup: {}", lunName, igroupName);
+                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " +lunName+ " and igroup: " + igroupName);
             }
             LunMap lunMap = createdLunMap.getRecords().get(0);
             s_logger.debug("enableLogicalAccess: LunMap created successfully. LunMap: {}", lunMap);
