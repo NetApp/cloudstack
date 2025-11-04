@@ -22,6 +22,10 @@ package org.apache.cloudstack.storage.service;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 
 public abstract class SANStrategy extends StorageStrategy {
+    // Default constructor for Spring
+    public SANStrategy() {
+        super();
+    }
     public SANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
     }

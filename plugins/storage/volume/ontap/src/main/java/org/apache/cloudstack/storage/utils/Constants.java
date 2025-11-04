@@ -21,8 +21,18 @@ package org.apache.cloudstack.storage.utils;
 
 public class Constants {
     public enum ProtocolType {
-        NFS,
-        ISCSI
+        NFS("nfs"),
+        ISCSI("iscsi");
+
+        private final String value;
+
+        ProtocolType(String value) {
+            this.value = value;
+        }
+
+        public String getValue() {
+            return value;
+        }
     }
 
     public static final String NFS = "nfs";

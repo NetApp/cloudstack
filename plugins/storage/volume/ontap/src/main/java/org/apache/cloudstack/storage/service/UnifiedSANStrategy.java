@@ -19,11 +19,34 @@
 
 package org.apache.cloudstack.storage.service;
 
+import com.cloud.utils.component.ComponentContext;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
+import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.utils.Utility;
 
 public class UnifiedSANStrategy extends SANStrategy{
+
+    private Utility utils;
+   // Add missing Feign client setup for NAS operations
+    private FeignClientFactory feignClientFactory;
+    private  SANFeignClient sanFeignClient;
+
+
+    public UnifiedSANStrategy() {
+        super();
+        initializeDependencies();
+    }
+
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
+    }
+
+    private void initializeDependencies() {
+        utils = ComponentContext.inject(Utility.class);
+        // Initialize FeignClientFactory and create NAS client
+        feignClientFactory = new FeignClientFactory();
+        sanFeignClient = feignClientFactory.createClient(SANFeignClient.class);// TODO needs to be changed
     }
 
     @Override
@@ -46,3 +69,4 @@ public class UnifiedSANStrategy extends SANStrategy{
         return "";
     }
 }
+

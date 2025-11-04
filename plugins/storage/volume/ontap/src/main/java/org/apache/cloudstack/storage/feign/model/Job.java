@@ -19,14 +19,16 @@
 package org.apache.cloudstack.storage.feign.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 
 /**
  * @author Administrator
  *
  */
 @JsonInclude(Include.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Job {
 
     @JsonProperty("uuid")
@@ -85,14 +87,14 @@ public class Job {
     }
 
     public static class Links {
-        @JsonProperty("message")
+        @JsonProperty("self")
         private Self self;
         public Self getSelf() { return self; }
         public void setSelf(Self self) { this.self = self; }
     }
 
     public static class Self {
-        @JsonProperty("message")
+        @JsonProperty("href")
         private String href;
         public String getHref() { return href; }
         public void setHref(String href) { this.href = href; }
@@ -100,11 +102,11 @@ public class Job {
 
     public static class JobError {
         @JsonProperty("message")
-        String errorMesssage;
+        String errorMessage;
         @JsonProperty("code")
         String code;
-        public String getErrorMesssage () { return errorMesssage; }
-        public void setErrorMesssage (String errorMesssage) { this.errorMesssage = errorMesssage; }
+        public String getErrorMesssage () { return errorMessage; }
+        public void setErrorMesssage (String errorMesssage) { this.errorMessage = errorMesssage; }
         public String getCode() {
             return code;
         }
@@ -113,7 +115,7 @@ public class Job {
         }
         @Override
         public String toString() {
-            return "JobError [errorMesssage=" + errorMesssage + ", code=" + code + "]";
+            return "JobError [errorMesssage=" + errorMessage + ", code=" + code + "]";
         }
     }
 }

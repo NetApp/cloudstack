@@ -37,15 +37,16 @@ import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
-import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");

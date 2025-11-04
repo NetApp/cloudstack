@@ -20,17 +20,22 @@
 package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 
 public abstract class NASStrategy extends StorageStrategy {
+    // Default constructor for Spring
+    public NASStrategy() {
+        super();
+    }
     public NASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
     }
 
-    public abstract String createExportPolicy(String svmName, String policyName);
-    public abstract boolean deleteExportPolicy(String svmName, String policyName);
-    public abstract boolean exportPolicyExists(String svmName, String policyName);
+    public abstract ExportPolicy getExportPolicy(String svmName, String policyName);
+    public abstract ExportPolicy createExportPolicy(String svmName, String policyName);
+    public abstract void deleteExportPolicy(String svmName, String policyName);
     public abstract String addExportRule(String policyName, String clientMatch, String[] protocols, String[] roRule, String[] rwRule);
     public abstract String assignExportPolicyToVolume(String volumeUuid, String policyName);
-    public abstract String enableNFS(String svmUuid);
+
 }
 

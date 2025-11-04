@@ -28,6 +28,7 @@ import com.cloud.hypervisor.Hypervisor;
 import com.cloud.resource.ResourceManager;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StorageManager;
+import com.cloud.utils.component.ComponentContext;
 import com.cloud.storage.StoragePool;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.google.common.base.Preconditions;
@@ -45,48 +46,58 @@ import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Constants.ProtocolType;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
-import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+
 
 import javax.inject.Inject;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.StringTokenizer;
 import java.util.UUID;
 
 public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycleImpl implements PrimaryDataStoreLifeCycle {
-    @Inject private ClusterDao _clusterDao;
-    @Inject private StorageManager _storageMgr;
-    @Inject private ResourceManager _resourceMgr;
-    @Inject private PrimaryDataStoreHelper _dataStoreHelper;
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
+    @Inject
+    private ClusterDao _clusterDao;
+    @Inject
+    private StorageManager _storageMgr;
+    @Inject
+    private ResourceManager _resourceMgr;
+    @Inject
+    private PrimaryDataStoreHelper _dataStoreHelper;
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     /**
      * Creates primary storage on NetApp storage
+     *
      * @param dsInfos
      * @return
      */
     @Override
     public DataStore initialize(Map<String, Object> dsInfos) {
-        s_logger.info("initialize {}", dsInfos);
+        s_logger.debug("initialize method called with datastore info {}", dsInfos);
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
         String url = dsInfos.get("url").toString(); // TODO: Decide on whether should the customer enter just the Management LIF IP or https://ManagementLIF
-        Long zoneId =  dsInfos.get("zoneId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
-        Long podId = dsInfos.get("podId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
-        Long clusterId = dsInfos.get("clusterId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("clusterId");
+        Long zoneId = dsInfos.get("zoneId").toString().trim().isEmpty() ? null : (Long) dsInfos.get("zoneId");
+        Long podId = dsInfos.get("podId").toString().trim().isEmpty() ? null : (Long) dsInfos.get("zoneId");
+        Long clusterId = dsInfos.get("clusterId").toString().trim().isEmpty() ? null : (Long) dsInfos.get("clusterId");
         String storagePoolName = dsInfos.get("name").toString().trim();
         String providerName = dsInfos.get("providerName").toString().trim();
-        String tags = dsInfos.get("tags").toString().trim();
+        String tags = dsInfos.get("tags").toString().trim(); // this should be null checked as optional
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
         String scheme = dsInfos.get("scheme").toString();
+        String volSizeInBytes = dsInfos.get("capacityBytes").toString();
+        String capacityIops = dsInfos.get("capacityIops").toString();// this is fetched from url in internal cs impl and is first part of url
 
         s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
                 ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", protocol: " + scheme);
 
         // Additional details requested for ONTAP primary storage pool creation
         @SuppressWarnings("unchecked")
-        Map<String, String> details = (Map<String, String>)dsInfos.get("details");
+        Map<String, String> details = (Map<String, String>) dsInfos.get("details");
         // Validations
         if (podId == null ^ clusterId == null) {
             throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
@@ -120,39 +131,47 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
         // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
-        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
-        switch (protocol) {
-            case NFS:
+        //ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        switch (scheme) {
+            case "nfs":
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                String storagePath = url + ":/" + storagePoolName; // TODO need to see where is this used
+                parameters.setPath(storagePath);
                 break;
-            case ISCSI:
+            case "iscsi":
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 break;
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
         }
 
-        details.put(Constants.MANAGEMENT_LIF, url);
+        Map<String, String> extractedDetails = extractDetails(url);
+
+        String mLIF = extractedDetails.get("ip");
+        details.put(Constants.MANAGEMENT_LIF, mLIF); // TODO need to fetch ip from URL
 
         // Validate the ONTAP details
-        if(details.get(Constants.IS_DISAGGREGATED) == null || details.get(Constants.IS_DISAGGREGATED).isEmpty()) {
-            details.put(Constants.IS_DISAGGREGATED, "false");
-        }
+//        if(details.get(Constants.IS_DISAGGREGATED) == null || details.get(Constants.IS_DISAGGREGATED).isEmpty()) {
+//            details.put(Constants.IS_DISAGGREGATED, "false");
+//        }
 
-        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), protocol,
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        // TODO hardcoded for now
+        details.put(Constants.IS_DISAGGREGATED, "false");
+
+        OntapStorage ontapStorage = new OntapStorage(extractedDetails.get(Constants.USERNAME), extractedDetails.get(Constants.PASSWORD),
+                "10.196.38.171", extractedDetails.get(Constants.SVM_NAME), ProtocolType.NFS,
+                Boolean.parseBoolean(extractedDetails.get(Constants.IS_DISAGGREGATED))); // TODO hardcoded for testing
+        s_logger.debug("ontap storage object is  {}", ontapStorage);
+        StorageProviderFactory providerFactory = ComponentContext.inject(StorageProviderFactory.class);
+        StorageStrategy storageStrategy = providerFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
 //            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
-            storageStrategy.createVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
+            storageStrategy.createVolume(storagePoolName, Long.parseLong((volSizeInBytes))); // TODO: size should be in bytes, so see if conversion is needed
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
-        String storagePath = url + ":/" + storagePoolName;
 
-        parameters.setPath(storagePath);
         parameters.setTags(tags);
         parameters.setIsTagARule(isTagARule);
         parameters.setDetails(details);
@@ -163,6 +182,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         parameters.setName(storagePoolName);
         parameters.setProviderName(providerName);
         parameters.setManaged(true);
+        parameters.setHost("10.196.38.171");
+        parameters.setCapacityBytes(Long.parseLong((volSizeInBytes)));
+        parameters.setCapacityIops(Long.parseLong(capacityIops));
+        parameters.setUsedBytes(0);
 
         return _dataStoreHelper.createPrimaryDataStore(parameters);
     }
@@ -170,7 +193,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
-        PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
+        PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo) dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
 
         logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primarystore.getClusterId()));
@@ -252,5 +275,55 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public void changeStoragePoolScopeToCluster(DataStore store, ClusterScope clusterScope, Hypervisor.HypervisorType hypervisorType) {
 
+    }
+
+    private Map<String, String> extractDetails(String url) {
+        Map<String, String> details = new HashMap<>();
+
+        // Step 1: Remove protocol
+        StringTokenizer protocolTokenizer = new StringTokenizer(url, "://");
+        String remainder = null;
+        while (protocolTokenizer.hasMoreTokens()) {
+            remainder = protocolTokenizer.nextToken(); // Last token is the remainder
+        }
+        if (remainder == null) {
+            throw new IllegalArgumentException("URL format is incorrect: " + url);
+        }
+
+        // Step 2: Split remainder into path and parameters
+        String pathAndParams = remainder;
+        String pathPart;
+        String paramsPart = "";
+        int semicolonIndex = pathAndParams.indexOf(';');
+        if (semicolonIndex != -1) {
+            pathPart = pathAndParams.substring(0, semicolonIndex);
+            paramsPart = pathAndParams.substring(semicolonIndex + 1);
+        } else {
+            pathPart = pathAndParams;
+        }
+
+        // Step 3: Extract IP from pathPart
+        StringTokenizer ipTokenizer = new StringTokenizer(pathPart, "/");
+        String ip = null;
+        if (ipTokenizer.hasMoreTokens()) {
+            ip = ipTokenizer.nextToken();
+            details.put("managementLIF", ip);
+        }
+
+        // Step 4: Extract parameters
+        if (!paramsPart.isEmpty()) {
+            StringTokenizer paramTokenizer = new StringTokenizer(paramsPart, ";");
+            while (paramTokenizer.hasMoreTokens()) {
+                String param = paramTokenizer.nextToken();
+                int eqIndex = param.indexOf('=');
+                if (eqIndex != -1) {
+                    String key = param.substring(0, eqIndex);
+                    String value = param.substring(eqIndex + 1);
+                    details.put(key, value);
+                }
+            }
+        }
+
+        return details;
     }
 }

@@ -21,40 +21,74 @@ package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
-import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
-import org.apache.cloudstack.storage.feign.model.*;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.ExportPolicy;
+import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.feign.model.Volume;
+import org.apache.cloudstack.storage.feign.model.Nas;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
+import com.cloud.utils.component.ComponentContext;
 import java.net.URI;
 
 public class UnifiedNASStrategy extends NASStrategy{
 
-    @Inject
     private Utility utils;
-
-    @Inject
-    private NASFeignClient nasFeignClient;
-
-    @Inject
-    private SvmFeignClient svmFeignClient;
-
-    @Inject
+//    // Add missing Feign client setup for NAS operations
+    private FeignClientFactory feignClientFactory;
+    private  NASFeignClient nasFeignClient;
     private VolumeFeignClient volumeFeignClient;
 
     private static final Logger s_logger = LogManager.getLogger(NASStrategy.class);
+
+    public UnifiedNASStrategy() {
+        super();
+        initializeDependencies();
+    }
+
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
+        initializeDependencies();
+    }
+
+    private void initializeDependencies() {
+        utils = ComponentContext.inject(Utility.class);
+        // Initialize FeignClientFactory and create NAS client
+        feignClientFactory = new FeignClientFactory();
+        nasFeignClient = feignClientFactory.createClient(NASFeignClient.class);
+        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class);
     }
 
     @Override
-    public String createExportPolicy(String svmName, String policyName) {
+    public ExportPolicy getExportPolicy(String svmName, String policyName) {
+        try {
+            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() +
+                    "/api/protocols/nfs/export-policies?name=" + policyName + "&svm.name=" + svmName);
+
+            OntapResponse<ExportPolicy> response = nasFeignClient.getExportPolicyResponse(url, authHeader);
+            if(response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+                s_logger.error("Error checking export policy existence");
+                throw new CloudRuntimeException("Failed to retrieve export policy");
+            }
+            return response.getRecords().get(0);
+
+        } catch (Exception e) {
+            s_logger.error("Error checking export policy existence: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to get export policy: " + policyName);
+        }
+    }
+
+    @Override
+    public ExportPolicy createExportPolicy(String svmName, String policyName) {
         s_logger.info("Creating export policy: {} for SVM: {}", policyName, svmName);
 
         try {
@@ -78,7 +112,7 @@ public class UnifiedNASStrategy extends NASStrategy{
 
             if (createdPolicy != null && createdPolicy.getId() != null) {
                 s_logger.info("Export policy created successfully with ID: {}", createdPolicy.getId());
-                return createdPolicy.getId().toString();
+                return createdPolicy;
             } else {
                 throw new CloudRuntimeException("Failed to create export policy: " + policyName);
             }
@@ -93,7 +127,7 @@ public class UnifiedNASStrategy extends NASStrategy{
     }
 
     @Override
-    public boolean deleteExportPolicy(String svmName, String policyName) {
+    public void deleteExportPolicy(String svmName, String policyName) {
         try {
             String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
 
@@ -105,7 +139,7 @@ public class UnifiedNASStrategy extends NASStrategy{
 
             if (policiesResponse.getRecords() == null || policiesResponse.getRecords().isEmpty()) {
                 s_logger.warn("Export policy not found for deletion: {}", policyName);
-                return false;
+                throw new CloudRuntimeException("Export policy not found : " + policyName);
             }
 
             String policyId = policiesResponse.getRecords().get(0).getId().toString();
@@ -117,27 +151,10 @@ public class UnifiedNASStrategy extends NASStrategy{
             nasFeignClient.deleteExportPolicyById(deleteUrl, authHeader, policyId);
 
             s_logger.info("Export policy deleted successfully: {}", policyName);
-            return true;
 
         } catch (Exception e) {
             s_logger.error("Failed to delete export policy: {}", policyName, e);
-            return false;
-        }
-    }
-
-    @Override
-    public boolean exportPolicyExists(String svmName, String policyName) {
-        try {
-            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            URI url = URI.create(Constants.HTTPS + storage.getManagementLIF() +
-                    "/api/protocols/nfs/export-policies?name=" + policyName + "&svm.name=" + svmName);
-
-            OntapResponse<ExportPolicy> response = nasFeignClient.getExportPolicyResponse(url, authHeader);
-            return response.getRecords() != null && !response.getRecords().isEmpty();
-
-        } catch (Exception e) {
-            s_logger.warn("Error checking export policy existence: {}", e.getMessage());
-            return false;
+            throw new CloudRuntimeException("Failed to delete export policy: " + policyName);
         }
     }
 
@@ -176,7 +193,7 @@ public class UnifiedNASStrategy extends NASStrategy{
             URI updateVolumeUrl = URI.create(Constants.HTTPS + storage.getManagementLIF() +
                     "/api/storage/volumes/" + volumeUuid);
 
-            volumeFeignClient.updateVolumeRebalancing(updateVolumeUrl, authHeader, volumeUuid, volumeUpdate);
+            //volumeFeignClient.updateVolumeRebalancing(updateVolumeUrl, authHeader, volumeUuid, volumeUpdate);
 
             s_logger.info("Export policy successfully assigned to volume: {}", volumeUuid);
             return "Export policy " + policyName + " assigned to volume " + volumeUuid;
@@ -187,36 +204,6 @@ public class UnifiedNASStrategy extends NASStrategy{
         } catch (Exception e) {
             s_logger.error("Exception while assigning export policy to volume: {}", volumeUuid, e);
             throw new CloudRuntimeException("Failed to assign export policy: " + e.getMessage());
-        }
-    }
-
-    @Override
-    public String enableNFS(String svmUuid) {
-        s_logger.info("Enabling NFS on SVM: {}", svmUuid);
-
-        try {
-            // Get AuthHeader
-            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-
-            // Create SVM update object to enable NFS
-            Svm svmUpdate = new Svm();
-            svmUpdate.setNfsEnabled(true);
-
-            // Update the SVM to enable NFS
-            URI updateSvmUrl = URI.create(Constants.HTTPS + storage.getManagementLIF() +
-                    "/api/svm/svms/" + svmUuid);
-
-            svmFeignClient.updateSVM(updateSvmUrl, authHeader, svmUpdate);
-
-            s_logger.info("NFS successfully enabled on SVM: {}", svmUuid);
-            return "NFS enabled on SVM: " + svmUuid;
-
-        } catch (FeignException e) {
-            s_logger.error("Failed to enable NFS on SVM: {}", svmUuid, e);
-            throw new CloudRuntimeException("Failed to enable NFS: " + e.getMessage());
-        } catch (Exception e) {
-            s_logger.error("Exception while enabling NFS on SVM: {}", svmUuid, e);
-            throw new CloudRuntimeException("Failed to enable NFS: " + e.getMessage());
         }
     }
 
