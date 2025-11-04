@@ -71,7 +71,7 @@ public abstract class StorageStrategy {
      */
     private List<Aggregate> aggregates;
 
-    private static final Logger s_logger = (Logger) LogManager.getLogger(StorageStrategy.class);
+    private static final Logger s_logger = LogManager.getLogger(StorageStrategy.class);
 
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
