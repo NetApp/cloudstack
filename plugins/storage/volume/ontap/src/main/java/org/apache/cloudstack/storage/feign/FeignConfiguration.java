@@ -30,6 +30,7 @@ import feign.Response;
 import feign.codec.DecodeException;
 import feign.codec.EncodeException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
@@ -45,7 +46,6 @@ import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 public class FeignConfiguration {
@@ -55,7 +55,13 @@ public class FeignConfiguration {
     private final int retryMaxInterval = 5;
     private final String ontapFeignMaxConnection = "80";
     private final String ontapFeignMaxConnectionPerRoute = "20";
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    public FeignConfiguration() {
+        this.objectMapper = new ObjectMapper();
+        // Configure ObjectMapper to ignore unknown properties like _links
+        this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    }
 
     public Client createClient() {
         int maxConn;
@@ -115,9 +121,13 @@ public class FeignConfiguration {
         return new Encoder() {
             @Override
             public void encode(Object object, Type bodyType, feign.RequestTemplate template) throws EncodeException {
+                if (object == null) {
+                    template.body((byte[]) null, StandardCharsets.UTF_8);
+                    return;
+                }
                 try {
-                    String json = objectMapper.writeValueAsString(object);
-                    template.body(Arrays.toString(json.getBytes(StandardCharsets.UTF_8)));
+                    byte[] jsonBytes = objectMapper.writeValueAsBytes(object);
+                    template.body(jsonBytes, StandardCharsets.UTF_8);
                     template.header("Content-Type", "application/json");
                 } catch (JsonProcessingException e) {
                     throw new EncodeException("Error encoding object to JSON", e);
@@ -133,10 +143,13 @@ public class FeignConfiguration {
                 if (response.body() == null) {
                     return null;
                 }
-                try {
-                    String json = new String(response.body().asInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                String json = null;
+                try (var bodyStream = response.body().asInputStream()) {
+                    json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
+                    logger.debug("Decoding JSON response: {}", json);
                     return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
                 } catch (IOException e) {
+                    logger.error("Error decoding JSON response. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
                 }
             }
@@ -147,3 +160,4 @@ public class FeignConfiguration {
 //        return new Slf4jLogger();
 //    }
 }
+

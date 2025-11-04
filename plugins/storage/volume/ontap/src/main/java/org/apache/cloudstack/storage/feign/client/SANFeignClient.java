@@ -32,64 +32,64 @@ public interface SANFeignClient {
     // LUN Operation APIs
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Lun> createLun(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader,
+    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
                                 @Param("returnRecords") boolean returnRecords,
                                 @Param("lun") Lun lun);
 
     @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<Lun> getLunResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Lun> getLunResponse(@Param("authHeader") String authHeader);
 
     @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Lun getLunByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @Headers({"Authorization: {authHeader}"})
+    Lun getLunByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("PATCH /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    void updateLun(@Param("uri") URI uri, @Param("authHeader") String authHeader, @Param("uuid") String uuid, @Param("lun") Lun lun);
+    @Headers({"Authorization: {authHeader}"})
+    void updateLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, @Param("lun") Lun lun);
 
     @RequestLine("DELETE /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    void deleteLun(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @Headers({"Authorization: {authHeader}"})
+    void deleteLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     // iGroup Operation APIs
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Igroup> createIgroup(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader,
                                       @Param("returnRecords") boolean returnRecords,
                                       @Param("igroupRequest") Igroup igroupRequest);
 
     @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<Igroup> getIgroupResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Igroup> getIgroupResponse(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Igroup getIgroupByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @Headers({"Authorization: {authHeader}"})
+    Igroup getIgroupByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("DELETE /{uuid}")
-    @Headers("Authorization: {authHeader}")
+    @Headers({"Authorization: {authHeader}"})
     void deleteIgroup(@Param("baseUri") URI baseUri, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("POST /{uuid}/igroups")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Igroup> addNestedIgroups(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    OntapResponse<Igroup> addNestedIgroups(@Param("authHeader") String authHeader,
                                           @Param("uuid") String uuid,
                                           @Param("igroupNestedRequest") Igroup igroupNestedRequest,
                                           @Param("returnRecords") boolean returnRecords);
 
     // LUN Maps Operation APIs
     @RequestLine("POST /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<LunMap> createLunMap(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("lunMap") LunMap lunMap);
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, @Param("lunMap") LunMap lunMap);
 
     @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<LunMap> getLunMapResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<LunMap> getLunMapResponse(@Param("authHeader") String authHeader);
 
     @RequestLine("DELETE /{lunUuid}/{igroupUuid}")
-    @Headers("Authorization: {authHeader}")
-    void deleteLunMap(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    void deleteLunMap(@Param("authHeader") String authHeader,
                      @Param("lunUuid") String lunUuid,
                      @Param("igroupUuid") String igroupUuid);
 }

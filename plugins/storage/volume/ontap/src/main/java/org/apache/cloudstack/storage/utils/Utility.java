@@ -21,36 +21,22 @@ package org.apache.cloudstack.storage.utils;
 
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
-import com.cloud.utils.component.ComponentContext;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
-import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
-import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.provider.StorageProviderFactory;
-import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.util.Base64Utils;
 
-import java.net.URI;
 import java.util.Map;
 
 public class Utility {
 
     private static final Logger s_logger = LogManager.getLogger(Utility.class);
-    private PrimaryDataStoreDao storagePoolDao;
-    private StoragePoolDetailsDao storagePoolDetailsDao;
-
-    public Utility() {
-        this.storagePoolDao = ComponentContext.inject(PrimaryDataStoreDao.class);
-        this.storagePoolDetailsDao = ComponentContext.inject(StoragePoolDetailsDao.class);
-    }
 
     private static final String BASIC = "Basic";
     private static final String AUTH_HEADER_COLON = ":";
@@ -67,10 +53,14 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public URI generateURI (String managementLIF, String path) {
-        String uriString = Constants.HTTPS + managementLIF + path;
-        return URI.create(uriString);
-    }
+//    public URI generateURI (String managementLIF, String path) {
+//        if (path == null || path.isEmpty() || path.equals(StringUtils.SPACE) || path.equals("/")) {
+//            String uriString = Constants.HTTPS + managementLIF;
+//            return URI.create(uriString);
+//        }
+//        String uriString = Constants.HTTPS + managementLIF + path;
+//        return URI.create(uriString);
+//    }
 
     public CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
        CloudStackVolume cloudStackVolumeRequest = null;
@@ -108,25 +98,5 @@ public class Utility {
        } else {
            throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
        }
-    }
-
-    public StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
-        if (details == null || details.isEmpty()) {
-            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-        }
-        String protocol = details.get(Constants.PROTOCOL);
-        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
-        if (isValid) {
-            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
-            return storageStrategy;
-        } else {
-            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-        }
     }
 }

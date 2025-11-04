@@ -58,7 +58,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
-    private static final Logger s_logger = (Logger)LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     /**
      * Creates primary storage on NetApp storage
@@ -70,23 +70,30 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
-        String url = dsInfos.get("url").toString(); // TODO: Decide on whether should the customer enter just the Management LIF IP or https://ManagementLIF
-        Long zoneId =  dsInfos.get("zoneId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
-        Long podId = dsInfos.get("podId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("zoneId");
-        Long clusterId = dsInfos.get("clusterId").toString().trim().isEmpty() ? null : (Long)dsInfos.get("clusterId");
-        String storagePoolName = dsInfos.get("name").toString().trim();
-        String providerName = dsInfos.get("providerName").toString().trim();
-        String tags = dsInfos.get("tags").toString().trim();
+        String url = (String)dsInfos.get("url");
+        Long zoneId = (Long)dsInfos.get("zoneId");
+        Long podId = (Long)dsInfos.get("podId");
+        Long clusterId = (Long)dsInfos.get("clusterId");
+        String storagePoolName = (String)dsInfos.get("name");
+        String providerName = (String)dsInfos.get("providerName");
+        Long capacityBytes = (Long)dsInfos.get("capacityBytes");
+        String tags = (String)dsInfos.get("tags");
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
-        String scheme = dsInfos.get("scheme").toString();
+//        String scheme = dsInfos.get("scheme").toString();
 
+//        s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
+//                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", protocol: " + scheme);
         s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
-                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", protocol: " + scheme);
+                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId);
 
         // Additional details requested for ONTAP primary storage pool creation
         @SuppressWarnings("unchecked")
         Map<String, String> details = (Map<String, String>)dsInfos.get("details");
         // Validations
+        if (capacityBytes == null || capacityBytes <= 0) {
+            throw new IllegalArgumentException("'capacityBytes' must be present and greater than 0.");
+        }
+
         if (podId == null ^ clusterId == null) {
             throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
         }
@@ -117,21 +124,51 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
 
+        // Get ONTAP details from the URL
+        Map<String, String> storageDetails = Map.of(
+                Constants.USERNAME, "",
+                Constants.PASSWORD, "",
+                Constants.SVM_NAME, "",
+                Constants.PROTOCOL, "",
+                Constants.MANAGEMENT_LIF, "",
+                Constants.SIZE, "",
+                Constants.IS_DISAGGREGATED, ""
+        );
+
+        String[] urlDetails = url.split(";");
+        for(int m =0; m < urlDetails.length; m++) {
+            String[] kvs = urlDetails[m].split("=");
+            if(kvs.length == 2) {
+                details.put(kvs[0], kvs[1]);
+            }
+        }
+
+        //managementLIF=;username=;password=;svmName=;protocol=;size=;isDisaggregated=;
+
+        for (String key : storageDetails.keySet()) {
+            if (!details.containsKey(key) || details.get(key).isEmpty()) {
+                throw new CloudRuntimeException("ONTAP primary storage creation failed, missing detail: " + key);
+            }
+        }
+
+
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
         // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
-        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        String path = "";
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                path = "/"+ storagePoolName;
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 break;
             default:
-                throw new CloudRuntimeException("Unsupported protocol: " + scheme + ", cannot create primary storage");
+                throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
         }
 
-        details.put(Constants.MANAGEMENT_LIF, url);
+//        details.put(Constants.MANAGEMENT_LIF, url);
 
         // Validate the ONTAP details
         if(details.get(Constants.IS_DISAGGREGATED) == null || details.get(Constants.IS_DISAGGREGATED).isEmpty()) {
@@ -140,16 +177,19 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), protocol,
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED).toLowerCase()));
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
 //            String volumeName = storagePoolName + "_vol"; //TODO: Figure out a better naming convention
-            storageStrategy.createStorageVolume(storagePoolName, Long.parseLong((details.get("size")))); // TODO: size should be in bytes, so see if conversion is needed
+            storageStrategy.createStorageVolume(storagePoolName, Long.parseLong((details.get(Constants.SIZE)))); // TODO: size should be in bytes, so see if conversion is needed
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
+        parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
+        parameters.setPort(443);
+        parameters.setPath(path);
         parameters.setTags(tags);
         parameters.setIsTagARule(isTagARule);
         parameters.setDetails(details);
@@ -160,6 +200,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         parameters.setName(storagePoolName);
         parameters.setProviderName(providerName);
         parameters.setManaged(true);
+        parameters.setCapacityBytes(capacityBytes);
+        parameters.setUsedBytes(0);
 
         return _dataStoreHelper.createPrimaryDataStore(parameters);
     }

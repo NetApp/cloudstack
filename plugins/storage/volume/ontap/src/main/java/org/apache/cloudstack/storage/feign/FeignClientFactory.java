@@ -33,7 +33,7 @@ public class FeignClientFactory {
         this.feignConfiguration = feignConfiguration;
     }
 
-    public <T> T createClient(Class<T> clientClass) {
+    public <T> T createClient(Class<T> clientClass, String baseURL) {
         return Feign.builder()
                 .client(feignConfiguration.createClient())
                 .encoder(feignConfiguration.createEncoder())
@@ -41,6 +41,6 @@ public class FeignClientFactory {
 //                .logger(feignConfiguration.createLogger())
                 .retryer(feignConfiguration.createRetryer())
                 .requestInterceptor(feignConfiguration.createRequestInterceptor())
-                .target(clientClass, "https://placeholder.com");
+                .target(clientClass, baseURL);
     }
 }

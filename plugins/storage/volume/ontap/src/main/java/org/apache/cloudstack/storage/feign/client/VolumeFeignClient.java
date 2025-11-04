@@ -23,23 +23,23 @@ import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 
 public interface VolumeFeignClient {
 
-    @RequestLine("DELETE /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    void deleteVolume(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("DELETE /api/storage/volumes/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    void deleteVolume(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    @RequestLine("POST /")
-    @Headers("Authorization: {authHeader}")
-    JobResponse createVolumeWithJob(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("volumeRequest") Volume volumeRequest);
+    @RequestLine("POST /api/storage/volumes")
+    @Headers({"Authorization: {authHeader}"})
+    JobResponse createVolumeWithJob(@Param("authHeader") String authHeader, Volume volumeRequest);
 
-    @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Volume getVolumeByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("GET /api/storage/volumes/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Volume getVolumeByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    @RequestLine("PATCH /{uuid}")
-    @Headers({"accept: {acceptHeader}", "Authorization: {authHeader}"})
-    JobResponse updateVolumeRebalancing(@Param("baseURL") URI baseURL, @Param("acceptHeader") String acceptHeader, @Param("uuid") String uuid, @Param("volumeRequest") Volume volumeRequest);
+    @RequestLine("PATCH /api/storage/volumes/{uuid}")
+    @Headers({"Accept: {acceptHeader}", "Authorization: {authHeader}"})
+    JobResponse updateVolumeRebalancing(@Param("acceptHeader") String acceptHeader, @Param("uuid") String uuid, Volume volumeRequest);
 }
+

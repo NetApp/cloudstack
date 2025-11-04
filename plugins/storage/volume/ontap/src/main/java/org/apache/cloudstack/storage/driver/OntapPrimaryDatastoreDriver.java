@@ -44,6 +44,8 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -51,7 +53,6 @@ import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import com.cloud.utils.component.ComponentContext;
 
 import javax.inject.Inject;
 import java.util.HashMap;
@@ -64,9 +65,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private Utility utils;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
-
     public OntapPrimaryDatastoreDriver() {
-        utils = ComponentContext.inject(Utility.class);
+        utils = new Utility();
     }
     @Override
     public Map<String, String> getCapabilities() {
@@ -131,7 +131,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
         }
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
-        StorageStrategy storageStrategy = utils.getStrategyByStoragePoolDetails(details);
+        StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
         s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
         CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
@@ -272,5 +272,25 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Override
     public void detachVolumeFromAllStorageNodes(Volume volume) {
 
+    }
+
+    public StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+        if (details == null || details.isEmpty()) {
+            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+        }
+        String protocol = details.get(Constants.PROTOCOL);
+        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
+            return storageStrategy;
+        } else {
+            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+        }
     }
 }

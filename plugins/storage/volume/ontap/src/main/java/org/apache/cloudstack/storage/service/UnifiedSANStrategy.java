@@ -19,7 +19,6 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.utils.component.ComponentContext;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
@@ -33,8 +32,6 @@ import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
-import java.net.URI;
 import java.util.Map;
 
 public class UnifiedSANStrategy extends SANStrategy {
@@ -48,10 +45,15 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
-        this.utils = ComponentContext.inject(Utility.class);
+        String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
+        this.utils = new Utility();
         // Initialize FeignClientFactory and create SAN client
         this.feignClientFactory = new FeignClientFactory();
-        this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class);
+        this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
+    }
+
+    public void setOntapStorage(OntapStorage ontapStorage) {
+        this.storage = ontapStorage;
     }
 
     @Override
@@ -65,9 +67,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             // Get AuthHeader
             String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
-            URI url = utils.generateURI(storage.getManagementLIF(), Constants.CREATE_LUN);
             //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
-            OntapResponse<Lun> createdLun = sanFeignClient.createLun(url, authHeader, true, cloudstackVolume.getLun());
+            OntapResponse<Lun> createdLun = sanFeignClient.createLun(authHeader, true, cloudstackVolume.getLun());
             if (createdLun == null || createdLun.getRecords() == null || createdLun.getRecords().size() == 0) {
                 s_logger.error("createCloudStackVolume: LUN creation failed for Lun {}", cloudstackVolume.getLun().getName());
                 throw new CloudRuntimeException("Failed to create Lun: " + cloudstackVolume.getLun().getName());

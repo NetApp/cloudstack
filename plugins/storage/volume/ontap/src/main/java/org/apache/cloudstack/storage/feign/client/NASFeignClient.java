@@ -25,33 +25,32 @@ import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 
 public interface NASFeignClient {
 
     // File Operations
     @RequestLine("GET /{volumeUuid}/files/{path}")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<FileInfo> getFileResponse(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<FileInfo> getFileResponse(@Param("authHeader") String authHeader,
                                           @Param("volumeUuid") String volumeUUID,
                                           @Param("path") String filePath);
 
     @RequestLine("DELETE /{volumeUuid}/files/{path}")
-    @Headers("Authorization: {authHeader}")
-    void deleteFile(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    void deleteFile(@Param("authHeader") String authHeader,
                    @Param("volumeUuid") String volumeUUID,
                    @Param("path") String filePath);
 
     @RequestLine("PATCH /{volumeUuid}/files/{path}")
-    @Headers("Authorization: {authHeader}")
-    void updateFile(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    void updateFile(@Param("authHeader") String authHeader,
                    @Param("volumeUuid") String volumeUUID,
                    @Param("path") String filePath,
                    @Param("fileInfo") FileInfo fileInfo);
 
     @RequestLine("POST /{volumeUuid}/files/{path}")
-    @Headers("Authorization: {authHeader}")
-    void createFile(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    void createFile(@Param("authHeader") String authHeader,
                    @Param("volumeUuid") String volumeUUID,
                    @Param("path") String filePath,
                    @Param("file") FileInfo file);
@@ -59,27 +58,27 @@ public interface NASFeignClient {
     // Export Policy Operations
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    ExportPolicy createExportPolicy(@Param("uri") URI uri, @Param("authHeader") String authHeader,
+    ExportPolicy createExportPolicy(@Param("authHeader") String authHeader,
                                    @Param("returnRecords") boolean returnRecords,
                                    @Param("exportPolicy") ExportPolicy exportPolicy);
 
     @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<ExportPolicy> getExportPolicyResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> getExportPolicyResponse(@Param("authHeader") String authHeader);
 
     @RequestLine("GET /{id}")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<ExportPolicy> getExportPolicyById(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> getExportPolicyById(@Param("authHeader") String authHeader,
                                                    @Param("id") String id);
 
     @RequestLine("DELETE /{id}")
-    @Headers("Authorization: {authHeader}")
-    void deleteExportPolicyById(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    void deleteExportPolicyById(@Param("authHeader") String authHeader,
                                @Param("id") String id);
 
     @RequestLine("PATCH /{id}")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<ExportPolicy> updateExportPolicy(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader,
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
                                                   @Param("id") String id,
                                                   @Param("request") ExportPolicy request);
 }

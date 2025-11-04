@@ -19,20 +19,21 @@
 
 package org.apache.cloudstack.storage.feign.client;
 
+import feign.QueryMap;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
+import java.util.Map;
 
 public interface SvmFeignClient {
 
-    @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<Svm> getSvmResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
+    @RequestLine("GET /api/svm/svms")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Svm> getSvmResponse(@QueryMap Map<String, Object> queryMap, @Param("authHeader") String authHeader);
 
-    @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Svm getSvmByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("GET /api/svm/svms/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Svm getSvmByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }

@@ -23,11 +23,10 @@ import org.apache.cloudstack.storage.feign.model.Cluster;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 
 public interface ClusterFeignClient {
 
-    @RequestLine("GET /")
+    @RequestLine("GET /api/cluster")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    Cluster getCluster(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords);
+    Cluster getCluster(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords);
 }

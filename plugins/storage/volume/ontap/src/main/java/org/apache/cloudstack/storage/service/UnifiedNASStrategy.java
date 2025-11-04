@@ -19,17 +19,16 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.utils.component.ComponentContext;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
 import java.util.Map;
 
 public class UnifiedNASStrategy extends NASStrategy {
@@ -43,10 +42,15 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
-        this.utils = ComponentContext.inject(Utility.class);
+        String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
+        this.utils = new Utility();
         // Initialize FeignClientFactory and create NAS client
         this.feignClientFactory = new FeignClientFactory();
-        this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class);
+        this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
+    }
+
+    public void setOntapStorage(OntapStorage ontapStorage) {
+        this.storage = ontapStorage;
     }
 
     @Override

@@ -24,15 +24,14 @@ import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 
 public interface AggregateFeignClient {
 
-    @RequestLine("GET /")
-    @Headers("Authorization: {authHeader}")
-    OntapResponse<Aggregate> getAggregateResponse(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader);
+    @RequestLine("GET /api/storage/aggregates")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Aggregate> getAggregateResponse(@Param("authHeader") String authHeader);
 
-    @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Aggregate getAggregateByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("GET /api/storage/aggregates/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Aggregate getAggregateByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }

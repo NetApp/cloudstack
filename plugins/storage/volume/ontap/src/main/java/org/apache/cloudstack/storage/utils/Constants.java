@@ -23,6 +23,7 @@ public class Constants {
 
     public static final String NFS = "nfs";
     public static final String ISCSI = "iscsi";
+    public static final String SIZE = "size";
     public static final String PROTOCOL = "protocol";
     public static final String SVM_NAME = "svmName";
     public static final String USERNAME = "username";
@@ -47,9 +48,5 @@ public class Constants {
     public static final String KVM = "KVM";
 
     public static final String HTTPS = "https://";
-    public static final String GET_SVMs = "/api/svm/svms";
-    public static final String CREATE_VOLUME = "/api/storage/volumes";
-    public static final String GET_JOB_BY_UUID = "/api/cluster/jobs";
-    public static final String CREATE_LUN = "/api/storage/luns";
 
 }

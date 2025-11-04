@@ -22,11 +22,10 @@ import org.apache.cloudstack.storage.feign.model.Job;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 
 public interface JobFeignClient {
 
-    @RequestLine("GET /{uuid}")
-    @Headers("Authorization: {authHeader}")
-    Job getJobByUUID(@Param("baseURL") URI baseURL, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("GET /api/cluster/jobs/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Job getJobByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }
