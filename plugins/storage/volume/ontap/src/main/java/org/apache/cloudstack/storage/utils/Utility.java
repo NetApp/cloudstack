@@ -184,7 +184,7 @@ public class Utility {
     }
 
     public static String getIgroupName(String svmName, long scopeId) {
-        // Igroup name format: cs_svmName_scopeId
+        //Igroup name format: cs_svmName_scopeId
         return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeId;
     }
 }
