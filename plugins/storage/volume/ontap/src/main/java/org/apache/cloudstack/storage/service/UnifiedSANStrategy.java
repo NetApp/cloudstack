@@ -37,8 +37,6 @@ import java.util.Map;
 public class UnifiedSANStrategy extends SANStrategy {
 
     private static final Logger s_logger = LogManager.getLogger(UnifiedSANStrategy.class);
-    private Utility utils;
-
     // Replace @Inject Feign client with FeignClientFactory
     private final FeignClientFactory feignClientFactory;
     private final SANFeignClient sanFeignClient;
@@ -46,7 +44,6 @@ public class UnifiedSANStrategy extends SANStrategy {
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
         String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
-        this.utils = new Utility();
         // Initialize FeignClientFactory and create SAN client
         this.feignClientFactory = new FeignClientFactory();
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
@@ -65,7 +62,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
         try {
             // Get AuthHeader
-            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
             //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
             OntapResponse<Lun> createdLun = sanFeignClient.createLun(authHeader, true, cloudstackVolume.getLun());
@@ -94,7 +91,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
-
+        //TODO
     }
 
     @Override
@@ -111,7 +108,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
-
+        //TODO
     }
 
     @Override
@@ -120,16 +117,19 @@ public class UnifiedSANStrategy extends SANStrategy {
         return null;
     }
 
+    @Override
     public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
+    @Override
     void enableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
 
+    @Override
     void disableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
 }

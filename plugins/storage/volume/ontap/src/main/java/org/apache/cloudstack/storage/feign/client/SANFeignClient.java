@@ -34,7 +34,7 @@ public interface SANFeignClient {
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
     OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
                                 @Param("returnRecords") boolean returnRecords,
-                                @Param("lun") Lun lun);
+                                Lun lun);
 
     @RequestLine("GET /")
     @Headers({"Authorization: {authHeader}"})
@@ -46,7 +46,7 @@ public interface SANFeignClient {
 
     @RequestLine("PATCH /{uuid}")
     @Headers({"Authorization: {authHeader}"})
-    void updateLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, @Param("lun") Lun lun);
+    void updateLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, Lun lun);
 
     @RequestLine("DELETE /{uuid}")
     @Headers({"Authorization: {authHeader}"})
@@ -57,10 +57,10 @@ public interface SANFeignClient {
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
     OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader,
                                       @Param("returnRecords") boolean returnRecords,
-                                      @Param("igroupRequest") Igroup igroupRequest);
+                                      Igroup igroupRequest);
 
     @RequestLine("GET /")
-    @Headers({"Authorization: {authHeader}"})
+    @Headers({"Authorization: {authHeader}"}) // TODO: Check this again, uuid should be part of the path?
     OntapResponse<Igroup> getIgroupResponse(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("GET /{uuid}")
@@ -75,13 +75,13 @@ public interface SANFeignClient {
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
     OntapResponse<Igroup> addNestedIgroups(@Param("authHeader") String authHeader,
                                           @Param("uuid") String uuid,
-                                          @Param("igroupNestedRequest") Igroup igroupNestedRequest,
+                                          Igroup igroupNestedRequest,
                                           @Param("returnRecords") boolean returnRecords);
 
     // LUN Maps Operation APIs
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, @Param("lunMap") LunMap lunMap);
+    OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, LunMap lunMap);
 
     @RequestLine("GET /")
     @Headers({"Authorization: {authHeader}"})

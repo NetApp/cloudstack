@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
+import feign.Util;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
@@ -51,8 +52,6 @@ import java.util.Objects;
  *      Supported platform:  Unified and Disaggregated
  */
 public abstract class StorageStrategy {
-    private final Utility utils;
-
     // Replace @Inject Feign clients with FeignClientFactory
     private final FeignClientFactory feignClientFactory;
     private final VolumeFeignClient volumeFeignClient;
@@ -72,7 +71,6 @@ public abstract class StorageStrategy {
         storage = ontapStorage;
         String baseURL = Constants.HTTPS + storage.getManagementLIF();
         s_logger.info("Initializing StorageStrategy with base URL: " + baseURL);
-        this.utils = new Utility();
         // Initialize FeignClientFactory and create clients
         this.feignClientFactory = new FeignClientFactory();
         this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
@@ -83,27 +81,21 @@ public abstract class StorageStrategy {
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
     public boolean connect() {
         s_logger.info("Attempting to connect to ONTAP cluster at " + storage.getManagementLIF() + " and validate SVM " +
-                storage.getSvmName() + ", username " + storage.getUsername() + ", password " + storage.getPassword() + ", protocol " + storage.getProtocol());
+                storage.getSvmName() + ", protocol " + storage.getProtocol());
         //Get AuthHeader
-        String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
         String svmName = storage.getSvmName();
         try {
             // Call the SVM API to check if the SVM exists
             Svm svm = new Svm();
-            try {
-                s_logger.info("Fetching the SVM details...");
-                if (svmFeignClient == null) {
-                    throw new CloudRuntimeException("SVM Feign client is not initialized.");
-                }
-                Map<String, Object> queryParams = Map.of("name", svmName, "fields", "aggregates,state");
-                OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
-                if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
-                    svm = svms.getRecords().get(0);
-                } else {
-                    throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
-                }
-            } catch (FeignException.FeignClientException e) {
-                throw new CloudRuntimeException("Failed to fetch SVM details: " + e.getMessage());
+            s_logger.info("Fetching the SVM details...");
+            Map<String, Object> queryParams = Map.of(Constants.NAME, svmName, Constants.FIELDS, Constants.AGGREGATES +
+                    Constants.COMMA + Constants.STATE);
+            OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
+            if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
+                svm = svms.getRecords().get(0);
+            } else {
+                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
             }
 
             // Validations
@@ -127,7 +119,7 @@ public abstract class StorageStrategy {
             this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
-            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e);
+            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
         }
         return true;
     }
@@ -152,7 +144,7 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("No aggregates available to create volume on SVM " + svmName);
         }
         // Get the AuthHeader
-        String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
 
         // Generate the Create Volume Request
         Volume volumeRequest = new Volume();
@@ -316,4 +308,30 @@ public abstract class StorageStrategy {
      * @return the updated AccessGroup object
      */
     abstract AccessGroup updateAccessGroup(AccessGroup accessGroup);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     getiGroup       for iSCSI and FC protocols
+     *     getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
+     * @param accessGroup the access group to retrieve
+     * @return the retrieved AccessGroup object
+     */
+    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunMap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void enableLogicalAccess(Map<String,String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunUnmap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values
+     */
+    abstract void disableLogicalAccess(Map<String,String> values);
 }

@@ -62,12 +62,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
 
-    private Utility utils;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
-    public OntapPrimaryDatastoreDriver() {
-        utils = new Utility();
-    }
+    public OntapPrimaryDatastoreDriver() {}
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
@@ -133,7 +130,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
         StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
         s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
-        CloudStackVolume cloudStackVolumeRequest = utils.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
+        CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
             return cloudStackVolume.getLun().getName();
@@ -274,7 +271,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     }
 
-    public StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+    private StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
         if (details == null || details.isEmpty()) {
             s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
             throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");

@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.feign.model;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
@@ -30,6 +31,7 @@ import java.util.Objects;
 /**
  * Information about a single file.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class FileInfo {
   @JsonProperty("bytes_used")

@@ -38,7 +38,6 @@ public class FeignClientFactory {
                 .client(feignConfiguration.createClient())
                 .encoder(feignConfiguration.createEncoder())
                 .decoder(feignConfiguration.createDecoder())
-//                .logger(feignConfiguration.createLogger())
                 .retryer(feignConfiguration.createRetryer())
                 .requestInterceptor(feignConfiguration.createRequestInterceptor())
                 .target(clientClass, baseURL);

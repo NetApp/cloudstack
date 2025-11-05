@@ -45,22 +45,20 @@ public interface NASFeignClient {
     @Headers({"Authorization: {authHeader}"})
     void updateFile(@Param("authHeader") String authHeader,
                    @Param("volumeUuid") String volumeUUID,
-                   @Param("path") String filePath,
-                   @Param("fileInfo") FileInfo fileInfo);
+                   @Param("path") String filePath, FileInfo fileInfo);
 
     @RequestLine("POST /{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void createFile(@Param("authHeader") String authHeader,
                    @Param("volumeUuid") String volumeUUID,
-                   @Param("path") String filePath,
-                   @Param("file") FileInfo file);
+                   @Param("path") String filePath, FileInfo file);
 
     // Export Policy Operations
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
     ExportPolicy createExportPolicy(@Param("authHeader") String authHeader,
                                    @Param("returnRecords") boolean returnRecords,
-                                   @Param("exportPolicy") ExportPolicy exportPolicy);
+                                    ExportPolicy exportPolicy);
 
     @RequestLine("GET /")
     @Headers({"Authorization: {authHeader}"})
@@ -80,5 +78,5 @@ public interface NASFeignClient {
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
                                                   @Param("id") String id,
-                                                  @Param("request") ExportPolicy request);
+                                                  ExportPolicy request);
 }

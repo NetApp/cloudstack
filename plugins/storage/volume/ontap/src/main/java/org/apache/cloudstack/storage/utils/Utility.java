@@ -48,21 +48,12 @@ public class Utility {
      * @param password -->> normal decoded password of the storage backend
      * @return
      */
-    public String generateAuthHeader (String username, String password) {
+    public static String generateAuthHeader (String username, String password) {
         byte[] encodedBytes = Base64Utils.encode((username + AUTH_HEADER_COLON + password).getBytes());
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-//    public URI generateURI (String managementLIF, String path) {
-//        if (path == null || path.isEmpty() || path.equals(StringUtils.SPACE) || path.equals("/")) {
-//            String uriString = Constants.HTTPS + managementLIF;
-//            return URI.create(uriString);
-//        }
-//        String uriString = Constants.HTTPS + managementLIF + path;
-//        return URI.create(uriString);
-//    }
-
-    public CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
+    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
        CloudStackVolume cloudStackVolumeRequest = null;
 
        String protocol = details.get(Constants.PROTOCOL);

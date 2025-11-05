@@ -1,22 +1,3 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
 package org.apache.cloudstack.storage.feign;
 
 import feign.RequestInterceptor;
@@ -25,13 +6,12 @@ import feign.Client;
 import feign.httpclient.ApacheHttpClient;
 import feign.codec.Decoder;
 import feign.codec.Encoder;
-//import feign.slf4j.Slf4jLogger;
 import feign.Response;
 import feign.codec.DecodeException;
 import feign.codec.EncodeException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
@@ -44,6 +24,7 @@ import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLContext;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
@@ -55,12 +36,13 @@ public class FeignConfiguration {
     private final int retryMaxInterval = 5;
     private final String ontapFeignMaxConnection = "80";
     private final String ontapFeignMaxConnectionPerRoute = "20";
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
 
     public FeignConfiguration() {
-        this.objectMapper = new ObjectMapper();
-        // Configure ObjectMapper to ignore unknown properties like _links
-        this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        this.jsonMapper = JsonMapper.builder()
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .findAndAddModules()
+                .build();
     }
 
     public Client createClient() {
@@ -69,18 +51,16 @@ public class FeignConfiguration {
         try {
             maxConn = Integer.parseInt(this.ontapFeignMaxConnection);
         } catch (Exception e) {
-            logger.error("ontapFeignClient: encounter exception while parse the max connection from env. setting default value");
+            logger.error("ontapFeignClient: parse max connection failed, using default");
             maxConn = 20;
         }
         try {
             maxConnPerRoute = Integer.parseInt(this.ontapFeignMaxConnectionPerRoute);
         } catch (Exception e) {
-            logger.error("ontapFeignClient: encounter exception while parse the max connection per route from env. setting default value");
+            logger.error("ontapFeignClient: parse max connection per route failed, using default");
             maxConnPerRoute = 2;
         }
-
-        // Disable Keep Alive for Http Connection
-        logger.debug("ontapFeignClient: Setting the feign client config values as max connection: {}, max connections per route: {}", maxConn, maxConnPerRoute);
+        logger.debug("ontapFeignClient: maxConn={}, maxConnPerRoute={}", maxConn, maxConnPerRoute);
         ConnectionKeepAliveStrategy keepAliveStrategy = (response, context) -> 0;
         CloseableHttpClient httpClient = HttpClientBuilder.create()
                 .setMaxConnTotal(maxConn)
@@ -94,7 +74,6 @@ public class FeignConfiguration {
 
     private SSLConnectionSocketFactory getSSLSocketFactory() {
         try {
-            // The TrustAllStrategy is a strategy used in SSL context configuration that accepts any certificate
             SSLContext sslContext = SSLContexts.custom().loadTrustMaterial(null, new TrustAllStrategy()).build();
             return new SSLConnectionSocketFactory(sslContext, new NoopHostnameVerifier());
         } catch (Exception ex) {
@@ -108,7 +87,7 @@ public class FeignConfiguration {
             logger.info("HTTP Method: {}", template.method());
             logger.info("Headers: {}", template.headers());
             if (template.body() != null) {
-                logger.info("Body: {}", new String(template.body()));
+                logger.info("Body: {}", new String(template.body(), StandardCharsets.UTF_8));
             }
         };
     }
@@ -126,7 +105,7 @@ public class FeignConfiguration {
                     return;
                 }
                 try {
-                    byte[] jsonBytes = objectMapper.writeValueAsBytes(object);
+                    byte[] jsonBytes = jsonMapper.writeValueAsBytes(object);
                     template.body(jsonBytes, StandardCharsets.UTF_8);
                     template.header("Content-Type", "application/json");
                 } catch (JsonProcessingException e) {
@@ -144,10 +123,10 @@ public class FeignConfiguration {
                     return null;
                 }
                 String json = null;
-                try (var bodyStream = response.body().asInputStream()) {
+                try (InputStream bodyStream = response.body().asInputStream()) {
                     json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                     logger.debug("Decoding JSON response: {}", json);
-                    return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
+                    return jsonMapper.readValue(json, jsonMapper.getTypeFactory().constructType(type));
                 } catch (IOException e) {
                     logger.error("Error decoding JSON response. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
@@ -155,9 +134,4 @@ public class FeignConfiguration {
             }
         };
     }
-
-//    public Slf4jLogger createLogger() {
-//        return new Slf4jLogger();
-//    }
 }
-

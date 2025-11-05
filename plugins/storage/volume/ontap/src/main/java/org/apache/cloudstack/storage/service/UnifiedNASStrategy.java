@@ -25,7 +25,6 @@ import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.utils.Constants;
-import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -34,8 +33,6 @@ import java.util.Map;
 public class UnifiedNASStrategy extends NASStrategy {
 
     private static final Logger s_logger = LogManager.getLogger(UnifiedNASStrategy.class);
-    private Utility utils;
-
     // Add missing Feign client setup for NAS operations
     private final FeignClientFactory feignClientFactory;
     private final NASFeignClient nasFeignClient;
@@ -43,7 +40,6 @@ public class UnifiedNASStrategy extends NASStrategy {
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
         String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
-        this.utils = new Utility();
         // Initialize FeignClientFactory and create NAS client
         this.feignClientFactory = new FeignClientFactory();
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
@@ -93,16 +89,18 @@ public class UnifiedNASStrategy extends NASStrategy {
         return null;
     }
 
-    // Remove @Override - these methods don't exist in parent classes
+    @Override
     public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         //TODO
         return null;
     }
 
+    @Override
     void enableLogicalAccess(Map<String, String> values) {
         //TODO
     }
 
+    @Override
     void disableLogicalAccess(Map<String, String> values) {
         //TODO
     }

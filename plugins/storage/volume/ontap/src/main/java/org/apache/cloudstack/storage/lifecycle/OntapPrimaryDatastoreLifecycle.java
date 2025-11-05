@@ -51,6 +51,7 @@ import org.apache.logging.log4j.Logger;
 import javax.inject.Inject;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycleImpl implements PrimaryDataStoreLifeCycle {
@@ -70,29 +71,28 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
-        String url = (String)dsInfos.get("url");
-        Long zoneId = (Long)dsInfos.get("zoneId");
-        Long podId = (Long)dsInfos.get("podId");
-        Long clusterId = (Long)dsInfos.get("clusterId");
-        String storagePoolName = (String)dsInfos.get("name");
-        String providerName = (String)dsInfos.get("providerName");
-        Long capacityBytes = (Long)dsInfos.get("capacityBytes");
-        String tags = (String)dsInfos.get("tags");
+        String url = (String) dsInfos.get("url");
+        Long zoneId = (Long) dsInfos.get("zoneId");
+        Long podId = (Long) dsInfos.get("podId");
+        Long clusterId = (Long) dsInfos.get("clusterId");
+        String storagePoolName = (String) dsInfos.get("name");
+        String providerName = (String) dsInfos.get("providerName");
+        Long capacityBytes = (Long) dsInfos.get("capacityBytes");
+        String tags = (String) dsInfos.get("tags");
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
-//        String scheme = dsInfos.get("scheme").toString();
+        String scheme = dsInfos.get("scheme").toString();
 
-//        s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
-//                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", protocol: " + scheme);
         s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
-                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId);
+                ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId + ", scheme: " + scheme);
 
         // Additional details requested for ONTAP primary storage pool creation
         @SuppressWarnings("unchecked")
-        Map<String, String> details = (Map<String, String>)dsInfos.get("details");
+        Map<String, String> details = (Map<String, String>) dsInfos.get("details");
         // Validations
-        if (capacityBytes == null || capacityBytes <= 0) {
+        if (capacityBytes == null || capacityBytes <= 1677721600L) { // 1.56 GB minimum for ONTAP Volume
             throw new IllegalArgumentException("'capacityBytes' must be present and greater than 0.");
         }
+        details.put(Constants.SIZE, capacityBytes.toString());
 
         if (podId == null ^ clusterId == null) {
             throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
@@ -125,54 +125,63 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
 
         // Get ONTAP details from the URL
-        Map<String, String> storageDetails = Map.of(
-                Constants.USERNAME, "",
-                Constants.PASSWORD, "",
-                Constants.SVM_NAME, "",
-                Constants.PROTOCOL, "",
-                Constants.MANAGEMENT_LIF, "",
-                Constants.SIZE, "",
-                Constants.IS_DISAGGREGATED, ""
+        Set<String> requiredKeys = Set.of(
+                Constants.USERNAME,
+                Constants.PASSWORD,
+                Constants.SVM_NAME,
+                Constants.PROTOCOL,
+                Constants.MANAGEMENT_LIF,
+                Constants.IS_DISAGGREGATED
         );
 
-        String[] urlDetails = url.split(";");
-        for(int m =0; m < urlDetails.length; m++) {
-            String[] kvs = urlDetails[m].split("=");
-            if(kvs.length == 2) {
-                details.put(kvs[0], kvs[1]);
+        // Parse key=value pairs from URL into details (skip empty segments)
+        for (String segment : url.split(Constants.SEMICOLON)) {
+            if (segment.isEmpty()) {
+                continue;
+            }
+            String[] kv = segment.split(Constants.EQUALS, 2);
+            if (kv.length == 2) {
+                details.put(kv[0].trim(), kv[1].trim());
             }
         }
 
-        //managementLIF=;username=;password=;svmName=;protocol=;size=;isDisaggregated=;
-
-        for (String key : storageDetails.keySet()) {
-            if (!details.containsKey(key) || details.get(key).isEmpty()) {
-                throw new CloudRuntimeException("ONTAP primary storage creation failed, missing detail: " + key);
+        // Validate existing entries (unexpected keys, empty values)
+        for (Map.Entry<String, String> e : details.entrySet()) {
+            String key = e.getKey();
+            String val = e.getValue();
+            if (!requiredKeys.contains(key)) {
+                throw new CloudRuntimeException("Unexpected ONTAP key passed in url: " + key);
+            }
+            if (val == null || val.isEmpty()) {
+                throw new CloudRuntimeException("ONTAP primary storage creation failed, empty detail: " + key);
             }
         }
-
+        // Detect missing required keys
+        if (details.size() != requiredKeys.size()) {
+            Set<String> missing = new java.util.HashSet<>(requiredKeys);
+            missing.removeAll(details.keySet());
+            if (!missing.isEmpty()) {
+                throw new CloudRuntimeException("ONTAP primary storage creation failed, missing detail(s): " + missing);
+            }
+        }
+        // Default for IS_DISAGGREGATED if needed (after validation of presence)
+        details.putIfAbsent(Constants.IS_DISAGGREGATED, "false");
 
         // TODO: While testing need to check what does this actually do and if the fields corresponding to each protocol should also be set
         // TODO: scheme could be 'custom' in our case and we might have to ask 'protocol' separately to the user
         String path = "";
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
-            case NFS:
+            case NFS3:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 path = "/"+ storagePoolName;
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
+                //TODO: path for iSCSI
                 break;
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
-        }
-
-//        details.put(Constants.MANAGEMENT_LIF, url);
-
-        // Validate the ONTAP details
-        if(details.get(Constants.IS_DISAGGREGATED) == null || details.get(Constants.IS_DISAGGREGATED).isEmpty()) {
-            details.put(Constants.IS_DISAGGREGATED, "false");
         }
 
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
@@ -188,7 +197,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
 
         parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
-        parameters.setPort(443);
+        parameters.setPort(Constants.ONTAP_PORT);
         parameters.setPath(path);
         parameters.setTags(tags);
         parameters.setIsTagARule(isTagARule);

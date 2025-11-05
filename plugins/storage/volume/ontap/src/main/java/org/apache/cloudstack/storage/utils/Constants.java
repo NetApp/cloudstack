@@ -32,16 +32,27 @@ public class Constants {
     public static final String IS_DISAGGREGATED = "isDisaggregated";
     public static final String RUNNING = "running";
 
+    public static final int ONTAP_PORT = 443;
+
     public static final String JOB_RUNNING = "running";
     public static final String JOB_QUEUE = "queued";
     public static final String JOB_PAUSED = "paused";
     public static final String JOB_FAILURE = "failure";
     public static final String JOB_SUCCESS = "success";
 
+    // Query params
+    public static final String NAME = "name";
+    public static final String FIELDS = "fields";
+    public static final String AGGREGATES = "aggregates";
+    public static final String STATE = "state";
+
     public static final int JOB_MAX_RETRIES = 100;
     public static final int CREATE_VOLUME_CHECK_SLEEP_TIME = 2000;
 
     public static final String PATH_SEPARATOR = "/";
+    public static final String EQUALS = "=";
+    public static final String SEMICOLON = ";";
+    public static final String COMMA = ",";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
