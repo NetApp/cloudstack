@@ -147,7 +147,7 @@ public abstract class StorageStrategy {
      * throw exception in case of disaggregated ONTAP storage
      *
      * @param volumeName the name of the volume to create
-     * @param size       the size of the volume in bytes
+     * @param size the size of the volume in bytes
      * @return the created Volume object
      */
     public Volume createStorageVolume(String volumeName, Long size) {
@@ -477,21 +477,19 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     * getLun       for iSCSI, FC protocols
-     * getFile      for NFS3.0 and NFS4.1 protocols
-     * getNameSpace for Nvme/TCP and Nvme/FC protocol
-     *
-     * @param cloudstackVolume the CloudStack volume to retrieve
+     *     getLun       for iSCSI, FC protocols
+     *     getFile      for NFS3.0 and NFS4.1 protocols
+     *     getNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param cloudStackVolumeMap the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
-    abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * createiGroup       for iSCSI and FC protocols
-     * createExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * createSubsystem    for Nvme/TCP and Nvme/FC protocols
-     *
+     *     createiGroup       for iSCSI and FC protocols
+     *     createExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
@@ -499,20 +497,18 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * deleteiGroup       for iSCSI and FC protocols
-     * deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
-     *
+     *     deleteiGroup       for iSCSI and FC protocols
+     *     deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to delete
      */
     abstract public void deleteAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
-     * updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
+     *     updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
+     *     updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to update
      * @return the updated AccessGroup object
      */
@@ -520,32 +516,27 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * getiGroup       for iSCSI and FC protocols
-     * getExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * getNameSpace    for Nvme/TCP and Nvme/FC protocols
-     *
-     * @param accessGroup the access group to retrieve
-     * @return the retrieved AccessGroup object
+     @@ -306,22 +306,22 @@ public Volume getStorageVolume(Volume volume)
+      *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
+      * @param values
      */
-    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup getAccessGroup(Map<String, String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * lunMap  for iSCSI and FC protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
+     *     lunMap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void enableLogicalAccess(Map<String, String> values);
+    abstract public void enableLogicalAccess(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * lunUnmap  for iSCSI and FC protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
+     *     lunUnmap  for iSCSI and FC protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void disableLogicalAccess(Map<String, String> values);
+    abstract public void disableLogicalAccess(Map<String, String> values);
 
     private Boolean jobPollForSuccess(String jobUUID) {
         //Create URI for GET Job API

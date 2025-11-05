@@ -27,7 +27,9 @@ import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
+import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -104,7 +106,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap) {
         //TODO
         return null;
     }
@@ -305,19 +307,86 @@ public class UnifiedSANStrategy extends SANStrategy {
         return null;
     }
 
-    @Override
-    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
-        //TODO
-        return null;
+    public AccessGroup getAccessGroup(Map<String, String> values) {
+        s_logger.info("getAccessGroup : fetching Igroup with params {} ", values);
+        if (values == null || values.isEmpty()) {
+            s_logger.error("getAccessGroup: get Igroup failed. Invalid request: {}", values);
+            throw new CloudRuntimeException("getAccessGroup : get Igroup Failed, invalid request");
+        }
+        String svmName = values.get(Constants.SVM_DOT_NAME);
+        String igroupName = values.get(Constants.IGROUP_DOT_NAME);
+        if(svmName == null || igroupName == null || svmName.isEmpty() || igroupName.isEmpty()) {
+            s_logger.error("getAccessGroup: get Igroup failed. Invalid svm:{} or igroup name: {}", svmName, igroupName);
+            throw new CloudRuntimeException("getAccessGroup : Fget Igroup failed, invalid request");
+        }
+        try {
+            // Get AuthHeader
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // get Igroup
+            Map<String, Object> queryParams = Map.of(Constants.SVM_DOT_NAME, svmName, Constants.IGROUP_DOT_NAME, igroupName);
+            OntapResponse<Igroup> igroupResponse = sanFeignClient.getIgroupResponse(authHeader, queryParams);
+            if (igroupResponse == null || igroupResponse.getRecords() == null || igroupResponse.getRecords().size() == 0) {
+                s_logger.error("getAccessGroup: Failed to fetch Igroup");
+                throw new CloudRuntimeException("Failed to fetch Igroup");
+            }
+            Igroup igroup = igroupResponse.getRecords().get(0);
+            s_logger.debug("getAccessGroup: Igroup Details : {}", igroup);
+            s_logger.info("getAccessGroup: Fetched the Igroup successfully. LunName: {}", igroup.getName());
+
+            AccessGroup accessGroup = new AccessGroup();
+            accessGroup.setIgroup(igroup);
+            return accessGroup;
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while fetching Igroup. Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+        }
     }
 
-    @Override
-    void enableLogicalAccess(Map<String, String> values) {
-        //TODO
+    public void enableLogicalAccess(Map<String, String> values) {
+        s_logger.info("enableLogicalAccess : Creating LunMap with values {} ", values);
+        LunMap lunMapRequest = new LunMap();
+        String svmName = values.get(Constants.SVM_DOT_NAME);
+        String lunName = values.get(Constants.LUN_DOT_NAME);
+        String igroupName = values.get(Constants.IGROUP_DOT_NAME);
+        if(svmName == null || lunName == null || igroupName == null || svmName.isEmpty() || lunName.isEmpty() || igroupName.isEmpty()) {
+            s_logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: {}", values);
+            throw new CloudRuntimeException("enableLogicalAccess : Failed to create LunMap, invalid request");
+        }
+        try {
+            // Get AuthHeader
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // Create LunMap
+            OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
+            if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
+                s_logger.error("enableLogicalAccess: LunMap failed for Lun: {} and igroup: {}", lunName, igroupName);
+                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " +lunName+ " and igroup: " + igroupName);
+            }
+            LunMap lunMap = createdLunMap.getRecords().get(0);
+            s_logger.debug("enableLogicalAccess: LunMap created successfully. LunMap: {}", lunMap);
+            s_logger.info("enableLogicalAccess: LunMap created successfully.");
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while creating LunMap: {}. Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to create LunMap: " + e.getMessage());
+        }
     }
 
-    @Override
-    void disableLogicalAccess(Map<String, String> values) {
-        //TODO
+    public void disableLogicalAccess(Map<String, String> values) {
+        s_logger.info("disableLogicalAccess : Deleting LunMap with values {} ", values);
+        String lunUUID = values.get(Constants.LUN_DOT_UUID);
+        String igroupUUID = values.get(Constants.IGROUP_DOT_UUID);
+        if(lunUUID == null || igroupUUID == null || lunUUID.isEmpty() || igroupUUID.isEmpty()) {
+            s_logger.error("disableLogicalAccess: LunMap deletion failed. Invalid request values: {}", values);
+            throw new CloudRuntimeException("disableLogicalAccess : Failed to delete LunMap, invalid request");
+        }
+        try {
+            // Get AuthHeader
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // LunMap delete
+            sanFeignClient.deleteLunMap(authHeader, lunUUID, igroupUUID);
+            s_logger.info("disableLogicalAccess: LunMap deleted successfully.");
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while deleting LunMap: {}. Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to delete LunMap: " + e.getMessage());
+        }
     }
 }

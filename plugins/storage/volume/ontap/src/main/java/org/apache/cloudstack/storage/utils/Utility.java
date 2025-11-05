@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.utils;
 
 import com.cloud.storage.ScopeType;
+import com.cloud.hypervisor.Hypervisor;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
@@ -30,12 +31,19 @@ import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.feign.model.Igroup;
+import org.apache.cloudstack.storage.feign.model.Initiator;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.util.Base64Utils;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class Utility {
@@ -142,5 +150,62 @@ public class Utility {
 
     public static String generateExportPolicyName(String svmName, String volumeName){
         return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
+    }
+
+    public static AccessGroup createAccessGroupRequestByProtocol(StoragePoolVO storagePool, long scopeId, Map<String, String> details, List<String> hostsIdentifier) {
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        String svmName = details.get(Constants.SVM_NAME);
+        switch (protocol) {
+            case ISCSI:
+                // Access group name format: cs_svmName_scopeId
+                String igroupName = getIgroupName(svmName, scopeId);
+                Hypervisor.HypervisorType hypervisorType = storagePool.getHypervisor();
+                return createSANAccessGroupRequest(svmName, igroupName, hypervisorType, hostsIdentifier);
+            default:
+                s_logger.error("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
+                throw new CloudRuntimeException("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
+        }
+    }
+
+    public static AccessGroup createSANAccessGroupRequest(String svmName, String igroupName, Hypervisor.HypervisorType hypervisorType, List<String> hostsIdentifier) {
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+
+        if (svmName != null && !svmName.isEmpty()) {
+            Svm svm = new Svm();
+            svm.setName(svmName);
+            igroup.setSvm(svm);
+        }
+
+        if (igroupName != null && !igroupName.isEmpty()) {
+            igroup.setName(igroupName);
+        }
+
+        if (hypervisorType != null) {
+            String hypervisorName = hypervisorType.name();
+            igroup.setOsType(Igroup.OsTypeEnum.valueOf(getOSTypeFromHypervisor(hypervisorName)));
+        }
+
+        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
+            List<Initiator> initiators = new ArrayList<>();
+            for (String hostIdentifier : hostsIdentifier) {
+                Initiator initiator = new Initiator();
+                initiator.setName(hostIdentifier);
+                initiators.add(initiator);
+            }
+            igroup.setInitiators(initiators);
+        }
+        accessGroupRequest.setIgroup(igroup);
+        return accessGroupRequest;
+    }
+
+        public static String getLunName(String volName, String lunName) {
+        //Lun name in unified "/vol/VolumeName/LunName"
+        return Constants.VOLUME_PATH_PREFIX + volName + Constants.SLASH + lunName;
+    }
+
+    public static String getIgroupName(String svmName, long scopeId) {
+        // Igroup name format: cs_svmName_scopeId
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeId;
     }
 }
