@@ -27,6 +27,9 @@ import com.cloud.host.Host;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.ScopeType;
+import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
@@ -44,9 +47,8 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
-import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
@@ -64,6 +66,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
+    @Inject private VolumeDao volumeDao;
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
@@ -100,10 +103,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
         try {
-            s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]",
-                    dataStore, dataObject, dataObject.getType());
+            s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]", dataStore, dataObject, dataObject.getType());
+
+            StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+            if(storagePool == null) {
+                s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+            }
             if (dataObject.getType() == DataObjectType.VOLUME) {
-                path = createCloudStackVolumeForTypeVolume(dataStore, dataObject);
+                path = createCloudStackVolumeForTypeVolume(storagePool, dataObject);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
@@ -120,14 +128,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    private String createCloudStackVolumeForTypeVolume(DataStore dataStore, DataObject dataObject) {
-        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-        if(storagePool == null) {
-            s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
-        }
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
-        StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
+    private String createCloudStackVolumeForTypeVolume(StoragePoolVO storagePool, DataObject dataObject) {
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
         CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
@@ -172,12 +175,157 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean grantAccess(DataObject dataObject, Host host, DataStore dataStore) {
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("grantAccess: dataStore should not be null");
+        }
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("grantAccess: dataObject should not be null");
+        }
+        if (host == null) {
+            throw new InvalidParameterValueException("grantAccess: host should not be null");
+        }
+        try {
+            StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+            if(storagePool == null) {
+                s_logger.error("grantAccess : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("grantAccess : Storage Pool not found for id: " + dataStore.getId());
+            }
+            if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
+                s_logger.error("grantAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
+                throw new CloudRuntimeException("grantAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
+            }
+
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
+                if(volumeVO == null) {
+                    s_logger.error("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                }
+                grantAccessForVolume(storagePool, volumeVO, host);
+            } else {
+                s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
+                throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
+            }
+        } catch(Exception e){
+            s_logger.error("grantAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
+            throw new CloudRuntimeException("grantAccess: Failed with error :" + e.getMessage());
+        }
         return true;
+    }
+
+    private void grantAccessForVolume(StoragePoolVO storagePool, VolumeVO volumeVO, Host host) {
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+        String svmName = details.get(Constants.SVM_NAME);
+        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
+
+        if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            String accessGroupName = Utility.getIgroupName(svmName, scopeId);
+            CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
+            s_logger.info("grantAccessForVolume: Retrieved LUN [{}] details for volume [{}]", cloudStackVolume.getLun().getName(), volumeVO.getName());
+            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
+            if(accessGroup.getIgroup().getInitiators() == null || accessGroup.getIgroup().getInitiators().size() == 0 || !accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
+                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+            }
+
+            Map<String, String> enableLogicalAccessMap = new HashMap<>();
+            enableLogicalAccessMap.put(Constants.LUN_DOT_NAME, volumeVO.getPath());
+            enableLogicalAccessMap.put(Constants.SVM_DOT_NAME, svmName);
+            enableLogicalAccessMap.put(Constants.IGROUP_DOT_NAME, accessGroupName);
+            storageStrategy.enableLogicalAccess(enableLogicalAccessMap);
+        } else {
+            String errMsg = "grantAccessForVolume: Unsupported protocol type for volume grantAccess: " + details.get(Constants.PROTOCOL);
+            s_logger.error(errMsg);
+            throw new CloudRuntimeException(errMsg);
+        }
     }
 
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("revokeAccess: data store should not be null");
+        }
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("revokeAccess: data object should not be null");
+        }
+        if (host == null) {
+            throw new InvalidParameterValueException("revokeAccess: host should not be null");
+        }
+        try {
+            StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+            if(storagePool == null) {
+                s_logger.error("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
+            }
+            if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
+                s_logger.error("revokeAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
+                throw new CloudRuntimeException("revokeAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
+            }
 
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
+                if(volumeVO == null) {
+                    s_logger.error("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                }
+                revokeAccessForVolume(storagePool, volumeVO, host);
+            } else {
+                s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
+                throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
+            }
+        } catch(Exception e){
+            s_logger.error("revokeAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
+            throw new CloudRuntimeException("revokeAccess: Failed with error :" + e.getMessage());
+        }
+    }
+
+    private void revokeAccessForVolume(StoragePoolVO storagePool, VolumeVO volumeVO, Host host) {
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+        String svmName = details.get(Constants.SVM_NAME);
+        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
+
+        if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            String accessGroupName = Utility.getIgroupName(svmName, scopeId);
+            CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
+            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
+            //TODO check if initiator does exits in igroup, will throw the error ?
+            if(!accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
+                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+            }
+
+            Map<String, String> disableLogicalAccessMap = new HashMap<>();
+            disableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid().toString());
+            disableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
+            storageStrategy.disableLogicalAccess(disableLogicalAccessMap);
+        }
+    }
+
+
+    private CloudStackVolume getCloudStackVolumeByName(StorageStrategy storageStrategy, String svmName, String cloudStackVolumeName) {
+        Map<String, String> getCloudStackVolumeMap = new HashMap<>();
+        getCloudStackVolumeMap.put(Constants.NAME, cloudStackVolumeName);
+        getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
+        CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
+        if(cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
+            s_logger.error("getCloudStackVolumeByName: Failed to get LUN details [{}]", cloudStackVolumeName);
+            throw new CloudRuntimeException("getCloudStackVolumeByName: Failed to get LUN [" + cloudStackVolumeName + "]");
+        }
+        return cloudStackVolume;
+    }
+
+    private AccessGroup getAccessGroupByName(StorageStrategy storageStrategy, String svmName, String accessGroupName) {
+        Map<String, String> getAccessGroupMap = new HashMap<>();
+        getAccessGroupMap.put(Constants.NAME, accessGroupName);
+        getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
+        AccessGroup accessGroup = storageStrategy.getAccessGroup(getAccessGroupMap);
+        if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null) {
+            s_logger.error("getAccessGroupByName: Failed to get iGroup details [{}]", accessGroupName);
+            throw new CloudRuntimeException("getAccessGroupByName: Failed to get iGroup details [" + accessGroupName + "]");
+        }
+        return accessGroup;
     }
 
     @Override
@@ -268,25 +416,5 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Override
     public void detachVolumeFromAllStorageNodes(Volume volume) {
 
-    }
-
-    private StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
-        if (details == null || details.isEmpty()) {
-            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-        }
-        String protocol = details.get(Constants.PROTOCOL);
-        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
-        if (isValid) {
-            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
-            return storageStrategy;
-        } else {
-            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-        }
     }
 }

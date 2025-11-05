@@ -67,7 +67,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap) {
         //TODO
         return null;
     }
@@ -90,18 +90,18 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
+    public AccessGroup getAccessGroup(Map<String, String> values) {
         //TODO
         return null;
     }
 
     @Override
-    void enableLogicalAccess(Map<String, String> values) {
+    public void enableLogicalAccess(Map<String, String> values) {
         //TODO
     }
 
     @Override
-    void disableLogicalAccess(Map<String, String> values) {
+    public void disableLogicalAccess(Map<String, String> values) {
         //TODO
     }
 }

@@ -274,10 +274,10 @@ public abstract class StorageStrategy {
      *     getLun       for iSCSI, FC protocols
      *     getFile      for NFS3.0 and NFS4.1 protocols
      *     getNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param cloudstackVolume the CloudStack volume to retrieve
+     * @param cloudStackVolumeMap the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
-    abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -287,7 +287,7 @@ public abstract class StorageStrategy {
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
-    abstract AccessGroup createAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup createAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -310,13 +310,11 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     getiGroup       for iSCSI and FC protocols
-     *     getExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
-     * @param accessGroup the access group to retrieve
-     * @return the retrieved AccessGroup object
+     @@ -306,22 +306,22 @@ public Volume getStorageVolume(Volume volume)
+      *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
+      * @param values
      */
-    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup getAccessGroup(Map<String, String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -324,7 +322,7 @@ public abstract class StorageStrategy {
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void enableLogicalAccess(Map<String,String> values);
+    abstract public void enableLogicalAccess(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -332,5 +330,5 @@ public abstract class StorageStrategy {
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values
      */
-    abstract void disableLogicalAccess(Map<String,String> values);
+    abstract public void disableLogicalAccess(Map<String,String> values);
 }
