@@ -21,7 +21,6 @@ package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
-import feign.Util;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
