@@ -29,6 +29,7 @@ import java.util.Map;
 
 public interface SvmFeignClient {
 
+    // SVM Operation APIs
     @RequestLine("GET /api/svm/svms")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<Svm> getSvmResponse(@QueryMap Map<String, Object> queryMap, @Param("authHeader") String authHeader);

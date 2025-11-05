@@ -31,6 +31,8 @@
         <spring-cloud.version>2021.0.7</spring-cloud.version>
         <openfeign.version>11.0</openfeign.version>
         <json.version>20230227</json.version>
+        <jackson-databind.version>2.15.2</jackson-databind.version>
+        <httpclient.version>4.5.14</httpclient.version>
         <swagger-annotations.version>1.6.2</swagger-annotations.version>
         <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>2.22.2</maven-surefire-plugin.version>
@@ -67,11 +69,6 @@
             <artifactId>feign-httpclient</artifactId>
             <version>${openfeign.version}</version>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>io.github.openfeign</groupId>-->
-<!--            <artifactId>feign-slf4j</artifactId>-->
-<!--            <version>${openfeign.version}</version>-->
-<!--        </dependency>-->
         <dependency>
             <groupId>io.github.openfeign</groupId>
             <artifactId>feign-jackson</artifactId>
@@ -80,12 +77,12 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.15.2</version>
+            <version>${jackson-databind.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
-            <version>4.5.14</version>
+            <version>${httpclient.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.cloudstack</groupId>

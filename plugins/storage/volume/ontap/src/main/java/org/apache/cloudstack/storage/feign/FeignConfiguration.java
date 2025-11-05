@@ -101,7 +101,7 @@ public class FeignConfiguration {
             @Override
             public void encode(Object object, Type bodyType, feign.RequestTemplate template) throws EncodeException {
                 if (object == null) {
-                    template.body((byte[]) null, StandardCharsets.UTF_8);
+                    template.body(null, StandardCharsets.UTF_8);
                     return;
                 }
                 try {

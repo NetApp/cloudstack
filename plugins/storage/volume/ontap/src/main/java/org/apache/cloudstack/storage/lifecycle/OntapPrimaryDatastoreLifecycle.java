@@ -144,11 +144,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // Parse key=value pairs from URL into details (skip empty segments)
         if (url != null && !url.isEmpty()) {
-            for (String segment : url.split(";")) {
+            for (String segment : url.split(Constants.SEMICOLON)) {
                 if (segment.isEmpty()) {
                     continue;
                 }
-                String[] kv = segment.split("=", 2);
+                String[] kv = segment.split(Constants.EQUALS, 2);
                 if (kv.length == 2) {
                     details.put(kv[0].trim(), kv[1].trim());
                 }

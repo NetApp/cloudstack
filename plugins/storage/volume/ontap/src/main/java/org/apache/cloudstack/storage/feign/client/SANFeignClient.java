@@ -27,6 +27,7 @@ import feign.Param;
 import feign.RequestLine;
 import java.net.URI;
 
+//TODO: Proper URLs should be added in the RequestLine annotations below
 public interface SANFeignClient {
 
     // LUN Operation APIs
@@ -70,13 +71,6 @@ public interface SANFeignClient {
     @RequestLine("DELETE /{uuid}")
     @Headers({"Authorization: {authHeader}"})
     void deleteIgroup(@Param("baseUri") URI baseUri, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
-
-    @RequestLine("POST /{uuid}/igroups")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Igroup> addNestedIgroups(@Param("authHeader") String authHeader,
-                                          @Param("uuid") String uuid,
-                                          Igroup igroupNestedRequest,
-                                          @Param("returnRecords") boolean returnRecords);
 
     // LUN Maps Operation APIs
     @RequestLine("POST /")
