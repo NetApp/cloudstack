@@ -18,35 +18,28 @@
  */
 package org.apache.cloudstack.storage.feign.client;
 
-
-import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
-import org.springframework.cloud.openfeign.FeignClient;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMethod;
+import feign.Headers;
+import feign.Param;
+import feign.RequestLine;
 
-import java.net.URI;
-
-
-@Lazy
-@FeignClient(name = "VolumeClient", url = "https://{clusterIP}/api/storage/volumes", configuration = FeignConfiguration.class)
 public interface VolumeFeignClient {
 
-    @RequestMapping(method = RequestMethod.DELETE, value="/{uuid}")
-    void deleteVolume(URI baseURL, @RequestHeader("Authorization") String authHeader, @PathVariable("uuid") String uuid);
+    @RequestLine("DELETE /api/storage/volumes/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    void deleteVolume(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    @RequestMapping(method = RequestMethod.POST)
-    JobResponse createVolumeWithJob(URI baseURL, @RequestHeader("Authorization") String authHeader, @RequestBody Volume volumeRequest);
+    @RequestLine("POST /api/storage/volumes")
+    @Headers({"Authorization: {authHeader}"})
+    JobResponse createVolumeWithJob(@Param("authHeader") String authHeader, Volume volumeRequest);
 
-    @RequestMapping(method = RequestMethod.GET, value="/{uuid}")
-    Volume getVolumeByUUID(URI baseURL, @RequestHeader("Authorization") String authHeader, @PathVariable("uuid") String uuid);
+    @RequestLine("GET /api/storage/volumes/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Volume getVolumeByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    @RequestMapping(method = RequestMethod.PATCH)
-    JobResponse updateVolumeRebalancing(URI baseURL, @RequestHeader("accept") String acceptHeader, @PathVariable("uuid") String uuid, @RequestBody Volume volumeRequest);
-
+    @RequestLine("PATCH /api/storage/volumes/{uuid}")
+    @Headers({"Accept: {acceptHeader}", "Authorization: {authHeader}"})
+    JobResponse updateVolumeRebalancing(@Param("acceptHeader") String acceptHeader, @Param("uuid") String uuid, Volume volumeRequest);
 }
+

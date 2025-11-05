@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -31,17 +32,25 @@ import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
-import java.net.URI;
 import java.util.Map;
 
 public class UnifiedSANStrategy extends SANStrategy {
 
     private static final Logger s_logger = LogManager.getLogger(UnifiedSANStrategy.class);
-    @Inject private Utility utils;
-    @Inject private SANFeignClient sanFeignClient;
+    // Replace @Inject Feign client with FeignClientFactory
+    private final FeignClientFactory feignClientFactory;
+    private final SANFeignClient sanFeignClient;
+
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
+        String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
+        // Initialize FeignClientFactory and create SAN client
+        this.feignClientFactory = new FeignClientFactory();
+        this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
+    }
+
+    public void setOntapStorage(OntapStorage ontapStorage) {
+        this.storage = ontapStorage;
     }
 
     @Override
@@ -53,11 +62,10 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
         try {
             // Get AuthHeader
-            String authHeader = utils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun creation
-            URI url = utils.generateURI(Constants.CREATE_LUN);
             //TODO: It is possible that Lun creation will take time and we may need to handle through async job.
-            OntapResponse<Lun> createdLun = sanFeignClient.createLun(url, authHeader, true, cloudstackVolume.getLun());
+            OntapResponse<Lun> createdLun = sanFeignClient.createLun(authHeader, true, cloudstackVolume.getLun());
             if (createdLun == null || createdLun.getRecords() == null || createdLun.getRecords().size() == 0) {
                 s_logger.error("createCloudStackVolume: LUN creation failed for Lun {}", cloudstackVolume.getLun().getName());
                 throw new CloudRuntimeException("Failed to create Lun: " + cloudstackVolume.getLun().getName());
@@ -83,7 +91,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
-
+        //TODO
     }
 
     @Override
@@ -100,7 +108,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
-
+        //TODO
     }
 
     @Override
@@ -117,12 +125,11 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     void enableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
 
     @Override
     void disableLogicalAccess(Map<String, String> values) {
-
+        //TODO
     }
-
 }

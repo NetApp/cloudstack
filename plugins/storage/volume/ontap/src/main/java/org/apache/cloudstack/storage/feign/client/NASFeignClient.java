@@ -19,61 +19,65 @@
 
 package org.apache.cloudstack.storage.feign.client;
 
-import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
-import org.springframework.cloud.openfeign.FeignClient;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMethod;
-import java.net.URI;
+import feign.Headers;
+import feign.Param;
+import feign.RequestLine;
 
-/**
- * @author Administrator
- *
- */
-@Lazy
-@FeignClient(name = "NASClient", url = "" , configuration = FeignConfiguration.class)
+//TODO: Proper URLs should be added in the RequestLine annotations below
 public interface NASFeignClient {
 
-    //File Operations
+    // File Operations
+    @RequestLine("GET /{volumeUuid}/files/{path}")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<FileInfo> getFileResponse(@Param("authHeader") String authHeader,
+                                          @Param("volumeUuid") String volumeUUID,
+                                          @Param("path") String filePath);
 
-    @RequestMapping(method = RequestMethod.GET, value="/{volume.uuid}/files/{path}")
-    OntapResponse<FileInfo> getFileResponse(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                                            @PathVariable(name = "path", required = true) String filePath);
-    @RequestMapping(method = RequestMethod.DELETE, value="/{volume.uuid}/files/{path}")
-    void deleteFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath);
-    @RequestMapping(method = RequestMethod.PATCH, value="/{volume.uuid}/files/{path}")
-    void updateFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath, @RequestBody FileInfo fileInfo);
-    @RequestMapping(method = RequestMethod.POST, value="/{volume.uuid}/files/{path}")
-    void createFile(URI uri, @RequestHeader("Authorization") String header, @PathVariable(name = "volume.uuid", required = true) String volumeUUID,
-                    @PathVariable(name = "path", required = true) String filePath, @RequestBody FileInfo file);
+    @RequestLine("DELETE /{volumeUuid}/files/{path}")
+    @Headers({"Authorization: {authHeader}"})
+    void deleteFile(@Param("authHeader") String authHeader,
+                   @Param("volumeUuid") String volumeUUID,
+                   @Param("path") String filePath);
 
+    @RequestLine("PATCH /{volumeUuid}/files/{path}")
+    @Headers({"Authorization: {authHeader}"})
+    void updateFile(@Param("authHeader") String authHeader,
+                   @Param("volumeUuid") String volumeUUID,
+                   @Param("path") String filePath, FileInfo fileInfo);
 
+    @RequestLine("POST /{volumeUuid}/files/{path}")
+    @Headers({"Authorization: {authHeader}"})
+    void createFile(@Param("authHeader") String authHeader,
+                   @Param("volumeUuid") String volumeUUID,
+                   @Param("path") String filePath, FileInfo file);
 
-    //Export Policy Operations
+    // Export Policy Operations
+    @RequestLine("POST /")
+    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    ExportPolicy createExportPolicy(@Param("authHeader") String authHeader,
+                                   @Param("returnRecords") boolean returnRecords,
+                                    ExportPolicy exportPolicy);
 
-    @RequestMapping(method = RequestMethod.POST)
-    ExportPolicy createExportPolicy(URI uri, @RequestHeader("Authorization") String header, @RequestHeader("return_records") boolean value,
-                                    @RequestBody ExportPolicy exportPolicy);
+    @RequestLine("GET /")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> getExportPolicyResponse(@Param("authHeader") String authHeader);
 
-    //this method to get all export policies and also filtered export policy based on query params as a part of URL
-    @RequestMapping(method = RequestMethod.GET)
-    OntapResponse<ExportPolicy> getExportPolicyResponse(URI baseURL, @RequestHeader("Authorization") String header);
+    @RequestLine("GET /{id}")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> getExportPolicyById(@Param("authHeader") String authHeader,
+                                                   @Param("id") String id);
 
-    @RequestMapping(method = RequestMethod.GET, value="/{id}")
-    OntapResponse<ExportPolicy> getExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
+    @RequestLine("DELETE /{id}")
+    @Headers({"Authorization: {authHeader}"})
+    void deleteExportPolicyById(@Param("authHeader") String authHeader,
+                               @Param("id") String id);
 
-    @RequestMapping(method = RequestMethod.DELETE, value="/{id}")
-    void deleteExportPolicyById(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id);
-
-    @RequestMapping(method = RequestMethod.PATCH, value="/{id}")
-    OntapResponse<ExportPolicy> updateExportPolicy(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "id", required = true) String id,
-                                                   @RequestBody ExportPolicy request);
+    @RequestLine("PATCH /{id}")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
+                                                  @Param("id") String id,
+                                                  ExportPolicy request);
 }

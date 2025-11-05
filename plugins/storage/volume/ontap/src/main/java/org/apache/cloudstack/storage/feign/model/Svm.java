@@ -19,12 +19,15 @@
 
 package org.apache.cloudstack.storage.feign.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 import java.util.Objects;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class Svm {
     @JsonProperty("uuid")
@@ -48,8 +51,11 @@ public class Svm {
     @JsonProperty("aggregates_delegated")
     private Boolean aggregatesDelegated = null;
 
-    @JsonProperty("state.value")
+    @JsonProperty("state")
     private String state = null;
+
+    @JsonIgnore
+    private Links links = null;
 
     public String getUuid() {
         return uuid;
@@ -75,7 +81,6 @@ public class Svm {
         this.iscsiEnabled = iscsiEnabled;
     }
 
-
     public Boolean getFcpEnabled() {
         return fcpEnabled;
     }
@@ -83,7 +88,6 @@ public class Svm {
     public void setFcpEnabled(Boolean fcpEnabled) {
         this.fcpEnabled = fcpEnabled;
     }
-
 
     public Boolean getNfsEnabled() {
         return nfsEnabled;
@@ -93,7 +97,6 @@ public class Svm {
         this.nfsEnabled = nfsEnabled;
     }
 
-
     public List<Aggregate> getAggregates() {
         return aggregates;
     }
@@ -101,7 +104,6 @@ public class Svm {
     public void setAggregates(List<Aggregate> aggregates) {
         this.aggregates = aggregates;
     }
-
 
     public Boolean getAggregatesDelegated() {
         return aggregatesDelegated;
@@ -111,13 +113,20 @@ public class Svm {
         this.aggregatesDelegated = aggregatesDelegated;
     }
 
-
     public String getState() {
         return state;
     }
 
     public void setState(String state) {
         this.state = state;
+    }
+
+    public Links getLinks() {
+        return links;
+    }
+
+    public void setLinks(Links links) {
+        this.links = links;
     }
 
     @Override
@@ -131,4 +140,8 @@ public class Svm {
     public int hashCode() {
         return Objects.hashCode(getUuid());
     }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class Links { }
+
 }

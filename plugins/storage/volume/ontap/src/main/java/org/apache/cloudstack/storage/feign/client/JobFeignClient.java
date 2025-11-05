@@ -18,25 +18,14 @@
  */
 package org.apache.cloudstack.storage.feign.client;
 
-import org.apache.cloudstack.storage.feign.FeignConfiguration;
 import org.apache.cloudstack.storage.feign.model.Job;
-import org.springframework.cloud.openfeign.FeignClient;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import java.net.URI;
+import feign.Headers;
+import feign.Param;
+import feign.RequestLine;
 
-/**
- * @author Administrator
- *
- */
-@Lazy
-@FeignClient(name = "JobClient", url = "https://{clusterIP}/api/cluster/jobs" , configuration = FeignConfiguration.class)
 public interface JobFeignClient {
 
-    @RequestMapping(method = RequestMethod.GET, value="/{uuid}")
-    Job getJobByUUID(URI baseURL, @RequestHeader("Authorization") String header, @PathVariable(name = "uuid", required = true) String uuid);
-
+    @RequestLine("GET /api/cluster/jobs/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    Job getJobByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }
