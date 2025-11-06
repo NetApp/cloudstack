@@ -310,7 +310,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
     private boolean hostInitiatorFoundInIgroup(String hostInitiator, Igroup igroup) {
-        if(igroup != null || igroup.getInitiators() != null || hostInitiator != null || !hostInitiator.isEmpty()) {
+        if(igroup != null && igroup.getInitiators() != null && hostInitiator != null && !hostInitiator.isEmpty()) {
             for(Initiator initiator : igroup.getInitiators()) {
                 if(initiator.getName().equalsIgnoreCase(hostInitiator)) {
                     return true;
