@@ -47,6 +47,8 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.Igroup;
+import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -224,7 +226,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             s_logger.info("grantAccessForVolume: Retrieved LUN [{}] details for volume [{}]", cloudStackVolume.getLun().getName(), volumeVO.getName());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
-            if(accessGroup.getIgroup().getInitiators() == null || accessGroup.getIgroup().getInitiators().size() == 0 || !accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
+            if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
                 throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
             }
@@ -239,6 +241,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
+    }
+    private boolean hostInitiatorFoundInIgroup(String hostInitiator, Igroup igroup) {
+        if(igroup != null || igroup.getInitiators() != null || hostInitiator != null || !hostInitiator.isEmpty()) {
+            for(Initiator initiator : igroup.getInitiators()) {
+                if(initiator.getName().equalsIgnoreCase(hostInitiator)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Override
@@ -291,9 +303,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
             //TODO check if initiator does exits in igroup, will throw the error ?
-            if(!accessGroup.getIgroup().getInitiators().contains(host.getStorageUrl())) {
-                s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
-                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+            if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
+                s_logger.error("revokeAccessForVolume: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+                throw new CloudRuntimeException("revokeAccessForVolume: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
             }
 
             Map<String, String> disableLogicalAccessMap = new HashMap<>();
