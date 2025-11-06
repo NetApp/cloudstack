@@ -47,8 +47,7 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Initiator;
+import org.apache.cloudstack.storage.feign.model.*;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -112,8 +111,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
             }
             if (dataObject.getType() == DataObjectType.VOLUME) {
-                VolumeInfo volumeInfo = (VolumeInfo) dataObject;
-                path = createCloudStackVolumeForTypeVolume(dataStore, volumeInfo);
+                path = createCloudStackVolumeForTypeVolume(storagePool, (VolumeInfo)dataObject);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
@@ -152,6 +150,44 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + volumeObject;
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
+        }
+    }
+
+    private CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, VolumeInfo volumeInfo) {
+        CloudStackVolume cloudStackVolumeRequest = null;
+
+        String protocol = details.get(Constants.PROTOCOL);
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+            cloudStackVolumeRequest = new CloudStackVolume();
+            Lun lunRequest = new Lun();
+            Svm svm = new Svm();
+            svm.setName(details.get(Constants.SVM_NAME));
+            lunRequest.setSvm(svm);
+
+            LunSpace lunSpace = new LunSpace();
+            lunSpace.setSize(volumeInfo.getSize());
+            lunRequest.setSpace(lunSpace);
+            //Lun name is full path like in unified "/vol/VolumeName/LunName"
+            String lunFullName = Utility.getLunName(storagePool.getName(), volumeInfo.getName());
+            lunRequest.setName(lunFullName);
+
+            String hypervisorType = storagePool.getHypervisor().name();
+            String osType = null;
+            switch (hypervisorType) {
+                case Constants.KVM:
+                    osType = Lun.OsTypeEnum.LINUX.getValue();
+                    break;
+                default:
+                    String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                    s_logger.error(errMsg);
+                    throw new CloudRuntimeException(errMsg);
+            }
+            lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+
+            cloudStackVolumeRequest.setLun(lunRequest);
+            return cloudStackVolumeRequest;
+        } else {
+            throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
         }
     }
 
@@ -336,7 +372,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             //TODO check if initiator does exits in igroup, will throw the error ?
             if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("revokeAccessForVolume: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
-                throw new CloudRuntimeException("revokeAccessForVolume: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+                return;
             }
 
             Map<String, String> disableLogicalAccessMap = new HashMap<>();

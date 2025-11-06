@@ -46,7 +46,10 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
+import org.apache.cloudstack.storage.feign.model.Igroup;
+import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -325,13 +328,13 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the cluster
-        if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
+        if (!validateProtocolSupportAndFetchHostsIndentifier(hostsToConnect, protocol, hostsIdentifier)) {
             s_logger.error("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
             throw new CloudRuntimeException("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
         }
         //TODO - check if no host to connect then also need to create access group without initiators
         if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
-            AccessGroup accessGroupRequest = Utility.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+            AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
         }
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
@@ -391,12 +394,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the zone
-        if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
+        if (!validateProtocolSupportAndFetchHostsIndentifier(hostsToConnect, protocol, hostsIdentifier)) {
             s_logger.error("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
             throw new CloudRuntimeException("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
         }
         if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
-            AccessGroup accessGroupRequest = Utility.createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+            AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
             strategy.createAccessGroup(accessGroupRequest);
         }
         for (HostVO host : hostsToConnect) {
@@ -411,7 +414,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         return true;
     }
 
-    private boolean isProtocolSupportedByAllHosts(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
+    private boolean validateProtocolSupportAndFetchHostsIndentifier(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
         switch (protocolType) {
             case ISCSI:
                 String protocolPrefix = Constants.IQN;
@@ -427,6 +430,53 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 throw new CloudRuntimeException("isProtocolSupportedByAllHosts : Unsupported protocol: " + protocolType.name());
         }
         return true;
+    }
+
+    private AccessGroup createAccessGroupRequestByProtocol(StoragePoolVO storagePool, long scopeId, Map<String, String> details, List<String> hostsIdentifier) {
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        String svmName = details.get(Constants.SVM_NAME);
+        switch (protocol) {
+            case ISCSI:
+                // Access group name format: cs_svmName_scopeId
+                String igroupName = Utility.getIgroupName(svmName, scopeId);
+                Hypervisor.HypervisorType hypervisorType = storagePool.getHypervisor();
+                return createSANAccessGroupRequest(svmName, igroupName, hypervisorType, hostsIdentifier);
+            default:
+                s_logger.error("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
+                throw new CloudRuntimeException("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
+        }
+    }
+
+    private AccessGroup createSANAccessGroupRequest(String svmName, String igroupName, Hypervisor.HypervisorType hypervisorType, List<String> hostsIdentifier) {
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+
+        if (svmName != null && !svmName.isEmpty()) {
+            Svm svm = new Svm();
+            svm.setName(svmName);
+            igroup.setSvm(svm);
+        }
+
+        if (igroupName != null && !igroupName.isEmpty()) {
+            igroup.setName(igroupName);
+        }
+
+        if (hypervisorType != null) {
+            String hypervisorName = hypervisorType.name();
+            igroup.setOsType(Igroup.OsTypeEnum.valueOf(Utility.getOSTypeFromHypervisor(hypervisorName)));
+        }
+
+        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
+            List<Initiator> initiators = new ArrayList<>();
+            for (String hostIdentifier : hostsIdentifier) {
+                Initiator initiator = new Initiator();
+                initiator.setName(hostIdentifier);
+                initiators.add(initiator);
+            }
+            igroup.setInitiators(initiators);
+        }
+        accessGroupRequest.setIgroup(igroup);
+        return accessGroupRequest;
     }
 
     @Override

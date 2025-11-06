@@ -40,6 +40,11 @@ public interface SANFeignClient {
     @RequestLine("POST /api/storage/luns?return_records={returnRecords}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<Lun> createLun(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Lun lun);
+    @RequestLine("POST /api/storage/luns")
+    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
+                                @Param("returnRecords") boolean returnRecords,
+                                Lun lun);
 
     @RequestLine("GET /api/storage/luns")
     @Headers({"Authorization: {authHeader}"})
