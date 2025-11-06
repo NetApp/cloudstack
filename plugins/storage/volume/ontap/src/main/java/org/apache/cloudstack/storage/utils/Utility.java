@@ -62,44 +62,6 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
-       CloudStackVolume cloudStackVolumeRequest = null;
-
-       String protocol = details.get(Constants.PROTOCOL);
-       if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-           cloudStackVolumeRequest = new CloudStackVolume();
-           Lun lunRequest = new Lun();
-           Svm svm = new Svm();
-           svm.setName(details.get(Constants.SVM_NAME));
-           lunRequest.setSvm(svm);
-
-           LunSpace lunSpace = new LunSpace();
-           lunSpace.setSize(dataObject.getSize());
-           lunRequest.setSpace(lunSpace);
-           //Lun name is full path like in unified "/vol/VolumeName/LunName"
-           String lunFullName = getLunName(storagePool.getName(), dataObject.getName());
-           lunRequest.setName(lunFullName);
-
-           String hypervisorType = storagePool.getHypervisor().name();
-           String osType = null;
-           switch (hypervisorType) {
-               case Constants.KVM:
-                   osType = Lun.OsTypeEnum.LINUX.getValue();
-                   break;
-               default:
-                   String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
-                   s_logger.error(errMsg);
-                   throw new CloudRuntimeException(errMsg);
-           }
-           lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
-
-           cloudStackVolumeRequest.setLun(lunRequest);
-           return cloudStackVolumeRequest;
-       } else {
-           throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
-       }
-    }
-
     public static String getOSTypeFromHypervisor(String hypervisorType){
         switch (hypervisorType) {
             case Constants.KVM:
@@ -131,54 +93,7 @@ public class Utility {
         }
     }
 
-    public static AccessGroup createAccessGroupRequestByProtocol(StoragePoolVO storagePool, long scopeId, Map<String, String> details, List<String> hostsIdentifier) {
-        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
-        String svmName = details.get(Constants.SVM_NAME);
-        switch (protocol) {
-            case ISCSI:
-                // Access group name format: cs_svmName_scopeId
-                String igroupName = getIgroupName(svmName, scopeId);
-                Hypervisor.HypervisorType hypervisorType = storagePool.getHypervisor();
-                return createSANAccessGroupRequest(svmName, igroupName, hypervisorType, hostsIdentifier);
-            default:
-                s_logger.error("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
-                throw new CloudRuntimeException("createAccessGroupRequestByProtocol: Unsupported protocol " + protocol);
-        }
-    }
-
-    public static AccessGroup createSANAccessGroupRequest(String svmName, String igroupName, Hypervisor.HypervisorType hypervisorType, List<String> hostsIdentifier) {
-        AccessGroup accessGroupRequest = new AccessGroup();
-        Igroup igroup = new Igroup();
-
-        if (svmName != null && !svmName.isEmpty()) {
-            Svm svm = new Svm();
-            svm.setName(svmName);
-            igroup.setSvm(svm);
-        }
-
-        if (igroupName != null && !igroupName.isEmpty()) {
-            igroup.setName(igroupName);
-        }
-
-        if (hypervisorType != null) {
-            String hypervisorName = hypervisorType.name();
-            igroup.setOsType(Igroup.OsTypeEnum.valueOf(getOSTypeFromHypervisor(hypervisorName)));
-        }
-
-        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
-            List<Initiator> initiators = new ArrayList<>();
-            for (String hostIdentifier : hostsIdentifier) {
-                Initiator initiator = new Initiator();
-                initiator.setName(hostIdentifier);
-                initiators.add(initiator);
-            }
-            igroup.setInitiators(initiators);
-        }
-        accessGroupRequest.setIgroup(igroup);
-        return accessGroupRequest;
-    }
-
-        public static String getLunName(String volName, String lunName) {
+    public static String getLunName(String volName, String lunName) {
         //Lun name in unified "/vol/VolumeName/LunName"
         return Constants.VOLUME_PATH_PREFIX + volName + Constants.SLASH + lunName;
     }

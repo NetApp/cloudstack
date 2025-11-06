@@ -47,8 +47,7 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Initiator;
+import org.apache.cloudstack.storage.feign.model.*;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -113,7 +112,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
             }
             if (dataObject.getType() == DataObjectType.VOLUME) {
-                path = createCloudStackVolumeForTypeVolume(storagePool, dataObject);
+                path = createCloudStackVolumeForTypeVolume(storagePool, (VolumeInfo)dataObject);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
@@ -130,18 +129,56 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    private String createCloudStackVolumeForTypeVolume(StoragePoolVO storagePool, DataObject dataObject) {
+    private String createCloudStackVolumeForTypeVolume(StoragePoolVO storagePool, VolumeInfo volumeInfo) {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
-        CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, dataObject);
+        CloudStackVolume cloudStackVolumeRequest = createCloudStackVolumeRequestByProtocol(storagePool, details, volumeInfo);
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
             return cloudStackVolume.getLun().getName();
         } else {
-            String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + dataObject;
+            String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + volumeInfo;
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
+        }
+    }
+
+    private CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, VolumeInfo volumeInfo) {
+        CloudStackVolume cloudStackVolumeRequest = null;
+
+        String protocol = details.get(Constants.PROTOCOL);
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+            cloudStackVolumeRequest = new CloudStackVolume();
+            Lun lunRequest = new Lun();
+            Svm svm = new Svm();
+            svm.setName(details.get(Constants.SVM_NAME));
+            lunRequest.setSvm(svm);
+
+            LunSpace lunSpace = new LunSpace();
+            lunSpace.setSize(volumeInfo.getSize());
+            lunRequest.setSpace(lunSpace);
+            //Lun name is full path like in unified "/vol/VolumeName/LunName"
+            String lunFullName = Utility.getLunName(storagePool.getName(), volumeInfo.getName());
+            lunRequest.setName(lunFullName);
+
+            String hypervisorType = storagePool.getHypervisor().name();
+            String osType = null;
+            switch (hypervisorType) {
+                case Constants.KVM:
+                    osType = Lun.OsTypeEnum.LINUX.getValue();
+                    break;
+                default:
+                    String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                    s_logger.error(errMsg);
+                    throw new CloudRuntimeException(errMsg);
+            }
+            lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+
+            cloudStackVolumeRequest.setLun(lunRequest);
+            return cloudStackVolumeRequest;
+        } else {
+            throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
         }
     }
 
@@ -219,6 +256,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
+        //TODO- verify scopeId DatacenterId is zoneId
         long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
         if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
@@ -305,7 +343,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             //TODO check if initiator does exits in igroup, will throw the error ?
             if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("revokeAccessForVolume: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
-                throw new CloudRuntimeException("revokeAccessForVolume: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+                return;
             }
 
             Map<String, String> disableLogicalAccessMap = new HashMap<>();

@@ -33,13 +33,13 @@ import java.util.Map;
 public interface SANFeignClient {
 
     // LUN Operation APIs
-    @RequestLine("POST /")
+    @RequestLine("POST /api/storage/luns")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
     OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
                                 @Param("returnRecords") boolean returnRecords,
                                 Lun lun);
 
-    @RequestLine("GET /")
+    @RequestLine("GET /api/storage/luns")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<Lun> getLunResponse(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
