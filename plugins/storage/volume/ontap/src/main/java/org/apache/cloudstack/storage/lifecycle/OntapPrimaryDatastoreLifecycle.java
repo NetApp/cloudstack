@@ -392,7 +392,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the zone
         if (!isProtocolSupportedByAllHosts(hostsToConnect, protocol, hostsIdentifier)) {
-            s_logger.error("attachZone: Not all hosts in the cluster support the protocol: " + protocol.name());
+            s_logger.error("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
             throw new CloudRuntimeException("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
         }
         if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
