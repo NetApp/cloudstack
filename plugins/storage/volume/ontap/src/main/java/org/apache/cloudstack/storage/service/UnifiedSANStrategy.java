@@ -115,7 +115,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.NAME);
         if(svmName == null || lunName == null || svmName.isEmpty() || lunName.isEmpty()) {
-            s_logger.error("getCloudStackVolume: get Lun failed. Invalid svm:{} or igroup name: {}", svmName, lunName);
+            s_logger.error("getCloudStackVolume: get Lun failed. Invalid svm:{} or Lun name: {}", svmName, lunName);
             throw new CloudRuntimeException("getCloudStackVolume : Failed to get Lun, invalid request");
         }
         try {
