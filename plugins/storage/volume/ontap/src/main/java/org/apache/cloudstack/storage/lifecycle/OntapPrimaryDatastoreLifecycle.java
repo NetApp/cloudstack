@@ -270,7 +270,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         // TODO- need to check if no host to connect then throw exception or just continue
         logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
 
-        Map<String, String> details = primaryStore.getDetails();
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the cluster
