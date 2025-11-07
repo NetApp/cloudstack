@@ -222,6 +222,8 @@ public class UnifiedSANStrategy extends SANStrategy {
                 throw feignEx;
             }
 
+            s_logger.debug("createAccessGroup: createdIgroup: {}", createdIgroup);
+            s_logger.debug("createAccessGroup: createdIgroup Records: {}", createdIgroup.getRecords());
             if (createdIgroup == null || createdIgroup.getRecords() == null || createdIgroup.getRecords().isEmpty()) {
                 s_logger.error("createAccessGroup: Igroup creation failed for Igroup Name {}", igroupName);
                 throw new CloudRuntimeException("Failed to create Igroup: " + igroupName);
