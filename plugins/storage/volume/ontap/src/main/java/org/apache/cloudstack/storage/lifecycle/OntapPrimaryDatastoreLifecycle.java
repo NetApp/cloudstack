@@ -328,7 +328,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the cluster
-        if (!validateProtocolSupportAndFetchHostsIndentifier(hostsToConnect, protocol, hostsIdentifier)) {
+        if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
             s_logger.error("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
             throw new CloudRuntimeException("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
         }
@@ -394,7 +394,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the zone
-        if (!validateProtocolSupportAndFetchHostsIndentifier(hostsToConnect, protocol, hostsIdentifier)) {
+        if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
             s_logger.error("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
             throw new CloudRuntimeException("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
         }
@@ -414,7 +414,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         return true;
     }
 
-    private boolean validateProtocolSupportAndFetchHostsIndentifier(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
+    private boolean validateProtocolSupportAndFetchHostsIdentifier(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
         switch (protocolType) {
             case ISCSI:
                 String protocolPrefix = Constants.IQN;
@@ -427,7 +427,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 }
                 break;
             default:
-                throw new CloudRuntimeException("isProtocolSupportedByAllHosts : Unsupported protocol: " + protocolType.name());
+                throw new CloudRuntimeException("validateProtocolSupportAndFetchHostsIdentifier : Unsupported protocol: " + protocolType.name());
         }
         return true;
     }
