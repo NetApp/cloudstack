@@ -144,6 +144,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create Igroup
             OntapResponse<Igroup> createdIgroup = sanFeignClient.createIgroup(authHeader, true, accessGroup.getIgroup());
+            s_logger.debug("createAccessGroup: createdIgroup: {}", createdIgroup);
+            s_logger.debug("createAccessGroup: createdIgroup Records: {}", createdIgroup.getRecords());
             if (createdIgroup == null || createdIgroup.getRecords() == null || createdIgroup.getRecords().size() == 0) {
                 s_logger.error("createAccessGroup: Igroup creation failed for Igroup Name {}", accessGroup.getIgroup().getName());
                 throw new CloudRuntimeException("Failed to create Igroup: " + accessGroup.getIgroup().getName());

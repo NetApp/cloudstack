@@ -58,8 +58,7 @@ public interface SANFeignClient {
     // iGroup Operation APIs
     @RequestLine("POST /api/protocols/san/igroups")
     @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader,
-                                      @Param("returnRecords") boolean returnRecords, Igroup igroupRequest);
+    OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Igroup igroupRequest);
 
     @RequestLine("GET /api/protocols/san/igroups")
     @Headers({"Authorization: {authHeader}"})
