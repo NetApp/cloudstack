@@ -433,7 +433,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     }
 
     private AccessGroup createAccessGroupRequestByProtocol(StoragePoolVO storagePool, long scopeId, Map<String, String> details, List<String> hostsIdentifier) {
-        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toLowerCase());
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL).toUpperCase());
         String svmName = details.get(Constants.SVM_NAME);
         switch (protocol) {
             case ISCSI:
@@ -476,6 +476,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             igroup.setInitiators(initiators);
         }
         accessGroupRequest.setIgroup(igroup);
+        s_logger.debug("createSANAccessGroupRequest: request: " + accessGroupRequest);
         return accessGroupRequest;
     }
 
