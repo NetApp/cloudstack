@@ -516,9 +516,10 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     @@ -306,22 +306,22 @@ public AccessGroup getAccessGroup(Map<String, String> values)
-      *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
-      * @param values
+     *     getIGroup       example getIgroup   for iSCSI and FC protocols
+     *     getExportPolicy example getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+      * @param values map to get access group values like name, svm name etc.
      */
     abstract public AccessGroup getAccessGroup(Map<String, String> values);
 
