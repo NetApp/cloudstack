@@ -197,9 +197,6 @@ public class UnifiedSANStrategy extends SANStrategy {
                 throw new CloudRuntimeException("Failed to fetch Igroup");
             }
             Igroup igroup = igroupResponse.getRecords().get(0);
-            s_logger.debug("getAccessGroup: Igroup Details : {}", igroup);
-            s_logger.info("getAccessGroup: Fetched the Igroup successfully. IgroupName: {}", igroup.getName());
-
             AccessGroup accessGroup = new AccessGroup();
             accessGroup.setIgroup(igroup);
             return accessGroup;
@@ -226,7 +223,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
             if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
                 s_logger.error("enableLogicalAccess: LunMap failed for Lun: {} and igroup: {}", lunName, igroupName);
-                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " +lunName+ " and igroup: " + igroupName);
+                throw new CloudRuntimeException("Failed to perform LunMap for Lun: " + lunName + " and igroup: " + igroupName);
             }
             LunMap lunMap = createdLunMap.getRecords().get(0);
             s_logger.debug("enableLogicalAccess: LunMap created successfully, LunMap: {}", lunMap);

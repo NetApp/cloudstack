@@ -166,17 +166,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String lunFullName = Utility.getLunName(storagePool.getName(), volumeInfo.getName());
             lunRequest.setName(lunFullName);
 
-            String hypervisorType = storagePool.getHypervisor().name();
-            String osType = null;
-            switch (hypervisorType) {
-                case Constants.KVM:
-                    osType = Lun.OsTypeEnum.LINUX.getValue();
-                    break;
-                default:
-                    String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
-                    s_logger.error(errMsg);
-                    throw new CloudRuntimeException(errMsg);
-            }
+            String osType = Utility.getOSTypeFromHypervisor(storagePool.getHypervisor().name());
             lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
 
             cloudStackVolumeRequest.setLun(lunRequest);
@@ -270,7 +260,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
             if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
-                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName);
+                throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName + "]");
             }
 
             Map<String, String> enableLogicalAccessMap = new HashMap<>();

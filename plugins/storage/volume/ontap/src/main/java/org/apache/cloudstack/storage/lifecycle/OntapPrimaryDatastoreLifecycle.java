@@ -275,8 +275,9 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the cluster
         if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
-            s_logger.error("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
-            throw new CloudRuntimeException("attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name());
+            String errMsg = "attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name();
+            s_logger.error(errMsg);
+            throw new CloudRuntimeException(errMsg);
         }
         //TODO - check if no host to connect then also need to create access group without initiators
         if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
@@ -329,8 +330,9 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the zone
         if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
-            s_logger.error("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
-            throw new CloudRuntimeException("attachZone: Not all hosts in the zone support the protocol: " + protocol.name());
+            String errMsg = "attachZone: Not all hosts in the zone support the protocol: " + protocol.name();
+            s_logger.error(errMsg);
+            throw new CloudRuntimeException(errMsg);
         }
         if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
             AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
