@@ -33,11 +33,9 @@ import java.util.Map;
 public interface SANFeignClient {
 
     // LUN Operation APIs
-    @RequestLine("POST /api/storage/luns")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
-                                @Param("returnRecords") boolean returnRecords,
-                                Lun lun);
+    @RequestLine("POST /api/storage/luns?return_records={returnRecords}")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Lun lun);
 
     @RequestLine("GET /api/storage/luns")
     @Headers({"Authorization: {authHeader}"})
@@ -56,8 +54,8 @@ public interface SANFeignClient {
     void deleteLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     // iGroup Operation APIs
-    @RequestLine("POST /api/protocols/san/igroups")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    @RequestLine("POST /api/protocols/san/igroups?return_records={returnRecords}")
+    @Headers({"Authorization: {authHeader}"})
     OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Igroup igroupRequest);
 
     @RequestLine("GET /api/protocols/san/igroups")
