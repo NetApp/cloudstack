@@ -21,11 +21,15 @@ package org.apache.cloudstack.storage.service.model;
 
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.Volume;
 
 public class CloudStackVolume {
 
     private FileInfo file;
     private Lun lun;
+    private Volume volume;
+    // will be replaced after testing
+    private String cloudstackVolName;
 
     public FileInfo getFile() {
         return file;
@@ -41,5 +45,17 @@ public class CloudStackVolume {
 
     public void setLun(Lun lun) {
         this.lun = lun;
+    }
+    public Volume getVolume() {
+        return volume;
+    }
+    public void setVolume(Volume volume) {
+        this.volume = volume;
+    }
+    public String getCloudstackVolName() {
+        return cloudstackVolName;
+    }
+    public void setCloudstackVolName(String cloudstackVolName) {
+        this.cloudstackVolName = cloudstackVolName;
     }
 }
