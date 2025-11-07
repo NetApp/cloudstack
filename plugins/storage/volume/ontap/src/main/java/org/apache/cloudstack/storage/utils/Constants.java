@@ -31,6 +31,8 @@ public class Constants {
     public static final String MANAGEMENT_LIF = "managementLIF";
     public static final String IS_DISAGGREGATED = "isDisaggregated";
     public static final String RUNNING = "running";
+    public static final String VOLUME_UUID = "volumeUUID";
+    public static final String VOLUME_NAME = "volumeNAME";
 
     public static final int ONTAP_PORT = 443;
 

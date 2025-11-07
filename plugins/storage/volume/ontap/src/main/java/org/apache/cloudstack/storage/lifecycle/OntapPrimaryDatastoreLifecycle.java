@@ -40,10 +40,13 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParame
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -184,7 +187,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         String path;
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
-            case NFS3:
+            case NFS:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 path = details.get(Constants.MANAGEMENT_LIF) + ":/" + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
@@ -213,7 +216,9 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             long volumeSize = Long.parseLong(details.get(Constants.SIZE));
             s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
                     (volumeSize / (1024 * 1024 * 1024)) + " GB)");
-            storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+            Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+            details.put(Constants.VOLUME_UUID, volume.getUuid());
+            details.put(Constants.VOLUME_NAME, volume.getName());
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
@@ -241,10 +246,20 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
-        PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
-        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
+        PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
+        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
 
-        logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primarystore.getClusterId()));
+        logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primaryStore.getClusterId()));
+
+        Map<String, String> details = primaryStore.getDetails(); // TODO check while testing , if it is populated we can remove below db call
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        AccessGroup accessGroupRequest = new AccessGroup();
+        accessGroupRequest.setHostsToConnect(hostsToConnect);
+        accessGroupRequest.setScope(scope);
+        accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        strategy.createAccessGroup(accessGroupRequest);
+
+        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
             // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
@@ -265,9 +280,18 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
         logger.debug("In attachZone for ONTAP primary storage");
-        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
 
+        PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
+        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
+
+        Map<String, String> details = primaryStore.getDetails(); // TODO check while testing , if it is populated we can remove below db call
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        AccessGroup accessGroupRequest = new AccessGroup();
+        accessGroupRequest.setHostsToConnect(hostsToConnect);
+        accessGroupRequest.setScope(scope);
+        accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        strategy.createAccessGroup(accessGroupRequest);
         for (HostVO host : hostsToConnect) {
             // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {

@@ -26,39 +26,39 @@ import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
 
-//TODO: Proper URLs should be added in the RequestLine annotations below
 public interface NASFeignClient {
 
     // File Operations
     @RequestLine("GET /{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<FileInfo> getFileResponse(@Param("authHeader") String authHeader,
-                                          @Param("volumeUuid") String volumeUUID,
-                                          @Param("path") String filePath);
+                                            @Param("volumeUuid") String volumeUUID,
+                                            @Param("path") String filePath);
 
     @RequestLine("DELETE /{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void deleteFile(@Param("authHeader") String authHeader,
-                   @Param("volumeUuid") String volumeUUID,
-                   @Param("path") String filePath);
+                    @Param("volumeUuid") String volumeUUID,
+                    @Param("path") String filePath);
 
     @RequestLine("PATCH /{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void updateFile(@Param("authHeader") String authHeader,
-                   @Param("volumeUuid") String volumeUUID,
-                   @Param("path") String filePath, FileInfo fileInfo);
+                    @Param("volumeUuid") String volumeUUID,
+                    @Param("path") String filePath,
+                    FileInfo fileInfo);
 
     @RequestLine("POST /{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void createFile(@Param("authHeader") String authHeader,
-                   @Param("volumeUuid") String volumeUUID,
-                   @Param("path") String filePath, FileInfo file);
+                    @Param("volumeUuid") String volumeUUID,
+                    @Param("path") String filePath,
+                    FileInfo file);
 
     // Export Policy Operations
     @RequestLine("POST /")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    @Headers({"Authorization: {authHeader}"})
     ExportPolicy createExportPolicy(@Param("authHeader") String authHeader,
-                                   @Param("returnRecords") boolean returnRecords,
                                     ExportPolicy exportPolicy);
 
     @RequestLine("GET /")
@@ -68,16 +68,16 @@ public interface NASFeignClient {
     @RequestLine("GET /{id}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<ExportPolicy> getExportPolicyById(@Param("authHeader") String authHeader,
-                                                   @Param("id") String id);
+                                                    @Param("id") String id);
 
     @RequestLine("DELETE /{id}")
     @Headers({"Authorization: {authHeader}"})
     void deleteExportPolicyById(@Param("authHeader") String authHeader,
-                               @Param("id") String id);
+                                @Param("id") String id);
 
     @RequestLine("PATCH /{id}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
-                                                  @Param("id") String id,
-                                                  ExportPolicy request);
+                                                   @Param("id") String id,
+                                                   ExportPolicy request);
 }
