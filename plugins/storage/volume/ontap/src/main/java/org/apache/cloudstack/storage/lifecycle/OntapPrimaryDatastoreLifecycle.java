@@ -280,8 +280,13 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
         //TODO - check if no host to connect then also need to create access group without initiators
         if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
-            AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
-            strategy.createAccessGroup(accessGroupRequest);
+            try {
+                AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+                strategy.createAccessGroup(accessGroupRequest);
+            } catch (Exception e) {
+                s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId(), e);
+                throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId(), e);
+            }
         }
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
