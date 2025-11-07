@@ -156,8 +156,11 @@ public abstract class StorageStrategy {
         volumeRequest.setSize(size);
         // Make the POST API call to create the volume
         try {
-            // Create URI for POST CreateVolume API
-            // Call the VolumeFeignClient to create the volume
+            /*
+              ONTAP created a default rule of 0.0.0.0 if no export rule are defined while creating volume
+              and since in storage pool creation, cloudstack is not aware of the host , we can either create default or
+              permissive rule and later update it as part of attachCluster or attachZone implementation
+             */
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
                 throw new CloudRuntimeException("Failed to initiate volume creation for " + volumeName);
@@ -192,8 +195,20 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Failed to create volume: " + e.getMessage());
         }
         s_logger.info("Volume created successfully: " + volumeName);
-        //TODO
-        return null;
+        // Below code is to update volume uuid to storage pool mapping once and used for all other workflow saving get volume call
+        OntapResponse<Volume> ontapVolume = new OntapResponse<>();
+        try {
+            Map<String, Object> queryParams = Map.of(Constants.NAME, volumeName);
+             ontapVolume = volumeFeignClient.getVolume(authHeader, queryParams);
+            if ((ontapVolume == null || ontapVolume.getRecords().isEmpty())) {
+                s_logger.error("Exception while getting volume volume not found:");
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName);
+            }
+        }catch (Exception e) {
+            s_logger.error("Exception while getting volume: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch volume: " + e.getMessage());
+        }
+        return ontapVolume.getRecords().get(0);
     }
 
     /**
@@ -287,7 +302,7 @@ public abstract class StorageStrategy {
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
-    abstract AccessGroup createAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup createAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
