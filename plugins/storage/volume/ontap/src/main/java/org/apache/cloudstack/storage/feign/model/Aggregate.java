@@ -22,12 +22,43 @@ package org.apache.cloudstack.storage.feign.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
 
 import java.util.Objects;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class Aggregate {
+    // Replace previous enum with case-insensitive mapping
+    public enum StateEnum {
+        ONLINE("online");
+        private final String value;
+
+        StateEnum(String value) {
+            this.value = value;
+        }
+
+        @JsonValue
+        public String getValue() {
+            return value;
+        }
+
+        @Override
+        public String toString() {
+            return String.valueOf(value);
+        }
+
+        @JsonCreator
+        public static StateEnum fromValue(String text) {
+            for (StateEnum b : StateEnum.values()) {
+                if (String.valueOf(b.value).equals(text)) {
+                    return b;
+                }
+            }
+            return null;
+        }
+    }
 
     @JsonProperty("name")
     private String name = null;
@@ -39,6 +70,13 @@ public class Aggregate {
 
     @JsonProperty("uuid")
     private String uuid = null;
+
+    @JsonProperty("state")
+    private StateEnum state = null;
+
+    @JsonProperty("space")
+    private AggregateSpace space = null;
+
 
     public Aggregate name(String name) {
         this.name = name;
@@ -63,6 +101,21 @@ public class Aggregate {
 
     public void setUuid(String uuid) {
         this.uuid = uuid;
+    }
+
+    public StateEnum getState() {
+        return state;
+    }
+
+    public AggregateSpace getSpace() {
+        return space;
+    }
+
+    public Double getAvailableBlockStorageSpace() {
+        if (space != null && space.blockStorage != null) {
+            return space.blockStorage.available;
+        }
+        return null;
     }
 
 
@@ -93,6 +146,20 @@ public class Aggregate {
     @Override
     public String toString() {
         return "DiskAggregates [name=" + name + ", uuid=" + uuid + "]";
+    }
+
+    public static class AggregateSpace {
+        @JsonProperty("block_storage")
+        private AggregateSpaceBlockStorage blockStorage = null;
+    }
+
+    public static class AggregateSpaceBlockStorage {
+        @JsonProperty("available")
+        private Double available = null;
+        @JsonProperty("size")
+        private Double size = null;
+        @JsonProperty("used")
+        private Double used = null;
     }
 
 }

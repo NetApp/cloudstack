@@ -87,14 +87,14 @@ public class Job {
     }
 
     public static class Links {
-        @JsonProperty("message")
+        @JsonProperty("self")
         private Self self;
         public Self getSelf() { return self; }
         public void setSelf(Self self) { this.self = self; }
     }
 
     public static class Self {
-        @JsonProperty("message")
+        @JsonProperty("href")
         private String href;
         public String getHref() { return href; }
         public void setHref(String href) { this.href = href; }

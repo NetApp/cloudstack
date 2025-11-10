@@ -1,5 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 package org.apache.cloudstack.storage.feign;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import feign.RequestInterceptor;
 import feign.Retryer;
 import feign.Client;
@@ -11,7 +31,6 @@ import feign.codec.DecodeException;
 import feign.codec.EncodeException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
@@ -36,13 +55,11 @@ public class FeignConfiguration {
     private final int retryMaxInterval = 5;
     private final String ontapFeignMaxConnection = "80";
     private final String ontapFeignMaxConnectionPerRoute = "20";
-    private final JsonMapper jsonMapper;
+    private final ObjectMapper objectMapper;
 
     public FeignConfiguration() {
-        this.jsonMapper = JsonMapper.builder()
-                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .findAndAddModules()
-                .build();
+        this.objectMapper = new ObjectMapper();
+        this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
     public Client createClient() {
@@ -105,7 +122,7 @@ public class FeignConfiguration {
                     return;
                 }
                 try {
-                    byte[] jsonBytes = jsonMapper.writeValueAsBytes(object);
+                    byte[] jsonBytes = objectMapper.writeValueAsBytes(object);
                     template.body(jsonBytes, StandardCharsets.UTF_8);
                     template.header("Content-Type", "application/json");
                 } catch (JsonProcessingException e) {
@@ -126,7 +143,7 @@ public class FeignConfiguration {
                 try (InputStream bodyStream = response.body().asInputStream()) {
                     json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                     logger.debug("Decoding JSON response: {}", json);
-                    return jsonMapper.readValue(json, jsonMapper.getTypeFactory().constructType(type));
+                    return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
                 } catch (IOException e) {
                     logger.error("Error decoding JSON response. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);

@@ -29,6 +29,7 @@ import com.cloud.resource.ResourceManager;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
+import com.cloud.storage.StoragePoolAutomation;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.google.common.base.Preconditions;
 import org.apache.cloudstack.engine.subsystem.api.storage.ClusterScope;
@@ -38,8 +39,10 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -59,6 +62,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
+    @Inject private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
+    @Inject private StoragePoolAutomation _storagePoolAutomation;
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     // ONTAP minimum volume size is 1.56 GB (1677721600 bytes)
@@ -199,21 +204,25 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
 
         // Connect to ONTAP and create volume
+        long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(
                 details.get(Constants.USERNAME),
                 details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF),
                 details.get(Constants.SVM_NAME),
+                volumeSize,
                 protocol,
                 Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED).toLowerCase()));
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
-            long volumeSize = Long.parseLong(details.get(Constants.SIZE));
             s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
                     (volumeSize / (1024 * 1024 * 1024)) + " GB)");
-            storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+            Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+            s_logger.info("ONTAP volume created successfully: " + volume.getName());
+            details.put(Constants.VOLUME_NAME, volume.getName());
+            details.put(Constants.VOLUME_UUID, volume.getUuid());
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
@@ -282,17 +291,49 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean maintain(DataStore store) {
-        return true;
+        _storagePoolAutomation.maintain(store);
+        return _dataStoreHelper.maintain(store);
     }
 
     @Override
     public boolean cancelMaintain(DataStore store) {
-        return true;
+        _storagePoolAutomation.cancelMaintain(store);
+        return _dataStoreHelper.cancelMaintain(store);
     }
 
     @Override
     public boolean deleteDataStore(DataStore store) {
-        return true;
+        // Deletion of underlying ONTAP volume
+        long storagePoolId = store.getId();
+        // Get the StoragePool details
+        StoragePool storagePool = _storageMgr.getStoragePool(storagePoolId);
+        if (storagePool == null) {
+            s_logger.warn("Storage pool not found for id: " + storagePoolId + ", cannot delete underlying ONTAP volume");
+            return false;// TODO: As the CS entity is not present, should we return true here?
+        }
+        Map<String, String> details = _datastoreDetailsDao.listDetailsKeyPairs(storagePoolId);
+        // Set the Volume object for deletion
+        Volume volume = new Volume();
+        volume.setName(details.get(Constants.VOLUME_NAME));
+        volume.setUuid(details.get(Constants.VOLUME_UUID));
+        // Call Volume deletion through StorageStrategy
+        OntapStorage ontapStorage = new OntapStorage(
+                details.get(Constants.USERNAME),
+                details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENT_LIF),
+                details.get(Constants.SVM_NAME),
+                Long.parseLong(details.get(Constants.SIZE)),
+                ProtocolType.valueOf(details.get(Constants.PROTOCOL)),
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED).toLowerCase())
+        );
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+            s_logger.info("Deleting ONTAP volume '" + volume.getName() + "' for storage pool id: " + storagePoolId);
+            storageStrategy.deleteStorageVolume(volume);
+        }
+
+        return _dataStoreHelper.deletePrimaryDataStore(store);
     }
 
     @Override
@@ -307,12 +348,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public void enableStoragePool(DataStore store) {
-
+        _dataStoreHelper.enable(store);
     }
 
     @Override
     public void disableStoragePool(DataStore store) {
-
+        _dataStoreHelper.disable(store);
     }
 
     @Override

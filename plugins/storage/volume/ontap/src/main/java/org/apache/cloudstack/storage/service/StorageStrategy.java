@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.service;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
+import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
@@ -53,6 +54,7 @@ import java.util.Objects;
 public abstract class StorageStrategy {
     // Replace @Inject Feign clients with FeignClientFactory
     private final FeignClientFactory feignClientFactory;
+    private final AggregateFeignClient aggregateFeignClient;
     private final VolumeFeignClient volumeFeignClient;
     private final SvmFeignClient svmFeignClient;
     private final JobFeignClient jobFeignClient;
@@ -72,6 +74,7 @@ public abstract class StorageStrategy {
         s_logger.info("Initializing StorageStrategy with base URL: " + baseURL);
         // Initialize FeignClientFactory and create clients
         this.feignClientFactory = new FeignClientFactory();
+        this.aggregateFeignClient = feignClientFactory.createClient(AggregateFeignClient.class, baseURL);
         this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
@@ -110,12 +113,31 @@ public abstract class StorageStrategy {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
             }
+            // TODO: Implement logic to select appropriate aggregate based on storage requirements
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 s_logger.error("No aggregates are assigned to SVM " + svmName);
                 throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
             }
-            this.aggregates = aggrs;
+            // Set the aggregates which are according to the storage requirements
+            for (Aggregate aggr : aggrs) {
+                s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
+                Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
+                if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
+                    s_logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
+                    continue;
+                } else if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null ||
+                        aggrResp.getAvailableBlockStorageSpace() <= storage.getSize().doubleValue()) {
+                    s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
+                    continue;
+                }
+                s_logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
+                this.aggregates = List.of(aggr);
+            }
+            if (this.aggregates == null || this.aggregates.isEmpty()) {
+                s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+                throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+            }
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
@@ -131,7 +153,7 @@ public abstract class StorageStrategy {
      * throw exception in case of disaggregated ONTAP storage
      *
      * @param volumeName the name of the volume to create
-     * @param size the size of the volume in bytes
+     * @param size       the size of the volume in bytes
      * @return the created Volume object
      */
     public Volume createStorageVolume(String volumeName, Long size) {
@@ -165,35 +187,34 @@ public abstract class StorageStrategy {
             String jobUUID = jobResponse.getJob().getUuid();
 
             //Create URI for GET Job API
-            int jobRetryCount = 0;
-            Job createVolumeJob = null;
-            while(createVolumeJob == null || !createVolumeJob.getState().equals(Constants.JOB_SUCCESS)) {
-                if(jobRetryCount >= Constants.JOB_MAX_RETRIES) {
-                    s_logger.error("Job to create volume " + volumeName + " did not complete within expected time.");
-                    throw new CloudRuntimeException("Job to create volume " + volumeName + " did not complete within expected time.");
-                }
-
-                try {
-                    createVolumeJob = jobFeignClient.getJobByUUID(authHeader, jobUUID);
-                    if (createVolumeJob == null) {
-                        s_logger.warn("Job with UUID " + jobUUID + " not found. Retrying...");
-                    } else if (createVolumeJob.getState().equals(Constants.JOB_FAILURE)) {
-                        throw new CloudRuntimeException("Job to create volume " + volumeName + " failed with error: " + createVolumeJob.getMessage());
-                    }
-                } catch (FeignException.FeignClientException e) {
-                    throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
-                }
-
-                jobRetryCount++;
-                Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
+            Boolean jobSucceeded = jobPollForSuccess(jobUUID);
+            if (!jobSucceeded) {
+                s_logger.error("Volume creation job failed for volume: " + volumeName);
+                throw new CloudRuntimeException("Volume creation job failed for volume: " + volumeName);
             }
+            s_logger.info("Volume creation job completed successfully for volume: " + volumeName);
         } catch (Exception e) {
             s_logger.error("Exception while creating volume: ", e);
             throw new CloudRuntimeException("Failed to create volume: " + e.getMessage());
         }
+        // Verify if the Volume has been created and set the Volume object
+        // Call the VolumeFeignClient to get the created volume details
+        OntapResponse<Volume> volumesResponse = volumeFeignClient.getAllVolumes(authHeader, Map.of(Constants.NAME, volumeName));
+        if (volumesResponse == null || volumesResponse.getRecords() == null || volumesResponse.getRecords().isEmpty()) {
+            s_logger.error("Volume " + volumeName + " not found after creation.");
+            throw new CloudRuntimeException("Volume " + volumeName + " not found after creation.");
+        }
+        Volume createdVolume = volumesResponse.getRecords().get(0);
+        if (createdVolume == null) {
+            s_logger.error("Failed to retrieve details of the created volume " + volumeName);
+            throw new CloudRuntimeException("Failed to retrieve details of the created volume " + volumeName);
+        } else if (createdVolume.getName() == null || !createdVolume.getName().equals(volumeName)) {
+            s_logger.error("Mismatch in created volume name. Expected: " + volumeName + ", Found: " + createdVolume.getName());
+            throw new CloudRuntimeException("Mismatch in created volume name. Expected: " + volumeName + ", Found: " + createdVolume.getName());
+        }
         s_logger.info("Volume created successfully: " + volumeName);
-        //TODO
-        return null;
+        // Return the created Volume object
+        return createdVolume;
     }
 
     /**
@@ -204,8 +225,7 @@ public abstract class StorageStrategy {
      * @param volume the volume to update
      * @return the updated Volume object
      */
-    public Volume updateStorageVolume(Volume volume)
-    {
+    public Volume updateStorageVolume(Volume volume) {
         //TODO
         return null;
     }
@@ -217,9 +237,24 @@ public abstract class StorageStrategy {
      *
      * @param volume the volume to delete
      */
-    public void deleteStorageVolume(Volume volume)
-    {
-        //TODO
+    public void deleteStorageVolume(Volume volume) {
+        s_logger.info("Deleting ONTAP volume by name: " + volume.getName() + " and uuid: " + volume.getUuid());
+        // Calling the VolumeFeignClient to delete the volume
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        try {
+            // TODO: Implement lun and file deletion, if any, before deleting the volume
+            JobResponse jobResponse = volumeFeignClient.deleteVolume(authHeader, volume.getUuid());
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid());
+            if (!jobSucceeded) {
+                s_logger.error("Volume deletion job failed for volume: " + volume.getName());
+                throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
+            }
+            s_logger.info("Volume deleted successfully: " + volume.getName());
+        } catch (FeignException.FeignClientException e) {
+            s_logger.error("Exception while deleting volume: ", e);
+            throw new CloudRuntimeException("Failed to delete volume: " + e.getMessage());
+        }
+        s_logger.info("ONTAP volume deletion process completed for volume: " + volume.getName());
     }
 
     /**
@@ -230,8 +265,7 @@ public abstract class StorageStrategy {
      * @param volume the volume to retrieve
      * @return the retrieved Volume object
      */
-    public Volume getStorageVolume(Volume volume)
-    {
+    public Volume getStorageVolume(Volume volume) {
         //TODO
         return null;
     }
@@ -239,9 +273,10 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     *     createLun       for iSCSI, FC protocols
-     *     createFile      for NFS3.0 and NFS4.1 protocols
-     *     createNameSpace for Nvme/TCP and Nvme/FC protocol
+     * createLun       for iSCSI, FC protocols
+     * createFile      for NFS3.0 and NFS4.1 protocols
+     * createNameSpace for Nvme/TCP and Nvme/FC protocol
+     *
      * @param cloudstackVolume the CloudStack volume to create
      * @return the created CloudStackVolume object
      */
@@ -250,9 +285,10 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     *     updateLun       for iSCSI, FC protocols
-     *     updateFile      for NFS3.0 and NFS4.1 protocols
-     *     updateNameSpace for Nvme/TCP and Nvme/FC protocol
+     * updateLun       for iSCSI, FC protocols
+     * updateFile      for NFS3.0 and NFS4.1 protocols
+     * updateNameSpace for Nvme/TCP and Nvme/FC protocol
+     *
      * @param cloudstackVolume the CloudStack volume to update
      * @return the updated CloudStackVolume object
      */
@@ -261,9 +297,10 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     *     deleteLun       for iSCSI, FC protocols
-     *     deleteFile      for NFS3.0 and NFS4.1 protocols
-     *     deleteNameSpace for Nvme/TCP and Nvme/FC protocol
+     * deleteLun       for iSCSI, FC protocols
+     * deleteFile      for NFS3.0 and NFS4.1 protocols
+     * deleteNameSpace for Nvme/TCP and Nvme/FC protocol
+     *
      * @param cloudstackVolume the CloudStack volume to delete
      */
     abstract void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
@@ -271,9 +308,10 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     *     getLun       for iSCSI, FC protocols
-     *     getFile      for NFS3.0 and NFS4.1 protocols
-     *     getNameSpace for Nvme/TCP and Nvme/FC protocol
+     * getLun       for iSCSI, FC protocols
+     * getFile      for NFS3.0 and NFS4.1 protocols
+     * getNameSpace for Nvme/TCP and Nvme/FC protocol
+     *
      * @param cloudstackVolume the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
@@ -281,9 +319,10 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     createiGroup       for iSCSI and FC protocols
-     *     createExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
+     * createiGroup       for iSCSI and FC protocols
+     * createExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     * createSubsystem    for Nvme/TCP and Nvme/FC protocols
+     *
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
@@ -291,18 +330,20 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     deleteiGroup       for iSCSI and FC protocols
-     *     deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
+     * deleteiGroup       for iSCSI and FC protocols
+     * deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     * deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
+     *
      * @param accessGroup the access group to delete
      */
     abstract void deleteAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
-     *     updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
-     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
+     * updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
+     * //TODO  for Nvme/TCP and Nvme/FC protocols
+     *
      * @param accessGroup the access group to update
      * @return the updated AccessGroup object
      */
@@ -310,9 +351,10 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     getiGroup       for iSCSI and FC protocols
-     *     getExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     *     getNameSpace    for Nvme/TCP and Nvme/FC protocols
+     * getiGroup       for iSCSI and FC protocols
+     * getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     * getNameSpace    for Nvme/TCP and Nvme/FC protocols
+     *
      * @param accessGroup the access group to retrieve
      * @return the retrieved AccessGroup object
      */
@@ -320,17 +362,56 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     lunMap  for iSCSI and FC protocols
-     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * lunMap  for iSCSI and FC protocols
+     * //TODO  for Nvme/TCP and Nvme/FC protocols
+     *
      * @param values
      */
-    abstract void enableLogicalAccess(Map<String,String> values);
+    abstract void enableLogicalAccess(Map<String, String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     lunUnmap  for iSCSI and FC protocols
-     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * lunUnmap  for iSCSI and FC protocols
+     * //TODO  for Nvme/TCP and Nvme/FC protocols
+     *
      * @param values
      */
-    abstract void disableLogicalAccess(Map<String,String> values);
+    abstract void disableLogicalAccess(Map<String, String> values);
+
+    private Boolean jobPollForSuccess(String jobUUID) {
+        //Create URI for GET Job API
+        int jobRetryCount = 0;
+        Job jobResp = null;
+        try {
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            while (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
+                if (jobRetryCount >= Constants.JOB_MAX_RETRIES) {
+                    s_logger.error("Job did not complete within expected time.");
+                    throw new CloudRuntimeException("Job did not complete within expected time.");
+                }
+
+                try {
+                    jobResp = jobFeignClient.getJobByUUID(authHeader, jobUUID);
+                    if (jobResp == null) {
+                        s_logger.warn("Job with UUID " + jobUUID + " not found. Retrying...");
+                    } else if (jobResp.getState().equals(Constants.JOB_FAILURE)) {
+                        throw new CloudRuntimeException("Job failed with error: " + jobResp.getMessage());
+                    }
+                } catch (FeignException.FeignClientException e) {
+                    throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
+                }
+
+                jobRetryCount++;
+                Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
+            }
+            if (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
+                return false;
+            }
+        } catch (FeignException.FeignClientException e) {
+            throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return true;
+    }
 }
