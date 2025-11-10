@@ -261,7 +261,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-        if(storagePool == null) {
+        if (storagePool == null) {
             s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
         }
@@ -317,7 +317,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-        if(storagePool == null) {
+        if (storagePool == null) {
             s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("attachZone : Storage Pool not found for id: " + dataStore.getId());
         }
