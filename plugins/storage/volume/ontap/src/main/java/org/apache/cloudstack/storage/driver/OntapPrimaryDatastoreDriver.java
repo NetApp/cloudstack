@@ -107,7 +107,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
         try {
-            s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]", dataStore, dataObject, dataObject.getType());
+            s_logger.info("createAsync: Started for data store name [{}] and data object name [{}] of type [{}]", dataStore.getName(), dataObject.getName(), dataObject.getType());
 
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
             if(storagePool == null) {
@@ -124,7 +124,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
         } catch (Exception e) {
             errMsg = e.getMessage();
-            s_logger.error("createAsync: Failed for dataObject [{}]: {}", dataObject, errMsg);
+            s_logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
             createCmdResult.setResult(e.toString());
         } finally {
@@ -159,13 +159,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, VolumeInfo volumeInfo) {
         CloudStackVolume cloudStackVolumeRequest = null;
-
+        Svm svm = new Svm();
+        svm.setName(details.get(Constants.SVM_NAME));
         String protocol = details.get(Constants.PROTOCOL);
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
             cloudStackVolumeRequest = new CloudStackVolume();
             Lun lunRequest = new Lun();
-            Svm svm = new Svm();
-            svm.setName(details.get(Constants.SVM_NAME));
             lunRequest.setSvm(svm);
 
             LunSpace lunSpace = new LunSpace();
