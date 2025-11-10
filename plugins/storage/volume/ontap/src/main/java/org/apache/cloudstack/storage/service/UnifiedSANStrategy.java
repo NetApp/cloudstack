@@ -27,10 +27,7 @@ import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
-import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.LunMap;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.*;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -389,9 +386,17 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create LunMap
             LunMap lunMapRequest = new LunMap();
-            lunMapRequest.getSvm().setName(svmName);
-            lunMapRequest.getLun().setName(lunName);
-            lunMapRequest.getIgroup().setName(igroupName);
+            Svm svm = new Svm();
+            svm.setName(svmName);
+            lunMapRequest.setSvm(svm);
+            //Set Lun name
+            Lun lun = new Lun();
+            lun.setName(lunName);
+            lunMapRequest.setLun(lun);
+            //Set Igroup name
+            Igroup igroup = new Igroup();
+            igroup.setName(igroupName);
+            lunMapRequest.setIgroup(igroup);
             OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
             if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
                 s_logger.error("enableLogicalAccess: LunMap failed for Lun: {} and igroup: {}", lunName, igroupName);

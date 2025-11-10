@@ -146,7 +146,7 @@ public class Utility {
     }
 
     public static String getLunName(String volName, String lunName) {
-        //LUN name in ONTAP unified : "/vol/VolumeName/LunName"
+        //LUN name in ONTAP unified format: "/vol/VolumeName/LunName"
         return Constants.VOLUME_PATH_PREFIX + volName + Constants.SLASH + lunName;
     }
 
