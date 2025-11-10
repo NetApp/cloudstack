@@ -42,6 +42,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -67,10 +68,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
-    @Inject private PrimaryDataStoreDao storagePoolDao;
-    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
     @Inject private StoragePoolAutomation _storagePoolAutomation;
+    @Inject private PrimaryDataStoreDao storagePoolDao;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     // ONTAP minimum volume size is 1.56 GB (1677721600 bytes)
@@ -410,7 +411,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         // Delete the CloudStack primary data store entity
         return _dataStoreHelper.deletePrimaryDataStore(store);
     }
-
 
     @Override
     public boolean migrateToObjectStore(DataStore store) {
