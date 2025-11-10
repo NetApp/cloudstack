@@ -143,8 +143,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return false;
         }
         // Regex: Starts with a letter, followed by letters, digits, or underscores
-        String regex = "^[a-zA-Z][a-zA-Z0-9_]*$";
-        return name.matches(regex);
+        return name.matches(Constants.ONTAP_NAME_REGEX);
     }
 
     private String createCloudStackVolumeForTypeVolume(StoragePoolVO storagePool, VolumeInfo volumeInfo) {

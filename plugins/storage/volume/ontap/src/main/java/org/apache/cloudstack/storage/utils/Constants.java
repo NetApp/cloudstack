@@ -56,6 +56,7 @@ public class Constants {
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
+    public static final String ONTAP_NAME_REGEX = "^[a-zA-Z][a-zA-Z0-9_]*$";
     public static final String KVM = "KVM";
 
     public static final String HTTPS = "https://";

@@ -285,8 +285,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
                 strategy.createAccessGroup(accessGroupRequest);
             } catch (Exception e) {
-                s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId(), e);
-                throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId(), e);
+                s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage(), e);
+                throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage(), e);
             }
         }
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
@@ -335,8 +335,13 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException(errMsg);
         }
         if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
-            AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
-            strategy.createAccessGroup(accessGroupRequest);
+            try {
+                AccessGroup accessGroupRequest = createAccessGroupRequestByProtocol(storagePool, scope.getScopeId(), details, hostsIdentifier);
+                strategy.createAccessGroup(accessGroupRequest);
+            } catch (Exception e) {
+                s_logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+            }
         }
         for (HostVO host : hostsToConnect) {
             try {
@@ -461,4 +466,3 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     }
 }
-
