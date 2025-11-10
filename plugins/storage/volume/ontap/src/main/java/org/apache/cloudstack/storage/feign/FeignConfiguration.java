@@ -30,7 +30,7 @@ import feign.codec.DecodeException;
 import feign.codec.EncodeException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
@@ -55,13 +55,11 @@ public class FeignConfiguration {
     private final int retryMaxInterval = 5;
     private final String ontapFeignMaxConnection = "80";
     private final String ontapFeignMaxConnectionPerRoute = "20";
-    private final JsonMapper jsonMapper;
+    private final ObjectMapper jsonMapper;
 
     public FeignConfiguration() {
-        this.jsonMapper = JsonMapper.builder()
-                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .findAndAddModules()
-                .build();
+        this.jsonMapper = new ObjectMapper();
+        this.jsonMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
     public Client createClient() {
@@ -139,16 +137,43 @@ public class FeignConfiguration {
             @Override
             public Object decode(Response response, Type type) throws IOException, DecodeException {
                 if (response.body() == null) {
+                    logger.debug("Response body is null, returning null");
                     return null;
                 }
                 String json = null;
                 try (InputStream bodyStream = response.body().asInputStream()) {
                     json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                     logger.debug("Decoding JSON response: {}", json);
-                    return jsonMapper.readValue(json, jsonMapper.getTypeFactory().constructType(type));
+                    logger.debug("Target type: {}", type);
+                    logger.debug("About to call jsonMapper.readValue()...");
+
+                    Object result = null;
+                    try {
+                        logger.debug("Calling jsonMapper.constructType()...");
+                        var javaType = jsonMapper.getTypeFactory().constructType(type);
+                        logger.debug("constructType() returned: {}", javaType);
+
+                        logger.debug("Calling jsonMapper.readValue() with json and javaType...");
+                        result = jsonMapper.readValue(json, javaType);
+                        logger.debug("jsonMapper.readValue() completed successfully");
+                    } catch (Throwable ex) {
+                        logger.error("EXCEPTION in jsonMapper.readValue()! Type: {}, Message: {}", ex.getClass().getName(), ex.getMessage(), ex);
+                        throw ex;
+                    }
+
+                    if (result == null) {
+                        logger.warn("Decoded result is null!");
+                    } else {
+                        logger.debug("Successfully decoded to object of type: {}", result.getClass().getName());
+                    }
+                    logger.debug("Returning result from decoder");
+                    return result;
                 } catch (IOException e) {
-                    logger.error("Error decoding JSON response. Status: {}, Raw body: {}", response.status(), json, e);
+                    logger.error("IOException during decoding. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
+                } catch (Exception e) {
+                    logger.error("Unexpected error during decoding. Status: {}, Type: {}, Raw body: {}", response.status(), type, json, e);
+                    throw new DecodeException(response.status(), "Unexpected error during decoding", response.request(), e);
                 }
             }
         };
