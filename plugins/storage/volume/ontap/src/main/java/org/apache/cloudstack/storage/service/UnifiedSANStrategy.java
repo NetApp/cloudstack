@@ -377,7 +377,6 @@ public class UnifiedSANStrategy extends SANStrategy {
     public void enableLogicalAccess(Map<String, String> values) {
         s_logger.info("enableLogicalAccess : Create LunMap");
         s_logger.debug("enableLogicalAccess : Creating LunMap with values {} ", values);
-        LunMap lunMapRequest = new LunMap();
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
         String igroupName = values.get(Constants.IGROUP_DOT_NAME);
@@ -389,6 +388,10 @@ public class UnifiedSANStrategy extends SANStrategy {
             // Get AuthHeader
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create LunMap
+            LunMap lunMapRequest = new LunMap();
+            lunMapRequest.getSvm().setName(svmName);
+            lunMapRequest.getLun().setName(lunName);
+            lunMapRequest.getIgroup().setName(igroupName);
             OntapResponse<LunMap> createdLunMap = sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
             if (createdLunMap == null || createdLunMap.getRecords() == null || createdLunMap.getRecords().size() == 0) {
                 s_logger.error("enableLogicalAccess: LunMap failed for Lun: {} and igroup: {}", lunName, igroupName);
@@ -398,7 +401,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             s_logger.debug("enableLogicalAccess: LunMap created successfully, LunMap: {}", lunMap);
             s_logger.info("enableLogicalAccess: LunMap created successfully.");
         } catch (Exception e) {
-            s_logger.error("Exception occurred while creating LunMap: {}, Exception: {}", e.getMessage(), e);
+            s_logger.error("Exception occurred while creating LunMap, Exception: {}", e);
             throw new CloudRuntimeException("Failed to create LunMap: " + e.getMessage());
         }
     }
@@ -419,7 +422,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             sanFeignClient.deleteLunMap(authHeader, lunUUID, igroupUUID);
             s_logger.info("disableLogicalAccess: LunMap deleted successfully.");
         } catch (Exception e) {
-            s_logger.error("Exception occurred while deleting LunMap: {}, Exception: {}", e.getMessage(), e);
+            s_logger.error("Exception occurred while deleting LunMap, Exception: {}", e);
             throw new CloudRuntimeException("Failed to delete LunMap: " + e.getMessage());
         }
     }

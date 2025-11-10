@@ -106,11 +106,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (callback == null) {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
+        if(!isValidName(dataObject.getName())) {
+            errMsg = "createAsync: Invalid dataObject name [" + dataObject.getName() + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.";
+            s_logger.error(errMsg);
+            throw new InvalidParameterValueException(errMsg);
+        }
         try {
             s_logger.info("createAsync: Started for data store name [{}] and data object name [{}] of type [{}]", dataStore.getName(), dataObject.getName(), dataObject.getType());
-
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-            if(storagePool == null) {
+            if (storagePool == null) {
                 s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
             }
@@ -133,6 +137,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             callback.complete(createCmdResult);
         }
+    }
+
+    public  boolean isValidName(String name) {
+        // Check for null and length constraint first
+        if (name == null || name.length() > 200) {
+            return false;
+        }
+        // Regex: Starts with a letter, followed by letters, digits, or underscores
+        String regex = "^[a-zA-Z][a-zA-Z0-9_]*$";
+        return name.matches(regex);
     }
 
     private String createCloudStackVolumeForTypeVolume(DataStore dataStore, VolumeInfo volumeObject) {
@@ -248,7 +262,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         try {
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-            if(storagePool == null) {
+            if (storagePool == null) {
                 s_logger.error("grantAccess : Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("grantAccess : Storage Pool not found for id: " + dataStore.getId());
             }
@@ -259,7 +273,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
-                if(volumeVO == null) {
+                if (volumeVO == null) {
                     s_logger.error("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
                     throw new CloudRuntimeException("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
                 }
@@ -281,12 +295,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String svmName = details.get(Constants.SVM_NAME);
         long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
-        if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             String accessGroupName = Utility.getIgroupName(svmName, scopeId);
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             s_logger.info("grantAccessForVolume: Retrieved LUN [{}] details for volume [{}]", cloudStackVolume.getLun().getName(), volumeVO.getName());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
-            if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
+            if (!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("grantAccess: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
                 throw new CloudRuntimeException("grantAccess: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName + "]");
             }
@@ -326,7 +340,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         try {
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
-            if(storagePool == null) {
+            if (storagePool == null) {
                 s_logger.error("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
             }
@@ -337,7 +351,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
-                if(volumeVO == null) {
+                if (volumeVO == null) {
                     s_logger.error("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
                     throw new CloudRuntimeException("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
                 }
@@ -358,12 +372,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String svmName = details.get(Constants.SVM_NAME);
         long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
-        if(ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             String accessGroupName = Utility.getIgroupName(svmName, scopeId);
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, volumeVO.getPath());
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
             //TODO check if initiator does exits in igroup, will throw the error ?
-            if(!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
+            if (!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
                 s_logger.error("revokeAccessForVolume: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
                 return;
             }
@@ -381,7 +395,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         getCloudStackVolumeMap.put(Constants.NAME, cloudStackVolumeName);
         getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
         CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
-        if(cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
+        if (cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
             s_logger.error("getCloudStackVolumeByName: Failed to get LUN details [{}]", cloudStackVolumeName);
             throw new CloudRuntimeException("getCloudStackVolumeByName: Failed to get LUN [" + cloudStackVolumeName + "]");
         }
