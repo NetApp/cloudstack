@@ -38,8 +38,11 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
+import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -62,6 +65,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     // ONTAP minimum volume size is 1.56 GB (1677721600 bytes)
@@ -216,9 +220,21 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             long volumeSize = Long.parseLong(details.get(Constants.SIZE));
             s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
                     (volumeSize / (1024 * 1024 * 1024)) + " GB)");
-            Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
-            details.put(Constants.VOLUME_UUID, volume.getUuid());
-            details.put(Constants.VOLUME_NAME, volume.getName());
+            try {
+                Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+                if (volume == null) {
+                    s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
+                    throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
+                }
+
+                s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
+
+                details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
+                details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
+            } catch (Exception e) {
+                s_logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
+                throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
+            }
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
@@ -249,14 +265,21 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
 
+        logger.debug(" datastore object received is  {} ",primaryStore );
+
         logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primaryStore.getClusterId()));
 
-        Map<String, String> details = primaryStore.getDetails(); // TODO check while testing , if it is populated we can remove below db call
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        Svm svm = new Svm();
+        svm.setName(details.get(Constants.SVM_NAME));
+        ExportPolicy exportPolicy = new ExportPolicy();
+        exportPolicy.setSvm(svm);
         AccessGroup accessGroupRequest = new AccessGroup();
         accessGroupRequest.setHostsToConnect(hostsToConnect);
         accessGroupRequest.setScope(scope);
         accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        accessGroupRequest.setPolicy(exportPolicy);
         strategy.createAccessGroup(accessGroupRequest);
 
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());

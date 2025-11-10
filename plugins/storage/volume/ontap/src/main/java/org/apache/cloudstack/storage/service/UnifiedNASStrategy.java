@@ -19,12 +19,14 @@
 
 package org.apache.cloudstack.storage.service;
 
+import com.cloud.host.HostVO;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
+import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -37,6 +39,9 @@ import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class UnifiedNASStrategy extends NASStrategy {
@@ -93,7 +98,35 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
-        //TODO
+
+
+        // Create the export policy
+        String svmName = accessGroup.getPolicy().getSvm().getName();
+        String exportPolicyName = "export-" + svmName + "-" + accessGroup.getPrimaryDataStoreInfo().getName();
+
+        ExportPolicy exportPolicy = new ExportPolicy();
+        exportPolicy.setName(exportPolicyName);
+
+        Svm svm = new Svm();
+        svm.setName(svmName);
+        exportPolicy.setSvm(svm);
+
+        List<ExportRule> rules = new ArrayList<>();
+        ExportRule exportRule = new ExportRule();
+
+        List<HostVO> hosts = accessGroup.getHostsToConnect();
+        for (HostVO host : hosts) {
+            host.getStorageIpAddress()
+        }
+
+
+        exportPolicy.setRules(rules);
+        ExportPolicy createExportPolicy = createExportPolicy(svmName, exportPolicy);
+
+
+
+
+        // attach export policy to volume of storage pool
         return null;
     }
 
@@ -125,36 +158,36 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
 
-    private ExportPolicy createExportPolicy(String svmName, String policyName) {
-        s_logger.info("Creating export policy: {} for SVM: {}", policyName, svmName);
+    private ExportPolicy createExportPolicy(String svmName, ExportPolicy policy) {
+        s_logger.info("Creating export policy: {} for SVM: {}", policy, svmName);
 
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
 
-            // Create ExportPolicy object
-            ExportPolicy exportPolicy = new ExportPolicy();
-            exportPolicy.setName(policyName);
-
-            // Set SVM
-            Svm svm = new Svm();
-            svm.setName(svmName);
-            exportPolicy.setSvm(svm);
+//            // Create ExportPolicy object
+//            ExportPolicy exportPolicy = new ExportPolicy();
+//            exportPolicy.setName(policyName);
+//
+//            // Set SVM
+//            Svm svm = new Svm();
+//            svm.setName(svmName);
+//            exportPolicy.setSvm(svm);
 
             // Create export policy
-            ExportPolicy createdPolicy = nasFeignClient.createExportPolicy(authHeader,  exportPolicy);
+            ExportPolicy createdPolicy = nasFeignClient.createExportPolicy(authHeader,  policy);
 
             if (createdPolicy != null && createdPolicy.getId() != null) {
                 s_logger.info("Export policy created successfully with ID: {}", createdPolicy.getId());
                 return createdPolicy;
             } else {
-                throw new CloudRuntimeException("Failed to create export policy: " + policyName);
+                throw new CloudRuntimeException("Failed to create export policy: " + policy);
             }
 
         } catch (FeignException e) {
-            s_logger.error("Failed to create export policy: {}", policyName, e);
+            s_logger.error("Failed to create export policy: {}", policy, e);
             throw new CloudRuntimeException("Failed to create export policy: " + e.getMessage());
         } catch (Exception e) {
-            s_logger.error("Exception while creating export policy: {}", policyName, e);
+            s_logger.error("Exception while creating export policy: {}", policy, e);
             throw new CloudRuntimeException("Failed to create export policy: " + e.getMessage());
         }
     }

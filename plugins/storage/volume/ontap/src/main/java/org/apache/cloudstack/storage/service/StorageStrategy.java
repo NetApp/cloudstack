@@ -196,19 +196,37 @@ public abstract class StorageStrategy {
         }
         s_logger.info("Volume created successfully: " + volumeName);
         // Below code is to update volume uuid to storage pool mapping once and used for all other workflow saving get volume call
-        OntapResponse<Volume> ontapVolume = new OntapResponse<>();
         try {
             Map<String, Object> queryParams = Map.of(Constants.NAME, volumeName);
-             ontapVolume = volumeFeignClient.getVolume(authHeader, queryParams);
-            if ((ontapVolume == null || ontapVolume.getRecords().isEmpty())) {
-                s_logger.error("Exception while getting volume volume not found:");
-                throw new CloudRuntimeException("Failed to fetch volume " + volumeName);
+            s_logger.debug("Fetching volume details for: " + volumeName);
+
+            OntapResponse<Volume> ontapVolume = volumeFeignClient.getVolume(authHeader, queryParams);
+            s_logger.debug("Feign call completed. Processing response...");
+
+            if (ontapVolume == null) {
+                s_logger.error("OntapResponse is null for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Response is null");
             }
-        }catch (Exception e) {
-            s_logger.error("Exception while getting volume: " + e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch volume: " + e.getMessage());
+            s_logger.debug("OntapResponse is not null. Checking records field...");
+
+            if (ontapVolume.getRecords() == null) {
+                s_logger.error("OntapResponse.records is null for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Records list is null");
+            }
+            s_logger.debug("Records field is not null. Size: " + ontapVolume.getRecords().size());
+
+            if (ontapVolume.getRecords().isEmpty()) {
+                s_logger.error("OntapResponse.records is empty for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": No records found");
+            }
+
+            Volume volume = ontapVolume.getRecords().get(0);
+            s_logger.info("Volume retrieved successfully: " + volumeName + ", UUID: " + volume.getUuid());
+            return volume;
+        } catch (Exception e) {
+            s_logger.error("Exception while retrieving volume details for: " + volumeName, e);
+            throw new CloudRuntimeException("Failed to fetch volume: " + volumeName + ". Error: " + e.getMessage(), e);
         }
-        return ontapVolume.getRecords().get(0);
     }
 
     /**

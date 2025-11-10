@@ -179,7 +179,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
-
     }
 
     @Override
