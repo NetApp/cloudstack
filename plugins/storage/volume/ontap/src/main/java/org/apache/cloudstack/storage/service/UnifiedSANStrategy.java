@@ -98,7 +98,8 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public CloudStackVolume getCloudStackVolume(Map<String, String> values) {
-        s_logger.info("getCloudStackVolume : fetching Lun with params {} ", values);
+        s_logger.info("getCloudStackVolume : fetching Lun");
+        s_logger.debug("getCloudStackVolume : fetching Lun with params {} ", values);
         if (values == null || values.isEmpty()) {
             s_logger.error("getCloudStackVolume: get Lun failed. Invalid request: {}", values);
             throw new CloudRuntimeException("getCloudStackVolume : get Lun Failed, invalid request");
@@ -134,7 +135,8 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
-        s_logger.info("createAccessGroup : Creating Igroup with access group request {} ", accessGroup);
+        s_logger.info("createAccessGroup : Create Igroup");
+        s_logger.debug("createAccessGroup : Creating Igroup with access group request {} ", accessGroup);
         if (accessGroup == null || accessGroup.getIgroup() == null) {
             s_logger.error("createAccessGroup: Igroup creation failed. Invalid request: {}", accessGroup);
             throw new CloudRuntimeException("createAccessGroup : Failed to create Igroup, invalid request");
@@ -175,7 +177,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     public AccessGroup getAccessGroup(Map<String, String> values) {
-        s_logger.info("getAccessGroup : fetching Igroup with params {} ", values);
+        s_logger.info("getAccessGroup : fetch Igroup");
+        s_logger.debug("getAccessGroup : fetching Igroup with params {} ", values);
         if (values == null || values.isEmpty()) {
             s_logger.error("getAccessGroup: get Igroup failed. Invalid request: {}", values);
             throw new CloudRuntimeException("getAccessGroup : get Igroup Failed, invalid request");
@@ -207,7 +210,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     public void enableLogicalAccess(Map<String, String> values) {
-        s_logger.info("enableLogicalAccess : Creating LunMap with values {} ", values);
+        s_logger.info("enableLogicalAccess : Create LunMap");
+        s_logger.debug("enableLogicalAccess : Creating LunMap with values {} ", values);
         LunMap lunMapRequest = new LunMap();
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
@@ -235,7 +239,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     public void disableLogicalAccess(Map<String, String> values) {
-        s_logger.info("disableLogicalAccess : Deleting LunMap with values {} ", values);
+        s_logger.info("disableLogicalAccess : Delete LunMap");
+        s_logger.debug("disableLogicalAccess : Deleting LunMap with values {} ", values);
         String lunUUID = values.get(Constants.LUN_DOT_UUID);
         String igroupUUID = values.get(Constants.IGROUP_DOT_UUID);
         if(lunUUID == null || igroupUUID == null || lunUUID.isEmpty() || igroupUUID.isEmpty()) {
