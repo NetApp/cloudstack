@@ -76,6 +76,13 @@ public class ExportRule {
     @JsonProperty("protocols")
     private List<ProtocolsEnum> protocols = null;
 
+    @JsonProperty("ro_rule")
+    private List<String> roRule = null;
+
+    @JsonProperty("rw_rule")
+    private List<String> rwRule = null;
+
+
     public ExportRule anonymousUser(String anonymousUser) {
         this.anonymousUser = anonymousUser;
         return this;
@@ -138,6 +145,22 @@ public class ExportRule {
         public void setMatch (String match) {
             this.match = match;
         }
+    }
+
+    public List<String> getRwRule() {
+        return rwRule;
+    }
+
+    public void setRwRule(List<String> rwRule) {
+        this.rwRule = rwRule;
+    }
+
+    public List<String> getRoRule() {
+        return roRule;
+    }
+
+    public void setRoRule(List<String> roRule) {
+        this.roRule = roRule;
     }
 
     @Override

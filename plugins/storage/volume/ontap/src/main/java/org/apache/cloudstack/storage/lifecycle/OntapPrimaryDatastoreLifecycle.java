@@ -42,7 +42,6 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
-import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -271,13 +270,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
-        Svm svm = new Svm();
-        svm.setName(details.get(Constants.SVM_NAME));
         ExportPolicy exportPolicy = new ExportPolicy();
-        exportPolicy.setSvm(svm);
         AccessGroup accessGroupRequest = new AccessGroup();
         accessGroupRequest.setHostsToConnect(hostsToConnect);
         accessGroupRequest.setScope(scope);
+        primaryStore.setDetails(details);// setting details as it does not come from cloudstack
         accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
         accessGroupRequest.setPolicy(exportPolicy);
         strategy.createAccessGroup(accessGroupRequest);
@@ -308,13 +305,17 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
 
-        Map<String, String> details = primaryStore.getDetails(); // TODO check while testing , if it is populated we can remove below db call
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        ExportPolicy exportPolicy = new ExportPolicy();
         AccessGroup accessGroupRequest = new AccessGroup();
         accessGroupRequest.setHostsToConnect(hostsToConnect);
         accessGroupRequest.setScope(scope);
+        primaryStore.setDetails(details); // setting details as it does not come from cloudstack
         accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        accessGroupRequest.setPolicy(exportPolicy);
         strategy.createAccessGroup(accessGroupRequest);
+
         for (HostVO host : hostsToConnect) {
             // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {

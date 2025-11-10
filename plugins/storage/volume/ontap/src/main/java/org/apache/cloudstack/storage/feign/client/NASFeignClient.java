@@ -58,16 +58,16 @@ public interface NASFeignClient {
     // Export Policy Operations
     @RequestLine("POST /")
     @Headers({"Authorization: {authHeader}"})
-    ExportPolicy createExportPolicy(@Param("authHeader") String authHeader,
+    void createExportPolicy(@Param("authHeader") String authHeader,
                                     ExportPolicy exportPolicy);
 
     @RequestLine("GET /")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<ExportPolicy> getExportPolicyResponse(@Param("authHeader") String authHeader);
+    ExportPolicy getExportPolicyResponse(@Param("authHeader") String authHeader);
 
     @RequestLine("GET /{id}")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<ExportPolicy> getExportPolicyById(@Param("authHeader") String authHeader,
+    ExportPolicy getExportPolicyById(@Param("authHeader") String authHeader,
                                                     @Param("id") String id);
 
     @RequestLine("DELETE /{id}")
