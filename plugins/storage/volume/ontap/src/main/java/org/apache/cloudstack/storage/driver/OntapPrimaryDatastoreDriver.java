@@ -137,7 +137,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    public  boolean isValidName(String name) {
+    public boolean isValidName(String name) {
         // Check for null and length constraint first
         if (name == null || name.length() > 200) {
             return false;
