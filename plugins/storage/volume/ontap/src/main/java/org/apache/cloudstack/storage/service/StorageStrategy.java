@@ -516,8 +516,8 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     *     getIGroup       example getIgroup   for iSCSI and FC protocols
-     *     getExportPolicy example getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     e.g., getIGroup for iSCSI and FC protocols
+     *     e.g., getExportPolicy for NFS 3.0 and NFS 4.1 protocols
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
       * @param values map to get access group values like name, svm name etc.
      */
