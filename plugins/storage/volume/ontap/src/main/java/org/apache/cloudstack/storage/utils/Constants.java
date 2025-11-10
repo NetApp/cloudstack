@@ -29,6 +29,8 @@ public class Constants {
     public static final String USERNAME = "username";
     public static final String PASSWORD = "password";
     public static final String MANAGEMENT_LIF = "managementLIF";
+    public static final String VOLUME_NAME = "volumeName";
+    public static final String VOLUME_UUID = "volumeUUID";
     public static final String IS_DISAGGREGATED = "isDisaggregated";
     public static final String RUNNING = "running";
 
