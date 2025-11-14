@@ -116,6 +116,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
             createCmdResult.setResult(e.toString());
         } finally {
+            s_logger.info("Volume creation successfully completed");
             callback.complete(createCmdResult);
         }
     }

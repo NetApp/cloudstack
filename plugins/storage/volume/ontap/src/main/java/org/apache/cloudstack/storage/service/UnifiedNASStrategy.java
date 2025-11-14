@@ -372,7 +372,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
                     ? hostStorageIp
                     : host.getPrivateIpAddress();
-            String ipToUse = ip + "/32";
+            String ipToUse = ip + "/31"; // TODO since we have 2 IPs internal and external
             ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
             exportClient.setMatch(ipToUse);
             exportClients.add(exportClient);
