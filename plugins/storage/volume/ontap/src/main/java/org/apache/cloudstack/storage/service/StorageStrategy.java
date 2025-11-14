@@ -27,6 +27,7 @@ import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.Job;
+import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
@@ -150,10 +151,15 @@ public abstract class StorageStrategy {
         Svm svm = new Svm();
         svm.setName(svmName);
 
+        Nas nas = new Nas();
+        nas.setPath("/" + volumeName);
+
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
         volumeRequest.setAggregates(aggregates);
         volumeRequest.setSize(size);
+        volumeRequest.setNas(nas); // be default if we don't set path , ONTAP create a volume with mount/junction path // TODO check if we need to append svm name or not
+        // since storage pool also cannot be duplicate so junction path can also be not duplicate so /volumeName will always be unique
         // Make the POST API call to create the volume
         try {
             /*

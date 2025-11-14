@@ -64,9 +64,10 @@ public class UnifiedNASStrategy extends NASStrategy {
         String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
         // Initialize FeignClientFactory and create NAS client
         this.feignClientFactory = new FeignClientFactory();
+        // NAS client uses export policy API endpoint
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
-        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
-        this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
+        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class,baseURL );
+        this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL );
     }
 
     public void setOntapStorage(OntapStorage ontapStorage) {
@@ -108,51 +109,23 @@ public class UnifiedNASStrategy extends NASStrategy {
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
 
-        // Create the export policy
         Map<String, String> details = accessGroup.getPrimaryDataStoreInfo().getDetails();
         String svmName = details.get(Constants.SVM_NAME);
         String volumeUUID = details.get(Constants.VOLUME_UUID);
         String volumeName = details.get(Constants.VOLUME_NAME);
-        String exportPolicyName = "export-" + svmName + "-" + volumeName;// TODO move this to util
 
-        ExportPolicy exportPolicy = new ExportPolicy();
-
-        List<ExportRule> rules = new ArrayList<>();
-        ExportRule exportRule = new ExportRule();
-
-        List<ExportRule.ExportClient> exportClients = new ArrayList<>();
-        List<HostVO> hosts = accessGroup.getHostsToConnect();
-        for (HostVO host : hosts) {
-            String hostStorageIp = host.getStorageIpAddress();
-            String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
-                    ? hostStorageIp
-                    : host.getPrivateIpAddress();
-            String ipToUse = ip + "/32";
-            ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
-            exportClient.setMatch(ipToUse);
-            exportClients.add(exportClient);
-        }
-        exportRule.setClients(exportClients);
-        exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
-        exportRule.setRoRule(List.of("any"));
-        exportRule.setRwRule(List.of("any"));
-        rules.add(exportRule);
-
-        Svm svm = new Svm();
-        svm.setName(svmName);
-        exportPolicy.setSvm(svm);
-        exportPolicy.setRules(rules);
-        exportPolicy.setName(exportPolicyName);
+        // Create the export policy
+        ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
         try {
-            createExportPolicy(svmName, exportPolicy);
-            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", exportPolicy.getName());
+            createExportPolicy(svmName, policyRequest);
+            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
 
             // attach export policy to volume of storage pool
-            assignExportPolicyToVolume(volumeUUID,exportPolicy.getName());
-            s_logger.info("Successfully assigned exportPolicy {} to volume {}", exportPolicy.getName(), volumeName);
-            accessGroup.setPolicy(exportPolicy);
+            assignExportPolicyToVolume(volumeUUID,policyRequest.getName());
+            s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
+            accessGroup.setPolicy(policyRequest);
             return accessGroup;
-        }catch (Exception e){
+        }catch(Exception e){
             s_logger.error("Exception occurred while creating access group: " +  e);
             throw new CloudRuntimeException("Failed to create access group: " + e);
         }
@@ -192,6 +165,18 @@ public class UnifiedNASStrategy extends NASStrategy {
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             nasFeignClient.createExportPolicy(authHeader,  policy);
+            try {
+                Map<String, Object> queryParams = Map.of(Constants.NAME, policy.getName());
+                OntapResponse<ExportPolicy> policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader, queryParams);
+                if (policiesResponse == null || policiesResponse.getRecords().isEmpty()) {
+                    throw new CloudRuntimeException("Export policy " + policy.getName() + " was not created on ONTAP. " +
+                            "Received successful response but policy does not exist.");
+                }
+                s_logger.info("Export policy created and verified successfully: " + policy.getName());
+            } catch (FeignException e) {
+                s_logger.error("Failed to verify export policy creation: " + policy.getName(), e);
+                throw new CloudRuntimeException("Export policy creation verification failed: " + e.getMessage());
+            }
             s_logger.info("Export policy created successfully with name {}", policy.getName());
         } catch (FeignException e) {
             s_logger.error("Failed to create export policy: {}", policy, e);
@@ -205,13 +190,14 @@ public class UnifiedNASStrategy extends NASStrategy {
     private void deleteExportPolicy(String svmName, String policyName) {
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            ExportPolicy policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader);
+            Map<String, Object> queryParams = Map.of(Constants.NAME, policyName);
+            OntapResponse<ExportPolicy> policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader, queryParams);
 
             if (policiesResponse == null ) {
                 s_logger.warn("Export policy not found for deletion: {}", policyName);
                 throw new CloudRuntimeException("Export policy not found : " + policyName);
             }
-            String policyId = policiesResponse.getId().toString();
+            String policyId = String.valueOf(policiesResponse.getRecords().get(0).getId());
             nasFeignClient.deleteExportPolicyById(authHeader, policyId);
             s_logger.info("Export policy deleted successfully: {}", policyName);
         } catch (Exception e) {
@@ -230,15 +216,18 @@ public class UnifiedNASStrategy extends NASStrategy {
 
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            ExportPolicy policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader);
-            if (policiesResponse == null) {
+            Map<String, Object> queryParams = Map.of(Constants.NAME, policyName);
+            OntapResponse<ExportPolicy> policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader, queryParams);
+            if (policiesResponse == null || policiesResponse.getRecords().isEmpty()) {
+                s_logger.error("Export policy not found for assigning rule: {}", policyName);
                 throw new CloudRuntimeException("Export policy not found: " + policyName);
             }
+
             // Create Volume update object with NAS configuration
             Volume volumeUpdate = new Volume();
             Nas nas = new Nas();
             ExportPolicy policy = new ExportPolicy();
-            policy.setName(policiesResponse.getName());
+            policy.setName(policyName);
             nas.setExportPolicy(policy);
             volumeUpdate.setNas(nas);
 
@@ -250,7 +239,7 @@ public class UnifiedNASStrategy extends NASStrategy {
              */
                 JobResponse jobResponse = volumeFeignClient.updateVolumeRebalancing(authHeader, volumeUuid, volumeUpdate);
                 if (jobResponse == null || jobResponse.getJob() == null) {
-                    throw new CloudRuntimeException("Failed to attach policy " + policiesResponse.getName() + "to volume " + volumeUuid);
+                    throw new CloudRuntimeException("Failed to attach policy " + policyName + "to volume " + volumeUuid);
                 }
                 String jobUUID = jobResponse.getJob().getUuid();
 
@@ -334,14 +323,14 @@ public class UnifiedNASStrategy extends NASStrategy {
             OntapResponse<FileInfo> response = nasFeignClient.getFileResponse(authHeader, volumeUuid, filePath);
             s_logger.debug("Retrieved file info for: {} in volume: {}", filePath, volumeUuid);
             return response;
-        } catch (FeignException e) {
+        } catch (FeignException e){
             if (e.status() == 404) {
                 s_logger.debug("File not found: {} in volume: {}", filePath, volumeUuid);
                 return null;
             }
             s_logger.error("Failed to get file info: {} in volume: {}", filePath, volumeUuid, e);
             throw new CloudRuntimeException("Failed to get file info: " + e.getMessage());
-        } catch (Exception e) {
+        } catch (Exception e){
             s_logger.error("Exception while getting file info: {} in volume: {}", filePath, volumeUuid, e);
             throw new CloudRuntimeException("Failed to get file info: " + e.getMessage());
         }
@@ -358,9 +347,48 @@ public class UnifiedNASStrategy extends NASStrategy {
         } catch (FeignException e) {
             s_logger.error("Failed to update file: {} in volume: {}", filePath, volumeUuid, e);
             return false;
-        } catch (Exception e) {
+        } catch (Exception e){
             s_logger.error("Exception while updating file: {} in volume: {}", filePath, volumeUuid, e);
             return false;
         }
+    }
+
+    private String generateExportPolicyName(String svmName, String volumeName){
+        return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
+    }
+
+    private ExportPolicy createExportPolicyRequest(AccessGroup accessGroup,String svmName , String volumeName){
+
+        String exportPolicyName = generateExportPolicyName(svmName,volumeName);
+        ExportPolicy exportPolicy = new ExportPolicy();
+
+        List<ExportRule> rules = new ArrayList<>();
+        ExportRule exportRule = new ExportRule();
+
+        List<ExportRule.ExportClient> exportClients = new ArrayList<>();
+        List<HostVO> hosts = accessGroup.getHostsToConnect();
+        for (HostVO host : hosts) {
+            String hostStorageIp = host.getStorageIpAddress();
+            String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
+                    ? hostStorageIp
+                    : host.getPrivateIpAddress();
+            String ipToUse = ip + "/32";
+            ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
+            exportClient.setMatch(ipToUse);
+            exportClients.add(exportClient);
+        }
+        exportRule.setClients(exportClients);
+        exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
+        exportRule.setRoRule(List.of("any"));
+        exportRule.setRwRule(List.of("any"));
+        rules.add(exportRule);
+
+        Svm svm = new Svm();
+        svm.setName(svmName);
+        exportPolicy.setSvm(svm);
+        exportPolicy.setRules(rules);
+        exportPolicy.setName(exportPolicyName);
+
+        return exportPolicy;
     }
 }

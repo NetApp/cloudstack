@@ -27,6 +27,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreProvider;
 import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.lifecycle.OntapPrimaryDatastoreLifecycle;
+import org.apache.cloudstack.storage.listener.OntapHostListener;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
@@ -41,7 +42,7 @@ public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreProvider.class);
     private OntapPrimaryDatastoreDriver primaryDatastoreDriver;
     private OntapPrimaryDatastoreLifecycle primaryDatastoreLifecycle;
-    // private HypervisorHostListener listener;
+    private HypervisorHostListener listener;
 
     public OntapPrimaryDatastoreProvider() {
         s_logger.info("OntapPrimaryDatastoreProvider initialized");
@@ -58,7 +59,7 @@ public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
 
     @Override
     public HypervisorHostListener getHostListener() {
-        return null;
+        return listener;
     }
 
     @Override
@@ -72,7 +73,7 @@ public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
         s_logger.trace("OntapPrimaryDatastoreProvider: configure: Called");
         primaryDatastoreDriver = ComponentContext.inject(OntapPrimaryDatastoreDriver.class);
         primaryDatastoreLifecycle = ComponentContext.inject(OntapPrimaryDatastoreLifecycle.class);
-       // listener = ComponentContext.inject(OntapHostListener.class);
+        listener = ComponentContext.inject(OntapHostListener.class);
 
         return true;
     }

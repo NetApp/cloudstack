@@ -33,6 +33,7 @@ public class Constants {
     public static final String RUNNING = "running";
     public static final String VOLUME_UUID = "volumeUUID";
     public static final String VOLUME_NAME = "volumeNAME";
+    public static final String EXPORT = "export";
 
     public static final int ONTAP_PORT = 443;
 
@@ -55,6 +56,7 @@ public class Constants {
     public static final String EQUALS = "=";
     public static final String SEMICOLON = ";";
     public static final String COMMA = ",";
+    public static final String HYPHEN = "-";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
