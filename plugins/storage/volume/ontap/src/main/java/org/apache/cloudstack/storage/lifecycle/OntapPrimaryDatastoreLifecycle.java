@@ -188,17 +188,22 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // Determine storage pool type and path based on protocol
         String path;
+        String host = "";
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-                path = details.get(Constants.MANAGEMENT_LIF) + ":/" + storagePoolName;
+                // Path should be just the NFS export path (junction path), NOT host:path
+                // CloudStack will construct the full mount path as: hostAddress + ":" + path
+                path = "/" + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
+                host = "10.193.192.136"; // TODO hardcoded for now
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 path = "iqn.1992-08.com.netapp:" + details.get(Constants.SVM_NAME) + "." + storagePoolName;
                 s_logger.info("Setting iSCSI path for storage pool: " + path);
+                parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
                 break;
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
@@ -239,8 +244,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
 
         // Set parameters for primary data store
-        parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
         parameters.setPort(Constants.ONTAP_PORT);
+        parameters.setHost(host);
         parameters.setPath(path);
         parameters.setTags(tags != null ? tags : "");
         parameters.setIsTagARule(isTagARule != null ? isTagARule : Boolean.FALSE);

@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.feign.client;
 
+import feign.QueryMap;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -26,29 +27,31 @@ import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
 
+import java.util.Map;
+
 public interface NASFeignClient {
 
     // File Operations
-    @RequestLine("GET /{volumeUuid}/files/{path}")
+    @RequestLine("GET /api/storage/volumes/{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<FileInfo> getFileResponse(@Param("authHeader") String authHeader,
                                             @Param("volumeUuid") String volumeUUID,
                                             @Param("path") String filePath);
 
-    @RequestLine("DELETE /{volumeUuid}/files/{path}")
+    @RequestLine("DELETE /api/storage/volumes/{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void deleteFile(@Param("authHeader") String authHeader,
                     @Param("volumeUuid") String volumeUUID,
                     @Param("path") String filePath);
 
-    @RequestLine("PATCH /{volumeUuid}/files/{path}")
+    @RequestLine("PATCH /api/storage/volumes/{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void updateFile(@Param("authHeader") String authHeader,
                     @Param("volumeUuid") String volumeUUID,
                     @Param("path") String filePath,
                     FileInfo fileInfo);
 
-    @RequestLine("POST /{volumeUuid}/files/{path}")
+    @RequestLine("POST /api/storage/volumes/{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})
     void createFile(@Param("authHeader") String authHeader,
                     @Param("volumeUuid") String volumeUUID,
@@ -56,26 +59,26 @@ public interface NASFeignClient {
                     FileInfo file);
 
     // Export Policy Operations
-    @RequestLine("POST /")
+    @RequestLine("POST /api/protocols/nfs/export-policies")
     @Headers({"Authorization: {authHeader}"})
     void createExportPolicy(@Param("authHeader") String authHeader,
                                     ExportPolicy exportPolicy);
 
-    @RequestLine("GET /")
+    @RequestLine("GET /api/protocols/nfs/export-policies")
     @Headers({"Authorization: {authHeader}"})
-    ExportPolicy getExportPolicyResponse(@Param("authHeader") String authHeader);
+    OntapResponse<ExportPolicy> getExportPolicyResponse(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
-    @RequestLine("GET /{id}")
+    @RequestLine("GET /api/protocols/nfs/export-policies/{id}")
     @Headers({"Authorization: {authHeader}"})
     ExportPolicy getExportPolicyById(@Param("authHeader") String authHeader,
                                                     @Param("id") String id);
 
-    @RequestLine("DELETE /{id}")
+    @RequestLine("DELETE /api/protocols/nfs/export-policies/{id}")
     @Headers({"Authorization: {authHeader}"})
     void deleteExportPolicyById(@Param("authHeader") String authHeader,
                                 @Param("id") String id);
 
-    @RequestLine("PATCH /{id}")
+    @RequestLine("PATCH /api/protocols/nfs/export-policies/{id}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
                                                    @Param("id") String id,
