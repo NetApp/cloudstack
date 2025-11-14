@@ -20,6 +20,8 @@ package org.apache.cloudstack.storage.listener;
 import javax.inject.Inject;
 
 import com.cloud.agent.api.ModifyStoragePoolCommand;
+import com.cloud.agent.api.ModifyStoragePoolAnswer;
+import com.cloud.agent.api.StoragePoolInfo;
 import com.cloud.alert.AlertManager;
 import com.cloud.storage.StoragePoolHostVO;
 import com.cloud.storage.dao.StoragePoolHostDao;
@@ -32,6 +34,7 @@ import com.cloud.host.Host;
 import com.cloud.storage.StoragePool;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener;
 import com.cloud.host.dao.HostDao;
 
@@ -67,25 +70,8 @@ public class OntapHostListener implements HypervisorHostListener {
         logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
 
 
-        // incase host was not added by cloudstack , we will add it
-        StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(poolId, hostId);
-
-        if (storagePoolHost == null) {
-            storagePoolHost = new StoragePoolHostVO(poolId, hostId, "");
-
-            storagePoolHostDao.persist(storagePoolHost);
-        }
-
-        // Validate pool type - ONTAP supports NFS and iSCSI
-//        StoragePoolType poolType = pool.getPoolType();
-//        // TODO add iscsi also here
-//        if (poolType != StoragePoolType.NetworkFilesystem) {
-//            logger.error("Unsupported pool type {} for ONTAP storage", poolType);
-//            return false;
-//        }
-
         try {
-            // Create the CreateStoragePoolCommand to send to the agent
+            // Create the ModifyStoragePoolCommand to send to the agent
             ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool);
 
             Answer answer = _agentMgr.easySend(hostId, cmd);
@@ -102,6 +88,39 @@ public class OntapHostListener implements HypervisorHostListener {
                 throw new CloudRuntimeException(String.format(
                         "Unable to establish a connection from agent to storage pool %s due to %s", pool, answer.getDetails()));
             }
+
+            // Get the mount path from the answer
+            ModifyStoragePoolAnswer mspAnswer = (ModifyStoragePoolAnswer) answer;
+            StoragePoolInfo poolInfo = mspAnswer.getPoolInfo();
+            if (poolInfo == null) {
+                throw new CloudRuntimeException("ModifyStoragePoolAnswer returned null poolInfo");
+            }
+
+            String localPath = poolInfo.getLocalPath();
+            logger.info("Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
+
+            // Update or create the storage_pool_host_ref entry with the correct local_path
+            StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(poolId, hostId);
+
+            if (storagePoolHost == null) {
+                storagePoolHost = new StoragePoolHostVO(poolId, hostId, localPath);
+                storagePoolHostDao.persist(storagePoolHost);
+                logger.info("Created storage_pool_host_ref entry for pool {} and host {}", pool.getName(), host.getName());
+            } else {
+                storagePoolHost.setLocalPath(localPath);
+                storagePoolHostDao.update(storagePoolHost.getId(), storagePoolHost);
+                logger.info("Updated storage_pool_host_ref entry with local_path: {}", localPath);
+            }
+
+            // Update pool capacity/usage information
+            StoragePoolVO poolVO = _storagePoolDao.findById(poolId);
+            if (poolVO != null && poolInfo.getCapacityBytes() > 0) {
+                poolVO.setCapacityBytes(poolInfo.getCapacityBytes());
+                poolVO.setUsedBytes(poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes());
+                _storagePoolDao.update(poolVO.getId(), poolVO);
+                logger.info("Updated storage pool capacity: {} GB, used: {} GB", poolInfo.getCapacityBytes() / (1024 * 1024 * 1024), (poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes()) / (1024 * 1024 * 1024));
+            }
+
         } catch (Exception e) {
             logger.error("Exception while connecting host {} to storage pool {}", host.getName(), pool.getName(), e);
             throw new CloudRuntimeException("Failed to connect host to storage pool: " + e.getMessage(), e);
