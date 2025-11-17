@@ -82,6 +82,9 @@ public class ExportRule {
     @JsonProperty("rw_rule")
     private List<String> rwRule = null;
 
+    @JsonProperty("superuser")
+    private List<String> superuser = null;
+
 
     public ExportRule anonymousUser(String anonymousUser) {
         this.anonymousUser = anonymousUser;
@@ -161,6 +164,14 @@ public class ExportRule {
 
     public void setRoRule(List<String> roRule) {
         this.roRule = roRule;
+    }
+
+    public List<String> getSuperuser() {
+        return superuser;
+    }
+
+    public void setSuperuser(List<String> superuser) {
+        this.superuser = superuser;
     }
 
     @Override

@@ -67,8 +67,20 @@ public class OntapHostListener implements HypervisorHostListener {
 
         // TODO add host type check also since we support only KVM for now, host.getHypervisorType().equals(HypervisorType.KVM)
         StoragePool pool = _storagePoolDao.findById(poolId);
+        if (pool == null) {
+            logger.error("Failed to connect host - storage pool not found with id: {}", poolId);
+            return false;
+        }
+        
+        // CRITICAL: Check if already connected to avoid infinite loops
+        StoragePoolHostVO existingConnection = storagePoolHostDao.findByPoolHost(poolId, hostId);
+        if (existingConnection != null && existingConnection.getLocalPath() != null && !existingConnection.getLocalPath().isEmpty()) {
+            logger.info("Host {} is already connected to storage pool {} at path {}. Skipping reconnection.", 
+                       host.getName(), pool.getName(), existingConnection.getLocalPath());
+            return true;
+        }
+        
         logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
-
 
         try {
             // Create the ModifyStoragePoolCommand to send to the agent
@@ -123,7 +135,9 @@ public class OntapHostListener implements HypervisorHostListener {
 
         } catch (Exception e) {
             logger.error("Exception while connecting host {} to storage pool {}", host.getName(), pool.getName(), e);
-            throw new CloudRuntimeException("Failed to connect host to storage pool: " + e.getMessage(), e);
+            // CRITICAL: Don't throw exception - it crashes the agent and causes restart loops
+            // Return false to indicate failure without crashing
+            return false;
         }
         return true;
     }
