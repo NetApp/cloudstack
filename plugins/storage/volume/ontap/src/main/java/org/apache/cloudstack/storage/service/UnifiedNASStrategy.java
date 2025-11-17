@@ -372,16 +372,16 @@ public class UnifiedNASStrategy extends NASStrategy {
             String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
                     ? hostStorageIp
                     : host.getPrivateIpAddress();
-            String ipToUse = ip + "/31"; // TODO since we have 2 IPs internal and external
+            String ipToUse = ip + "/32";
             ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
             exportClient.setMatch(ipToUse);
             exportClients.add(exportClient);
         }
         exportRule.setClients(exportClients);
         exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
-        exportRule.setRoRule(List.of("any"));
-        exportRule.setRwRule(List.of("any"));
-        exportRule.setSuperuser(List.of("any")); // Allow root/superuser access for NFS writes
+        exportRule.setRoRule(List.of("sys")); // Use sys (Unix UID/GID) authentication for NFS
+        exportRule.setRwRule(List.of("sys")); // Use sys (Unix UID/GID) authentication for NFS
+        exportRule.setSuperuser(List.of("sys")); // Allow root/superuser access with sys auth
         rules.add(exportRule);
 
         Svm svm = new Svm();

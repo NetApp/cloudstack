@@ -77,6 +77,7 @@ public class OntapHostListener implements HypervisorHostListener {
             logger.info("Host {} is already connected to storage pool {} at path {}. Skipping reconnection.", host.getName(), pool.getName(), existingConnection.getLocalPath());
             return true;
         }
+
         logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
         try {
             // Create the ModifyStoragePoolCommand to send to the agent
