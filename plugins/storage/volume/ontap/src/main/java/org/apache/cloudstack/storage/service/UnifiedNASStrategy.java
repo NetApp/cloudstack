@@ -381,6 +381,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
         exportRule.setRoRule(List.of("any"));
         exportRule.setRwRule(List.of("any"));
+        exportRule.setSuperuser(List.of("any")); // Allow root/superuser access for NFS writes
         rules.add(exportRule);
 
         Svm svm = new Svm();

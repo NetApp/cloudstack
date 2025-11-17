@@ -291,6 +291,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
                 logger.warn("Unable to establish a connection between " + host + " and " + dataStore, e);
+                throw new CloudRuntimeException("Failed to attach storage pool to cluster: " + e.getMessage(), e);
             }
         }
         _dataStoreHelper.attachCluster(dataStore);
@@ -327,6 +328,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
                 logger.warn("Unable to establish a connection between " + host + " and " + dataStore, e);
+                throw new CloudRuntimeException("Failed to attach storage pool to host: " + e.getMessage(), e);
             }
         }
         _dataStoreHelper.attachZone(dataStore);
