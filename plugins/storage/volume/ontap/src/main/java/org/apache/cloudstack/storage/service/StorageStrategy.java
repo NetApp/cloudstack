@@ -24,9 +24,11 @@ import feign.FeignException;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
+import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
@@ -58,6 +60,7 @@ public abstract class StorageStrategy {
     private final VolumeFeignClient volumeFeignClient;
     private final SvmFeignClient svmFeignClient;
     private final JobFeignClient jobFeignClient;
+    private final NetworkFeignClient networkFeignClient;
 
     protected OntapStorage storage;
 
@@ -78,6 +81,7 @@ public abstract class StorageStrategy {
         this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
+        this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
     }
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
@@ -174,7 +178,10 @@ public abstract class StorageStrategy {
 
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
-        volumeRequest.setAggregates(aggregates);
+        Aggregate aggr = new Aggregate();
+        aggr.setName(aggregates.get(0).getName());
+        aggr.setUuid(aggregates.get(0).getUuid());
+        volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
         // Make the POST API call to create the volume
         try {
@@ -268,6 +275,49 @@ public abstract class StorageStrategy {
     public Volume getStorageVolume(Volume volume) {
         //TODO
         return null;
+    }
+
+    /**
+     * Get the network ip interface
+     *
+     * @return the network interface ip as a String
+     */
+
+    public String getNetworkInterface() {
+        // Feign call to get network interfaces
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        try {
+            Map<String, Object> queryParams = Map.of(Constants.SVMNAME, storage.getSvmName());
+            if (storage.getProtocol() != null) {
+                switch (storage.getProtocol()) {
+                    case NFS3:
+                        queryParams = Map.of(Constants.SERVICES, Constants.DATA_NFS);
+                        break;
+                    case ISCSI:
+                        queryParams = Map.of(Constants.SERVICES, Constants.DATA_ISCSI);
+                        break;
+                    default:
+                        s_logger.error("Unsupported protocol: " + storage.getProtocol());
+                        throw new CloudRuntimeException("Unsupported protocol: " + storage.getProtocol());
+                }
+            }
+            queryParams.put(Constants.FIELDS, Constants.IP_ADDRESS);
+            queryParams.put(Constants.RETURN_RECORDS, Constants.TRUE);
+            OntapResponse<IpInterface> response =
+                    networkFeignClient.getNetworkIpInterfaces(authHeader, queryParams);
+            if (response != null && response.getRecords() != null && !response.getRecords().isEmpty()) {
+                // For simplicity, return the first interface's name
+                IpInterface ipInterface = response.getRecords().get(0);
+                s_logger.info("Retrieved network interface: " + ipInterface.getIp().getAddress());
+                return ipInterface.getIp().getAddress();
+            } else {
+                throw new CloudRuntimeException("No network interfaces found for SVM " + storage.getSvmName() +
+                        " for protocol " + storage.getProtocol());
+            }
+        } catch (FeignException.FeignClientException e) {
+            s_logger.error("Exception while retrieving network interfaces: ", e);
+            throw new CloudRuntimeException("Failed to retrieve network interfaces: " + e.getMessage());
+        }
     }
 
     /**

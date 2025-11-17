@@ -191,12 +191,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         switch (protocol) {
             case NFS3:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-                path = details.get(Constants.MANAGEMENT_LIF) + ":/" + storagePoolName;
+                path = Constants.PATH_SEPARATOR + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
-                path = "iqn.1992-08.com.netapp:" + details.get(Constants.SVM_NAME) + "." + storagePoolName;
+                path = Constants.PATH_SEPARATOR;
                 s_logger.info("Setting iSCSI path for storage pool: " + path);
                 break;
             default:
@@ -227,11 +227,19 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
+        // Get the DataLIF for data access
+        String dataLIF = storageStrategy.getNetworkInterface();
+        if (dataLIF == null || dataLIF.isEmpty()) {
+            throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
+        }
+        s_logger.info("Using Data LIF for storage access: " + dataLIF);
+        details.put(Constants.DATA_LIF, dataLIF);
+
         // Set parameters for primary data store
-        parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
+        parameters.setHost(details.get(Constants.DATA_LIF));
         parameters.setPort(Constants.ONTAP_PORT);
         parameters.setPath(path);
-        parameters.setTags(tags != null ? tags : "");
+        parameters.setTags(tags);
         parameters.setIsTagARule(isTagARule != null ? isTagARule : Boolean.FALSE);
         parameters.setDetails(details);
         parameters.setUuid(UUID.randomUUID().toString());
