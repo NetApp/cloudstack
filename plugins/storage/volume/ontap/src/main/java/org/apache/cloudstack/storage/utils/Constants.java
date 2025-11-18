@@ -55,6 +55,7 @@ public class Constants {
     public static final String FIELDS = "fields";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
+    public static final String SVMDOTNAME = "svm.name";
     public static final String DATA_NFS = "data_nfs";
     public static final String DATA_ISCSI = "data_iscsi";
     public static final String IP_ADDRESS = "ip.address";
