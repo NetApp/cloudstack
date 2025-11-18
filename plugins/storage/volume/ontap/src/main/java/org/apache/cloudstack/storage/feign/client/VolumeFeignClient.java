@@ -50,4 +50,3 @@ public interface VolumeFeignClient {
     @Headers({"Accept: {acceptHeader}", "Authorization: {authHeader}"})
     JobResponse updateVolumeRebalancing(@Param("acceptHeader") String acceptHeader, @Param("uuid") String uuid, Volume volumeRequest);
 }
-
