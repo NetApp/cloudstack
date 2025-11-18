@@ -42,6 +42,7 @@ import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -287,14 +288,15 @@ public abstract class StorageStrategy {
         // Feign call to get network interfaces
         String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {
-            Map<String, Object> queryParams = Map.of(Constants.SVMNAME, storage.getSvmName());
+            Map<String, Object> queryParams = new HashMap<>();
+            queryParams.put(Constants.SVMDOTNAME, storage.getSvmName());
             if (storage.getProtocol() != null) {
                 switch (storage.getProtocol()) {
                     case NFS3:
-                        queryParams = Map.of(Constants.SERVICES, Constants.DATA_NFS);
+                        queryParams .put(Constants.SERVICES, Constants.DATA_NFS);
                         break;
                     case ISCSI:
-                        queryParams = Map.of(Constants.SERVICES, Constants.DATA_ISCSI);
+                        queryParams.put(Constants.SERVICES, Constants.DATA_ISCSI);
                         break;
                     default:
                         s_logger.error("Unsupported protocol: " + storage.getProtocol());
