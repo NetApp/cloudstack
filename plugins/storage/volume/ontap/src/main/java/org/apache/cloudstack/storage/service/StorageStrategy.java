@@ -293,7 +293,7 @@ public abstract class StorageStrategy {
             if (storage.getProtocol() != null) {
                 switch (storage.getProtocol()) {
                     case NFS3:
-                        queryParams .put(Constants.SERVICES, Constants.DATA_NFS);
+                        queryParams.put(Constants.SERVICES, Constants.DATA_NFS);
                         break;
                     case ISCSI:
                         queryParams.put(Constants.SERVICES, Constants.DATA_ISCSI);
