@@ -113,10 +113,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         s_logger.info("  Host Address: " + primaryStore.getHostAddress());
         s_logger.info("  Path: " + primaryStore.getPath());
         s_logger.info("  Port: " + primaryStore.getPort());
-        s_logger.info("  Details keys: " + (poolDetails != null ? poolDetails.keySet() : "null"));
-        if (poolDetails != null && poolDetails.containsKey("managedStoreTarget")) {
-            s_logger.info("  managedStoreTarget: " + poolDetails.get("managedStoreTarget"));
-        }
+        s_logger.info("  Final details in storeTO: " + storeTO.getDetails());
         return storeTO;
     }
 
@@ -139,6 +136,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     dataStore, dataObject, dataObject.getType());
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 path = createCloudStackVolumeForTypeVolume(dataStore, dataObject);
+                createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
+            } else if (dataObject.getType() == DataObjectType.TEMPLATE) {
+                // For templates, return the UUID as the install path
+                // This will be used as the filename for the qcow2 file on NFS
+                path = dataObject.getUuid();
+                s_logger.info("createAsync: Template [{}] will use UUID as install path: {}", ((TemplateInfo)dataObject).getName(), path);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
