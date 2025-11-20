@@ -243,6 +243,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
+        // Add mountpoint detail for ManagedNFS - required by KVM agent's ManagedNfsStorageAdaptor
+        // The 'mountpoint' key is used by connectPhysicalDisk() to mount NFS export
+        details.put("mountpoint", path);
+
         // Set parameters for primary data store
         parameters.setPort(Constants.ONTAP_PORT);
         parameters.setHost(host);

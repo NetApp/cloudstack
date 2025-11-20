@@ -36,6 +36,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreCapabilities;
+import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver;
 import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
@@ -45,6 +46,7 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -84,7 +86,30 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public DataStoreTO getStoreTO(DataStore store) {
-        return null;
+        // Load storage pool details from database (includes "mountpoint" added during pool creation)
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+
+        // Set details on the store before creating PrimaryDataStoreTO
+        // This ensures PrimaryDataStoreTO constructor gets the details from database
+        PrimaryDataStore primaryStore = (PrimaryDataStore) store;
+        if (poolDetails != null && !poolDetails.isEmpty()) {
+            // Merge existing details (if any) with database details
+            Map<String, String> existingDetails = primaryStore.getDetails();
+            if (existingDetails == null) {
+                primaryStore.setDetails(poolDetails);
+            } else {
+                // Merge: database details take precedence
+                Map<String, String> mergedDetails = new HashMap<>(existingDetails);
+                mergedDetails.putAll(poolDetails);
+                primaryStore.setDetails(mergedDetails);
+            }
+        }
+
+        // Now create PrimaryDataStoreTO - it will get details from primaryStore.getDetails()
+        PrimaryDataStoreTO storeTO = new PrimaryDataStoreTO(primaryStore);
+
+        s_logger.debug("OntapPrimaryDatastoreDriver: getStoreTO: Created PrimaryDataStoreTO with details from storage_pool_details table");
+        return storeTO;
     }
 
     @Override
