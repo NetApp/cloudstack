@@ -77,15 +77,22 @@ public class UnifiedNASStrategy extends NASStrategy {
     @Override
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         s_logger.info("createCloudStackVolume: Create cloudstack volume " + cloudstackVolume);
-        try {
-            createFile(cloudstackVolume.getVolume().getUuid(),cloudstackVolume.getCloudstackVolName(), cloudstackVolume.getFile());
-            s_logger.debug("Successfully created file in ONTAP under volume with path {} or name {}  ", cloudstackVolume.getVolume().getUuid(), cloudstackVolume.getCloudstackVolName());
-            FileInfo responseFile = cloudstackVolume.getFile();
-            responseFile.setPath(cloudstackVolume.getCloudstackVolName());
-        }catch (Exception e) {
-            s_logger.error("Exception occurred while creating file or dir: {}. Exception: {}", cloudstackVolume.getCloudstackVolName(), e.getMessage());
-            throw new CloudRuntimeException("Failed to create file: " + e.getMessage());
-        }
+        // Skip ontap file creation for now
+//        try {
+//            boolean created = createFile(cloudstackVolume.getVolume().getUuid(),cloudstackVolume.getCloudstackVolName(), cloudstackVolume.getFile());
+//            if(created){
+//                s_logger.debug("Successfully created file in ONTAP under volume with path {} or name {}  ", cloudstackVolume.getVolume().getUuid(), cloudstackVolume.getCloudstackVolName());
+//                FileInfo responseFile = cloudstackVolume.getFile();
+//                responseFile.setPath(cloudstackVolume.getCloudstackVolName());
+//            }else {
+//                s_logger.error("File not created for volume  {}",  cloudstackVolume.getVolume().getUuid());
+//                throw new CloudRuntimeException("File not created");
+//            }
+//
+//        }catch (Exception e) {
+//            s_logger.error("Exception occurred while creating file or dir: {}. Exception: {}", cloudstackVolume.getCloudstackVolName(), e.getMessage());
+//            throw new CloudRuntimeException("Failed to create file: " + e.getMessage());
+//        }
         return cloudstackVolume;
     }
 
