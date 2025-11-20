@@ -108,7 +108,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         // Now create PrimaryDataStoreTO - it will get details from primaryStore.getDetails()
         PrimaryDataStoreTO storeTO = new PrimaryDataStoreTO(primaryStore);
 
-        s_logger.debug("OntapPrimaryDatastoreDriver: getStoreTO: Created PrimaryDataStoreTO with details from storage_pool_details table");
+        s_logger.info("OntapPrimaryDatastoreDriver: getStoreTO: Created PrimaryDataStoreTO for pool: " + store.getName());
+        s_logger.info("  Pool UUID: " + store.getUuid());
+        s_logger.info("  Host Address: " + primaryStore.getHostAddress());
+        s_logger.info("  Path: " + primaryStore.getPath());
+        s_logger.info("  Port: " + primaryStore.getPort());
+        s_logger.info("  Details keys: " + (poolDetails != null ? poolDetails.keySet() : "null"));
+        if (poolDetails != null && poolDetails.containsKey("managedStoreTarget")) {
+            s_logger.info("  managedStoreTarget: " + poolDetails.get("managedStoreTarget"));
+        }
         return storeTO;
     }
 
