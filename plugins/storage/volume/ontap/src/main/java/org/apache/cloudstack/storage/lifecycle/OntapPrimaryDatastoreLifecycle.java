@@ -192,7 +192,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
-                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                parameters.setType(Storage.StoragePoolType.ManagedNFS);
                 // Path should be just the NFS export path (junction path), NOT host:path
                 // CloudStack will construct the full mount path as: hostAddress + ":" + path
                 path = "/" + storagePoolName;

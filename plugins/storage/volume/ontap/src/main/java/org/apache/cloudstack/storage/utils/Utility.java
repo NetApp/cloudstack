@@ -58,6 +58,20 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
+    /**
+     * Creates CloudStackVolume request object for ONTAP REST API calls.
+     *
+     * IMPORTANT: For Managed NFS (Option 2 Implementation):
+     * - The NFS case below is DEPRECATED and NOT USED
+     * - OntapPrimaryDatastoreDriver.createManagedNfsVolume() handles NFS volumes
+     * - It returns UUID only without creating files (KVM creates qcow2 automatically)
+     * - This method is ONLY used for iSCSI/block storage volumes
+     *
+     * @param storagePool Storage pool information
+     * @param details Storage pool details with ONTAP connection info
+     * @param volumeObject Volume information
+     * @return CloudStackVolume request for ONTAP REST API
+     */
     public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, VolumeInfo volumeObject) {
         CloudStackVolume cloudStackVolumeRequest = null;
 
@@ -65,15 +79,17 @@ public class Utility {
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
         switch (protocolType) {
             case NFS:
-                // TODO add logic for NFS file creation
+                // DEPRECATED: This NFS case is NOT USED in Option 2 Implementation
+                // For Managed NFS, OntapPrimaryDatastoreDriver.createManagedNfsVolume()
+                // returns UUID only and lets KVM create qcow2 files automatically.
+                // This legacy code remains for reference but is bypassed in current implementation.
+                s_logger.warn("createCloudStackVolumeRequestByProtocol: NFS case should not be called. " +
+                            "Use OntapPrimaryDatastoreDriver.createManagedNfsVolume() instead.");
                 cloudStackVolumeRequest = new CloudStackVolume();
                 FileInfo file = new FileInfo();
-                //file.setName("test1"); // to be replaced with volume name // this should not be passed for dir
-                //file.setName(volumeObject.getName()); // to check whether this needs to be sent or not
-                file.setSize(Long.parseLong("10000"));
                 file.setSize(volumeObject.getSize());
-                file.setUnixPermissions(755); // check if it is needed only for dir ? it is needed for dir
-                file.setType(FileInfo.TypeEnum.DIRECTORY); // We are creating file for a cloudstack volume . Should it be dir ? // TODO change once multipart is done
+                file.setUnixPermissions(755);
+                file.setType(FileInfo.TypeEnum.FILE);
 
                 Volume poolVolume = new Volume();
                 poolVolume.setName(details.get(Constants.VOLUME_NAME));
