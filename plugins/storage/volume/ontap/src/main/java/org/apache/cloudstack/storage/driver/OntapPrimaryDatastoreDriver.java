@@ -231,10 +231,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         volume.setPoolId(dataStore.getId());
         volume.setPath(volumeUuid);  // Filename for qcow2 file
 
-        // CRITICAL: Store junction path in _iScsiName field
-        // CloudStack will use this in AttachCommand as DiskTO.MOUNT_POINT
-        // ManagedNfsStorageAdaptor will mount: nfs://hostAddress/junctionPath to /mnt/volumeUuid
-        volume.set_iScsiName(junctionPath);
+        // CRITICAL: For ManagedNFS, _iScsiName must be the volume UUID, NOT the junction path
+        // CloudStack uses _iScsiName as MANAGED_STORE_TARGET -> volPath -> libvirt pool name
+        // Libvirt pool names cannot contain '/', so we use the UUID
+        // The junction path comes from storage_pool_details.mountpoint (set in getStoreTO)
+        volume.set_iScsiName(volumeUuid);
 
         volumeDao.update(volume.getId(), volume);
 
