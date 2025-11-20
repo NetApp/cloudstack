@@ -71,16 +71,11 @@ public class OntapHostListener implements HypervisorHostListener {
             logger.error("Failed to connect host - storage pool not found with id: {}", poolId);
             return false;
         }
-        // CRITICAL: Check if already connected to avoid infinite loops
-        StoragePoolHostVO existingConnection = storagePoolHostDao.findByPoolHost(poolId, hostId);
-        if (existingConnection != null && existingConnection.getLocalPath() != null && !existingConnection.getLocalPath().isEmpty()) {
-            logger.info("Host {} is already connected to storage pool {} at path {}. Skipping reconnection.", host.getName(), pool.getName(), existingConnection.getLocalPath());
-            return true;
-        }
-
         logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
         try {
             // Create the ModifyStoragePoolCommand to send to the agent
+            // Note: Always send command even if database entry exists, because agent may have restarted
+            // and lost in-memory pool registration. The command handler is idempotent.
             ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool);
 
             Answer answer = _agentMgr.easySend(hostId, cmd);
