@@ -22,6 +22,9 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import org.apache.cloudstack.storage.command.CreateObjectCommand;
+import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
+import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;
@@ -68,6 +71,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
     @Inject private com.cloud.storage.dao.VolumeDao volumeDao;
+    @Inject private EndPointSelector epSelector;
+
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
@@ -162,11 +167,59 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
+     * Sends CreateObjectCommand to KVM agent to create qcow2 file using qemu-img.
+     * The KVM agent will call:
+     * - KVMStorageProcessor.createVolume()
+     * - primaryPool.createPhysicalDisk()
+     * - LibvirtStorageAdaptor.createPhysicalDiskByQemuImg()
+     * Which executes: qemu-img create -f qcow2 /mnt/<uuid>/<volumeUuid> <size>
+     *
+     * @param volumeInfo Volume information with size, format, uuid
+     * @return Answer from KVM agent indicating success/failure
+     */
+    private Answer createVolumeOnKVMHost(VolumeInfo volumeInfo) {
+        try {
+            s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
+
+            // Create command with volume TO (Transfer Object)
+            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
+
+            // Select endpoint (KVM agent) to send command
+            // epSelector will find an appropriate KVM host in the cluster/pod
+            EndPoint ep = epSelector.select(volumeInfo);
+
+            if (ep == null) {
+                String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
+                s_logger.error(errMsg);
+                return new Answer(cmd, false, errMsg);
+            }
+
+            s_logger.info("createVolumeOnKVMHost: Sending command to endpoint: {}", ep.getHostAddr());
+
+            // Send command to KVM agent and wait for response
+            Answer answer = ep.sendMessage(cmd);
+
+            if (answer != null && answer.getResult()) {
+                s_logger.info("createVolumeOnKVMHost: Successfully created qcow2 file on KVM host");
+            } else {
+                s_logger.error("createVolumeOnKVMHost: Failed to create qcow2 file: {}",
+                    answer != null ? answer.getDetails() : "null answer");
+            }
+
+            return answer;
+
+        } catch (Exception e) {
+            s_logger.error("createVolumeOnKVMHost: Exception sending CreateObjectCommand", e);
+            return new Answer(null, false, e.toString());
+        }
+    }
+
+    /**
      * Creates CloudStack volume based on storage protocol type (NFS or iSCSI).
      *
      * For Managed NFS (Option 2 Implementation):
-     * - Returns only UUID without creating qcow2 file
-     * - KVM hypervisor creates qcow2 file automatically during VM deployment
+     * - Creates ONTAP volume and sets metadata in CloudStack DB
+     * - Sends CreateObjectCommand to KVM host to create qcow2 file using qemu-img
      * - ONTAP volume provides the backing NFS storage
      *
      * For iSCSI/Block Storage:
@@ -184,7 +237,20 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String protocol = details.get(Constants.PROTOCOL);
 
         if (ProtocolType.NFS.name().equalsIgnoreCase(protocol)) {
-            return createManagedNfsVolume(dataStore, dataObject, storagePool);
+            // Step 1: Create ONTAP volume and set metadata
+            String volumeUuid = createManagedNfsVolume(dataStore, dataObject, storagePool);
+
+            // Step 2: Send command to KVM host to create qcow2 file using qemu-img
+            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+            Answer answer = createVolumeOnKVMHost(volumeInfo);
+
+            if (answer == null || !answer.getResult()) {
+                String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
+                s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
+                throw new CloudRuntimeException(errMsg);
+            }
+
+            return volumeUuid;
         } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
             return createManagedBlockVolume(dataStore, dataObject, storagePool, details);
         } else {
