@@ -192,7 +192,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
-                parameters.setType(Storage.StoragePoolType.ManagedNFS);
+                // Use NetworkFilesystem (not ManagedNFS) with managed=true
+                // This routes to LibvirtStorageAdaptor which has full qemu-img support
+                // Same pattern as CloudByte/Elastistor plugin
+                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 // Path should be just the NFS export path (junction path), NOT host:path
                 // CloudStack will construct the full mount path as: hostAddress + ":" + path
                 path = "/" + storagePoolName;

@@ -293,14 +293,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String junctionPath = storagePool.getPath();
 
         // Update volume metadata in CloudStack database
-        volume.setPoolType(Storage.StoragePoolType.ManagedNFS);
+        // Use NetworkFilesystem (not ManagedNFS) - matches pool type set during pool creation
+        volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
         volume.setPoolId(dataStore.getId());
         volume.setPath(volumeUuid);  // Filename for qcow2 file
 
-        // CRITICAL: For ManagedNFS, _iScsiName must be the volume UUID, NOT the junction path
-        // CloudStack uses _iScsiName as MANAGED_STORE_TARGET -> volPath -> libvirt pool name
-        // Libvirt pool names cannot contain '/', so we use the UUID
-        // The junction path comes from storage_pool_details.mountpoint (set in getStoreTO)
+        // For NetworkFilesystem with managed=true, _iScsiName should be set to volume UUID
+        // This maintains compatibility with managed storage behavior
         volume.set_iScsiName(volumeUuid);
 
         volumeDao.update(volume.getId(), volume);
