@@ -188,7 +188,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // Determine storage pool type and path based on protocol
         String path;
-        String host = "";
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
@@ -203,7 +202,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 // CloudStack will construct the full mount path as: hostAddress + ":" + path
                 path = "/" + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
-                host = "10.193.192.136"; // TODO hardcoded for now
+                String host = "10.193.192.136"; //
+                parameters.setHost(host);// TODO hardcoded for now
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
@@ -249,13 +249,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
-        // Add mountpoint detail for ManagedNFS - required by KVM agent's ManagedNfsStorageAdaptor
-        // The 'mountpoint' key is used by connectPhysicalDisk() to mount NFS export
-        details.put("mountpoint", path);
-
         // Set parameters for primary data store
         parameters.setPort(Constants.ONTAP_PORT);
-        parameters.setHost(host);
         parameters.setPath(path);
         parameters.setTags(tags != null ? tags : "");
         parameters.setIsTagARule(isTagARule != null ? isTagARule : Boolean.FALSE);
