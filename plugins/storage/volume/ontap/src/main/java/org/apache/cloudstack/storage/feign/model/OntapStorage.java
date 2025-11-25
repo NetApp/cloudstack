@@ -26,14 +26,16 @@ public class OntapStorage {
     private final String password;
     private final String managementLIF;
     private final String svmName;
+    private final Long size;
     private final ProtocolType protocolType;
     private final Boolean isDisaggregated;
 
-    public OntapStorage(String username, String password, String managementLIF, String svmName, ProtocolType protocolType, Boolean isDisaggregated) {
+    public OntapStorage(String username, String password, String managementLIF, String svmName, Long size, ProtocolType protocolType, Boolean isDisaggregated) {
         this.username = username;
         this.password = password;
         this.managementLIF = managementLIF;
         this.svmName = svmName;
+        this.size = size;
         this.protocolType = protocolType;
         this.isDisaggregated = isDisaggregated;
     }
@@ -52,6 +54,10 @@ public class OntapStorage {
 
     public String getSvmName() {
         return svmName;
+    }
+
+    public Long getSize() {
+        return size;
     }
 
     public ProtocolType getProtocol() {
