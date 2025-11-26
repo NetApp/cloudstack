@@ -22,8 +22,6 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
-import org.apache.cloudstack.storage.command.CreateObjectCommand;
-import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
@@ -139,42 +137,42 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * @param volumeInfo Volume information with size, format, uuid
      * @return Answer from KVM agent indicating success/failure
      */
-    private Answer createVolumeOnKVMHost(VolumeInfo volumeInfo) {
-        try {
-            s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
-
-            // Create command with volume TO (Transfer Object)
-            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
-
-            // Select endpoint (KVM agent) to send command
-            // epSelector will find an appropriate KVM host in the cluster/pod
-            EndPoint ep = epSelector.select(volumeInfo);
-
-            if (ep == null) {
-                String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
-                s_logger.error(errMsg);
-                return new Answer(cmd, false, errMsg);
-            }
-
-            s_logger.info("createVolumeOnKVMHost: Sending command to endpoint: {}", ep.getHostAddr());
-
-            // Send command to KVM agent and wait for response
-            Answer answer = ep.sendMessage(cmd);
-
-            if (answer != null && answer.getResult()) {
-                s_logger.info("createVolumeOnKVMHost: Successfully created qcow2 file on KVM host");
-            } else {
-                s_logger.error("createVolumeOnKVMHost: Failed to create qcow2 file: {}",
-                    answer != null ? answer.getDetails() : "null answer");
-            }
-
-            return answer;
-
-        } catch (Exception e) {
-            s_logger.error("createVolumeOnKVMHost: Exception sending CreateObjectCommand", e);
-            return new Answer(null, false, e.toString());
-        }
-    }
+//    private Answer createVolumeOnKVMHost(VolumeInfo volumeInfo) {
+//        try {
+//            s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
+//
+//            // Create command with volume TO (Transfer Object)
+//            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
+//
+//            // Select endpoint (KVM agent) to send command
+//            // epSelector will find an appropriate KVM host in the cluster/pod
+//            EndPoint ep = epSelector.select(volumeInfo);
+//
+//            if (ep == null) {
+//                String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
+//                s_logger.error(errMsg);
+//                return new Answer(cmd, false, errMsg);
+//            }
+//
+//            s_logger.info("createVolumeOnKVMHost: Sending command to endpoint: {}", ep.getHostAddr());
+//
+//            // Send command to KVM agent and wait for response
+//            Answer answer = ep.sendMessage(cmd);
+//
+//            if (answer != null && answer.getResult()) {
+//                s_logger.info("createVolumeOnKVMHost: Successfully created qcow2 file on KVM host");
+//            } else {
+//                s_logger.error("createVolumeOnKVMHost: Failed to create qcow2 file: {}",
+//                    answer != null ? answer.getDetails() : "null answer");
+//            }
+//
+//            return answer;
+//
+//        } catch (Exception e) {
+//            s_logger.error("createVolumeOnKVMHost: Exception sending CreateObjectCommand", e);
+//            return new Answer(null, false, e.toString());
+//        }
+//    }
 
     /**
      * Creates CloudStack volume based on storage protocol type (NFS or iSCSI).
@@ -203,14 +201,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String volumeUuid = createManagedNfsVolume(dataStore, dataObject, storagePool);
 
             // Step 2: Send command to KVM host to create qcow2 file using qemu-img
-            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
-            Answer answer = createVolumeOnKVMHost(volumeInfo);
+//            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+//            Answer answer = createVolumeOnKVMHost(volumeInfo);
 
-            if (answer == null || !answer.getResult()) {
-                String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
-                s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
-                throw new CloudRuntimeException(errMsg);
-            }
+//            if (answer == null || !answer.getResult()) {
+//                String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
+//                s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
+//                throw new CloudRuntimeException(errMsg);
+//            }
 
             return volumeUuid;
         } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
