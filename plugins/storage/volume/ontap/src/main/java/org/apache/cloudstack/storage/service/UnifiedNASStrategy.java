@@ -116,26 +116,27 @@ public class UnifiedNASStrategy extends NASStrategy {
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
 
-        Map<String, String> details = accessGroup.getPrimaryDataStoreInfo().getDetails();
-        String svmName = details.get(Constants.SVM_NAME);
-        String volumeUUID = details.get(Constants.VOLUME_UUID);
-        String volumeName = details.get(Constants.VOLUME_NAME);
-
-        // Create the export policy
-        ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
-        try {
-            createExportPolicy(svmName, policyRequest);
-            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
-
-            // attach export policy to volume of storage pool
-            assignExportPolicyToVolume(volumeUUID,policyRequest.getName());
-            s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
-            accessGroup.setPolicy(policyRequest);
-            return accessGroup;
-        }catch(Exception e){
-            s_logger.error("Exception occurred while creating access group: " +  e);
-            throw new CloudRuntimeException("Failed to create access group: " + e);
-        }
+//        Map<String, String> details = accessGroup.getPrimaryDataStoreInfo().getDetails();
+//        String svmName = details.get(Constants.SVM_NAME);
+//        String volumeUUID = details.get(Constants.VOLUME_UUID);
+//        String volumeName = details.get(Constants.VOLUME_NAME);
+//
+//        // Create the export policy
+//        ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
+//        try {
+//            createExportPolicy(svmName, policyRequest);
+//            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
+//
+//            // attach export policy to volume of storage pool
+//            assignExportPolicyToVolume(volumeUUID,policyRequest.getName());
+//            s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
+//            accessGroup.setPolicy(policyRequest);
+//            return accessGroup;
+//        }catch(Exception e){
+//            s_logger.error("Exception occurred while creating access group: " +  e);
+//            throw new CloudRuntimeException("Failed to create access group: " + e);
+//        }
+        return null;
     }
 
     @Override
@@ -379,7 +380,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
                     ? hostStorageIp
                     : host.getPrivateIpAddress();
-            String ipToUse = ip + "/32";
+            String ipToUse = ip + "/31";
             ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
             exportClient.setMatch(ipToUse);
             exportClients.add(exportClient);

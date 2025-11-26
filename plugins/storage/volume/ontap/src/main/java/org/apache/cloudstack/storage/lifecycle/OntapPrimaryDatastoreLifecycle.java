@@ -226,26 +226,25 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
-        if (isValid) {
-            long volumeSize = Long.parseLong(details.get(Constants.SIZE));
-            s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
-                    (volumeSize / (1024 * 1024 * 1024)) + " GB)");
-            try {
-                Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
-                if (volume == null) {
-                    s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
-                    throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
-                }
-
-                s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
-
-                details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
-                details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
-            } catch (Exception e) {
-                s_logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
-                throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
-            }
-        } else {
+        if (!isValid) {
+//            long volumeSize = Long.parseLong(details.get(Constants.SIZE));
+//            s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
+//                    (volumeSize / (1024 * 1024 * 1024)) + " GB)");
+//            try {
+//                Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+//                if (volume == null) {
+//                    s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
+//                    throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
+//                }
+//
+//                s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
+//
+//                details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
+//                details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
+//            } catch (Exception e) {
+//                s_logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
+//                throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
+//            }
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
