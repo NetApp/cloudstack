@@ -370,6 +370,7 @@ install -D plugins/hypervisors/kvm/target/cloud-plugin-hypervisor-kvm-%{_maventa
 cp plugins/hypervisors/kvm/target/dependencies/*  ${RPM_BUILD_ROOT}%{_datadir}/%{name}-agent/lib
 cp plugins/storage/volume/storpool/target/*.jar  ${RPM_BUILD_ROOT}%{_datadir}/%{name}-agent/lib
 cp plugins/storage/volume/linstor/target/*.jar  ${RPM_BUILD_ROOT}%{_datadir}/%{name}-agent/lib
+cp plugins/storage/volume/ontap/target/*.jar  ${RPM_BUILD_ROOT}%{_datadir}/%{name}-agent/lib
 
 # Usage server
 mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/%{name}/usage
