@@ -276,17 +276,17 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primaryStore.getClusterId()));
 
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
-        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
-        ExportPolicy exportPolicy = new ExportPolicy();
-        AccessGroup accessGroupRequest = new AccessGroup();
-        accessGroupRequest.setHostsToConnect(hostsToConnect);
-        accessGroupRequest.setScope(scope);
-        accessGroupRequest.setStoragePooldetails(details);
-        //primaryStore.setDetails(details);// setting details as it does not come from cloudstack
-        //accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-        accessGroupRequest.setPolicy(exportPolicy);
-        strategy.createAccessGroup(accessGroupRequest);
+//        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
+//        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+//        ExportPolicy exportPolicy = new ExportPolicy();
+//        AccessGroup accessGroupRequest = new AccessGroup();
+//        accessGroupRequest.setHostsToConnect(hostsToConnect);
+//        accessGroupRequest.setScope(scope);
+//        accessGroupRequest.setStoragePooldetails(details);
+//        //primaryStore.setDetails(details);// setting details as it does not come from cloudstack
+//        //accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+//        accessGroupRequest.setPolicy(exportPolicy);
+//        strategy.createAccessGroup(accessGroupRequest);
 
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
