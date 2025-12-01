@@ -136,7 +136,6 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         // Get junction path from details map (set by VolumeOrchestrator as MOUNT_POINT)
         // This contains the ONTAP junction path like "/cs_vol_7e72cff5_9730_46e3_80ff_fb76fd7b1dc8"
         String junctionPath = details != null ? details.get(DiskTO.MOUNT_POINT) : null;
-        
         // Fallback: If MOUNT_POINT not in details, check if volumeUuid parameter itself is a junction path
         // (starts with /cs_vol_ or /) - this happens for ROOT volumes where vol.getPath() contains junction path
         if (junctionPath == null || junctionPath.isEmpty()) {
