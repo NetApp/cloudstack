@@ -421,6 +421,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
         String ipToUse = "0.0.0.0/0";
         exportClient.setMatch(ipToUse);
+        exportClients.add(exportClient);
         exportRule.setClients(exportClients);
         exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
         exportRule.setRoRule(List.of("sys")); // Use sys (Unix UID/GID) authentication for NFS
