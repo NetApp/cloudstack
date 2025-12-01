@@ -190,7 +190,6 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         if (mountPoint != null) {
             return mountPoint;
         }
-        
         // Fallback: assume mount at /mnt/<volumeUuid> (old behavior)
         return _mountPoint + "/" + volumeUuid;
     }
