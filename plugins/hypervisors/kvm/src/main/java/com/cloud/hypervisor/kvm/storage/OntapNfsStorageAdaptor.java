@@ -171,12 +171,9 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             }
 
             logger.info("Successfully mounted ONTAP NFS volume: " + nfsServer + ":" + junctionPath + " at " + mountPoint);
-            
             // Store the mapping so other methods can find the correct mount point
             volumeToMountPointMap.put(volumeUuid, mountPoint);
-            
             return true;
-
         } catch (Exception e) {
             logger.error("Exception mounting ONTAP NFS volume: " + volumeUuid, e);
             return false;
@@ -215,7 +212,6 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             logger.info("Volume not mounted, nothing to disconnect: " + mountPoint);
             return true;
         }
-
         try {
             // Unmount: umount <mountPoint>
             String umountCmd = "umount " + mountPoint;
@@ -223,19 +219,14 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             script.add("-c");
             script.add(umountCmd);
             String result = script.execute();
-
             if (result != null) {
                 logger.warn("Failed to unmount ONTAP NFS volume: " + mountPoint + ", error: " + result);
                 return false;
             }
-
             logger.info("Successfully unmounted ONTAP NFS volume: " + mountPoint);
-            
             // Remove from mapping
             volumeToMountPointMap.remove(volumeUuid);
-            
             return true;
-
         } catch (Exception e) {
             logger.error("Exception unmounting ONTAP NFS volume: " + volumeUuid, e);
             return false;
