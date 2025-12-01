@@ -283,7 +283,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         accessGroupRequest.setHostsToConnect(hostsToConnect);
         accessGroupRequest.setScope(scope);
         primaryStore.setDetails(details);// setting details as it does not come from cloudstack
-        accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        //accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
         accessGroupRequest.setPolicy(exportPolicy);
         strategy.createAccessGroup(accessGroupRequest);
 
@@ -321,7 +321,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         accessGroupRequest.setHostsToConnect(hostsToConnect);
         accessGroupRequest.setScope(scope);
         primaryStore.setDetails(details); // setting details as it does not come from cloudstack
-        accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+        //accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
         accessGroupRequest.setPolicy(exportPolicy);
         strategy.createAccessGroup(accessGroupRequest);
 

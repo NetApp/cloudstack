@@ -20,12 +20,12 @@
 package org.apache.cloudstack.storage.service.model;
 
 import com.cloud.host.HostVO;
-import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 
 import java.util.List;
+import java.util.Map;
 
 public class AccessGroup {
 
@@ -33,7 +33,8 @@ public class AccessGroup {
     private ExportPolicy exportPolicy;
 
     private List<HostVO> hostsToConnect;
-    private PrimaryDataStoreInfo primaryDataStoreInfo;
+    private Map<String, String> storagePooldetails;
+    private Map<String, String> volumedetails;
     private Scope scope;
 
 
@@ -58,17 +59,23 @@ public class AccessGroup {
     public void setHostsToConnect(List<HostVO> hostsToConnect) {
         this.hostsToConnect = hostsToConnect;
     }
-    public PrimaryDataStoreInfo getPrimaryDataStoreInfo() {
-        return primaryDataStoreInfo;
-    }
-    public void setPrimaryDataStoreInfo(PrimaryDataStoreInfo primaryDataStoreInfo) {
-        this.primaryDataStoreInfo = primaryDataStoreInfo;
-    }
     public Scope getScope() {
         return scope;
     }
     public void setScope(Scope scope) {
         this.scope = scope;
+    }
+    public Map<String, String> getStoragePooldetails() {
+        return storagePooldetails;
+    }
+    public void setStoragePooldetails(Map<String, String> storagePooldetails) {
+        this.storagePooldetails = storagePooldetails;
+    }
+    public Map<String, String> getVolumedetails() {
+        return volumedetails;
+    }
+    public void setVolumedetails(Map<String, String> volumedetails) {
+        this.volumedetails = volumedetails;
     }
 
 }

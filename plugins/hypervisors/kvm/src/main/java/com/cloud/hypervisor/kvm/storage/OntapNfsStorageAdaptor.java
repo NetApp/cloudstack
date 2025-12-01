@@ -65,6 +65,8 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     private StorageLayer _storageLayer;
 
     private static final Map<String, KVMStoragePool> MapStorageUuidToStoragePool = new HashMap<String, KVMStoragePool>();
+    // Map to store volumeUuid → actual mount point path (with sanitized junction path)
+    private static final Map<String, String> volumeToMountPointMap = new HashMap<String, String>();
 
     public OntapNfsStorageAdaptor(StorageLayer storagelayer) {
         _storageLayer = storagelayer;
@@ -169,12 +171,31 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             }
 
             logger.info("Successfully mounted ONTAP NFS volume: " + nfsServer + ":" + junctionPath + " at " + mountPoint);
+            
+            // Store the mapping so other methods can find the correct mount point
+            volumeToMountPointMap.put(volumeUuid, mountPoint);
+            
             return true;
 
         } catch (Exception e) {
             logger.error("Exception mounting ONTAP NFS volume: " + volumeUuid, e);
             return false;
         }
+    }
+
+    /**
+     * Get the mount point for a volume UUID.
+     * Returns the stored mount point from connectPhysicalDisk, or falls back to volumeUuid.
+     */
+    private String getMountPointForVolume(String volumeUuid) {
+        // First check if we have a stored mount point (from connectPhysicalDisk)
+        String mountPoint = volumeToMountPointMap.get(volumeUuid);
+        if (mountPoint != null) {
+            return mountPoint;
+        }
+        
+        // Fallback: assume mount at /mnt/<volumeUuid> (old behavior)
+        return _mountPoint + "/" + volumeUuid;
     }
 
     /**
@@ -188,7 +209,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public boolean disconnectPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
         logger.info("Disconnecting ONTAP NFS volume: " + volumeUuid);
 
-        String mountPoint = _mountPoint + "/" + volumeUuid;
+        String mountPoint = getMountPointForVolume(volumeUuid);
 
         if (!isMounted(mountPoint)) {
             logger.info("Volume not mounted, nothing to disconnect: " + mountPoint);
@@ -209,6 +230,10 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             }
 
             logger.info("Successfully unmounted ONTAP NFS volume: " + mountPoint);
+            
+            // Remove from mapping
+            volumeToMountPointMap.remove(volumeUuid);
+            
             return true;
 
         } catch (Exception e) {
@@ -283,8 +308,8 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public KVMPhysicalDisk getPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
         logger.debug("Getting physical disk info for: " + volumeUuid);
 
-        // Path to qcow2 file: /mnt/<volumeUuid>/<volumeUuid>
-        String mountPoint = _mountPoint + "/" + volumeUuid;
+        // Path to qcow2 file: <mountPoint>/<volumeUuid>
+        String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
 
         // Check if file exists - if not, this might be a new disk that needs to be created
@@ -346,10 +371,10 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
 
         // For ONTAP NFS, the ONTAP volume should already exist (created by management server)
         // We need to:
-        // 1. Mount the per-volume NFS export
+        // 1. Mount the per-volume NFS export (via connectPhysicalDisk)
         // 2. Create the qcow2 file on it
 
-        String mountPoint = _mountPoint + "/" + volumeUuid;
+        String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
 
         try {
@@ -401,7 +426,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public boolean deletePhysicalDisk(String volumeUuid, KVMStoragePool pool, Storage.ImageFormat format) {
         logger.info("Deleting ONTAP NFS physical disk: " + volumeUuid);
 
-        String mountPoint = _mountPoint + "/" + volumeUuid;
+        String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
 
         try {

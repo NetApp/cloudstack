@@ -19,7 +19,6 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.host.HostVO;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
@@ -116,27 +115,60 @@ public class UnifiedNASStrategy extends NASStrategy {
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
 
-//        Map<String, String> details = accessGroup.getPrimaryDataStoreInfo().getDetails();
-//        String svmName = details.get(Constants.SVM_NAME);
-//        String volumeUUID = details.get(Constants.VOLUME_UUID);
-//        String volumeName = details.get(Constants.VOLUME_NAME);
-//
-//        // Create the export policy
-//        ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
-//        try {
-//            createExportPolicy(svmName, policyRequest);
-//            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
-//
-//            // attach export policy to volume of storage pool
-//            assignExportPolicyToVolume(volumeUUID,policyRequest.getName());
-//            s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
-//            accessGroup.setPolicy(policyRequest);
-//            return accessGroup;
-//        }catch(Exception e){
-//            s_logger.error("Exception occurred while creating access group: " +  e);
-//            throw new CloudRuntimeException("Failed to create access group: " + e);
-//        }
-        return null;
+        Map<String, String> storagePooldetails = accessGroup.getStoragePooldetails();
+        String svmName = storagePooldetails.get(Constants.SVM_NAME);
+        Map<String, String> volumedetails = accessGroup.getVolumedetails();
+        String volumeUUID = volumedetails.get(Constants.VOLUME_UUID);
+        String volumeName = volumedetails.get(Constants.VOLUME_NAME);
+
+        // Create the export policy
+        ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
+        try {
+            createExportPolicy(svmName, policyRequest);
+            s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
+            String sanitizedName = volumeUUID.replace('-', '_');
+            String ontapVolumeName = "cs_vol_" + sanitizedName;
+            // get the volume from ontap using name
+            try {
+                // Get the AuthHeader
+                String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+                Map<String, Object> queryParams = Map.of(Constants.NAME, ontapVolumeName);
+                s_logger.debug("Fetching volume details for: " + volumeName);
+
+                OntapResponse<Volume> ontapVolume = volumeFeignClient.getVolume(authHeader, queryParams);
+                s_logger.debug("Feign call completed. Processing response...");
+
+                if (ontapVolume == null) {
+                    s_logger.error("OntapResponse is null for volume: " + volumeName);
+                    throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Response is null");
+                }
+                s_logger.debug("OntapResponse is not null. Checking records field...");
+
+                if (ontapVolume.getRecords() == null) {
+                    s_logger.error("OntapResponse.records is null for volume: " + volumeName);
+                    throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Records list is null");
+                }
+                s_logger.debug("Records field is not null. Size: " + ontapVolume.getRecords().size());
+
+                if (ontapVolume.getRecords().isEmpty()) {
+                    s_logger.error("OntapResponse.records is empty for volume: " + volumeName);
+                    throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": No records found");
+                }
+                Volume onpvolume = ontapVolume.getRecords().get(0);
+                s_logger.info("Volume retrieved successfully: " + volumeName + ", UUID: " + onpvolume.getUuid());
+                // attach export policy to volume of storage pool
+                assignExportPolicyToVolume(onpvolume.getUuid(),policyRequest.getName());
+                s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
+                accessGroup.setPolicy(policyRequest);
+                return accessGroup;
+            } catch (Exception e) {
+                s_logger.error("Exception while retrieving volume details for: " + volumeName, e);
+                throw new CloudRuntimeException("Failed to fetch volume: " + volumeName + ". Error: " + e.getMessage(), e);
+            }
+        }catch(Exception e){
+            s_logger.error("Exception occurred while creating access group: " +  e);
+            throw new CloudRuntimeException("Failed to create access group: " + e);
+        }
     }
 
     @Override
@@ -374,17 +406,21 @@ public class UnifiedNASStrategy extends NASStrategy {
         ExportRule exportRule = new ExportRule();
 
         List<ExportRule.ExportClient> exportClients = new ArrayList<>();
-        List<HostVO> hosts = accessGroup.getHostsToConnect();
-        for (HostVO host : hosts) {
-            String hostStorageIp = host.getStorageIpAddress();
-            String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
-                    ? hostStorageIp
-                    : host.getPrivateIpAddress();
-            String ipToUse = ip + "/31";
-            ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
-            exportClient.setMatch(ipToUse);
-            exportClients.add(exportClient);
-        }
+//        List<HostVO> hosts = accessGroup.getHostsToConnect();
+//        for (HostVO host : hosts) {
+//            String hostStorageIp = host.getStorageIpAddress();
+//            String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
+//                    ? hostStorageIp
+//                    : host.getPrivateIpAddress();
+//            String ipToUse = ip + "/31";
+//            ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
+//            exportClient.setMatch(ipToUse);
+//            exportClients.add(exportClient);
+//        }
+
+        ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
+        String ipToUse = "0.0.0.0/0";
+        exportClient.setMatch(ipToUse);
         exportRule.setClients(exportClients);
         exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
         exportRule.setRoRule(List.of("sys")); // Use sys (Unix UID/GID) authentication for NFS

@@ -49,6 +49,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
@@ -209,6 +210,43 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 //                s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
 //                throw new CloudRuntimeException(errMsg);
 //            }
+
+            // create export olicy and attach it to new volume created
+            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+            Map<String, String> volumeDetails = new HashMap<>();
+            volumeDetails.put(Constants.VOLUME_UUID, volumeInfo.getUuid());
+            volumeDetails.put(Constants.VOLUME_NAME, volumeInfo.getName());
+
+            StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
+            AccessGroup accessGroup = new AccessGroup();
+            accessGroup.setStoragePooldetails(details);
+            accessGroup.setVolumedetails(volumeDetails);
+            storageStrategy.createAccessGroup(accessGroup);
+
+                // create export policy
+//            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+//            String svmName = details.get(Constants.SVM_NAME);
+//            String volumeName = volumeInfo.getName();
+//            String volumeUUID = volumeInfo.getUuid();
+//
+//            // Create the export policy
+//            ExportPolicy policyRequest = createExportPolicyRequest(svmName,volumeName);
+//            try {
+//                createExportPolicy(svmName, policyRequest);
+//                s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", policyRequest.getName());
+//
+//                // attach export policy to volume of storage pool
+//                assignExportPolicyToVolume(volumeUUID,policyRequest.getName());
+//                s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
+//                accessGroup.setPolicy(policyRequest);
+//                return accessGroup;
+//            }catch(Exception e){
+//                s_logger.error("Exception occurred while creating access group: " +  e);
+//                throw new CloudRuntimeException("Failed to create access group: " + e);
+//            }
+//
+
+
 
             return volumeUuid;
         } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
