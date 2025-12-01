@@ -136,10 +136,17 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         // Get junction path from details map (set by VolumeOrchestrator as MOUNT_POINT)
         // This contains the ONTAP junction path like "/cs_vol_7e72cff5_9730_46e3_80ff_fb76fd7b1dc8"
         String junctionPath = details != null ? details.get(DiskTO.MOUNT_POINT) : null;
-        // Validate junction path
+        
+        // Fallback: If MOUNT_POINT not in details, check if volumeUuid parameter itself is a junction path
+        // (starts with /cs_vol_ or /) - this happens for ROOT volumes where vol.getPath() contains junction path
         if (junctionPath == null || junctionPath.isEmpty()) {
-            logger.error("Missing junction path (MOUNT_POINT) in details for volume: " + volumeUuid);
-            return false;
+            if (volumeUuid != null && volumeUuid.startsWith("/")) {
+                logger.info("volumeUuid parameter appears to be junction path: " + volumeUuid);
+                junctionPath = volumeUuid;
+            } else {
+                logger.error("Missing junction path (MOUNT_POINT) in details and volumeUuid doesn't look like junction path: " + volumeUuid);
+                return false;
+            }
         }
         logger.info("Using junction path: " + junctionPath + " for volume: " + volumeUuid);
         // Create a sanitized mount point name (remove leading slash, replace special chars)
@@ -152,11 +159,9 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             logger.info("Volume already mounted: " + mountPoint);
             return true;
         }
-
         try {
             // Create mount point directory
             _storageLayer.mkdirs(mountPoint);
-
             // Mount: mount -t nfs <nfsServer>:<junctionPath> <mountPoint>
             String nfsServer = pool.getSourceHost();
             String mountCmd = "mount -t nfs " + nfsServer + ":" + junctionPath + " " + mountPoint;
@@ -164,15 +169,17 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             script.add("-c");
             script.add(mountCmd);
             String result = script.execute();
-
             if (result != null) {
                 logger.error("Failed to mount ONTAP NFS volume: " + volumeUuid + ", error: " + result);
                 return false;
             }
-
             logger.info("Successfully mounted ONTAP NFS volume: " + nfsServer + ":" + junctionPath + " at " + mountPoint);
             // Store the mapping so other methods can find the correct mount point
+            // Store both volumeUuid and junctionPath as keys (in case they're different)
             volumeToMountPointMap.put(volumeUuid, mountPoint);
+            if (!volumeUuid.equals(junctionPath)) {
+                volumeToMountPointMap.put(junctionPath, mountPoint);
+            }
             return true;
         } catch (Exception e) {
             logger.error("Exception mounting ONTAP NFS volume: " + volumeUuid, e);
@@ -204,9 +211,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     @Override
     public boolean disconnectPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
         logger.info("Disconnecting ONTAP NFS volume: " + volumeUuid);
-
         String mountPoint = getMountPointForVolume(volumeUuid);
-
         if (!isMounted(mountPoint)) {
             logger.info("Volume not mounted, nothing to disconnect: " + mountPoint);
             return true;
@@ -238,18 +243,15 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         String volumeUuid = volumeToDisconnect.get(DiskTO.UUID);
         // Note: POOL_UUID constant doesn't exist in DiskTO, pool info comes from other sources
         String poolUuid = volumeToDisconnect.get("poolUuid");
-
         if (volumeUuid == null || poolUuid == null) {
             logger.error("Missing volume UUID or pool UUID in disconnect request");
             return false;
         }
-
         KVMStoragePool pool = getStoragePool(poolUuid);
         if (pool == null) {
             logger.error("Storage pool not found: " + poolUuid);
             return false;
         }
-
         return disconnectPhysicalDisk(volumeUuid, pool);
     }
 
@@ -259,21 +261,16 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         if (localPath == null || !localPath.startsWith(_mountPoint + "/")) {
             return false; // Not our path
         }
-
         String[] pathParts = localPath.split("/");
         if (pathParts.length < 4) {
             return false;
         }
-
         String volumeUuid = pathParts[2]; // /mnt/<volumeUuid>/...
         String mountPoint = _mountPoint + "/" + volumeUuid;
-
         logger.info("Disconnecting ONTAP NFS volume by path: " + localPath + " -> " + volumeUuid);
-
         if (!isMounted(mountPoint)) {
             return true;
         }
-
         try {
             Script script = new Script("/bin/bash", 60000, logger);
             script.add("-c");
@@ -297,7 +294,6 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     @Override
     public KVMPhysicalDisk getPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
         logger.debug("Getting physical disk info for: " + volumeUuid);
-
         // Path to qcow2 file: <mountPoint>/<volumeUuid>
         String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
@@ -312,7 +308,6 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             return disk;
         }
         KVMPhysicalDisk disk = new KVMPhysicalDisk(diskPath, volumeUuid, pool);
-
         try {
             // Get disk info using qemu-img info
             QemuImgFile imgFile = new QemuImgFile(diskPath);
@@ -325,19 +320,16 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             } else if ("raw".equalsIgnoreCase(format)) {
                 disk.setFormat(PhysicalDiskFormat.RAW);
             }
-
             String sizeStr = info.get("virtual_size");
             if (sizeStr != null) {
                 disk.setVirtualSize(Long.parseLong(sizeStr));
                 disk.setSize(Long.parseLong(sizeStr));
             }
-
         } catch (QemuImgException | LibvirtException e) {
             logger.warn("Failed to get qemu-img info for: " + diskPath + ", " + e.getMessage());
             // Set default format if qemu-img fails
             disk.setFormat(PhysicalDiskFormat.QCOW2);
         }
-
         return disk;
     }
 
@@ -374,11 +366,9 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
                 throw new CloudRuntimeException("ONTAP volume not mounted for: " + volumeUuid +
                         ". Volume must be mounted before creating disk.");
             }
-
             // Create qcow2 file using qemu-img
             QemuImgFile destFile = new QemuImgFile(diskPath, size, format);
             QemuImg qemuImg = new QemuImg(0);
-
             Map<String, String> options = new HashMap<>();
             if (format == PhysicalDiskFormat.QCOW2 && provisioningType == Storage.ProvisioningType.THIN) {
                 options.put("preallocation", "metadata");
@@ -387,19 +377,14 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             } else if (format == PhysicalDiskFormat.QCOW2 && provisioningType == Storage.ProvisioningType.FAT) {
                 options.put("preallocation", "falloc");
             }
-
             qemuImg.create(destFile, options);
-
             logger.info("Successfully created qcow2 file: " + diskPath);
-
             // Return disk object
             KVMPhysicalDisk disk = new KVMPhysicalDisk(diskPath, volumeUuid, pool);
             disk.setFormat(format);
             disk.setSize(size);
             disk.setVirtualSize(size);
-
             return disk;
-
         } catch (QemuImgException | LibvirtException e) {
             logger.error("Failed to create qcow2 file: " + diskPath, e);
             throw new CloudRuntimeException("Failed to create ONTAP NFS disk: " + e.getMessage());
@@ -415,32 +400,25 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     @Override
     public boolean deletePhysicalDisk(String volumeUuid, KVMStoragePool pool, Storage.ImageFormat format) {
         logger.info("Deleting ONTAP NFS physical disk: " + volumeUuid);
-
         String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
-
         try {
             // Delete qcow2 file
             if (_storageLayer.exists(diskPath)) {
                 _storageLayer.delete(diskPath);
                 logger.info("Deleted qcow2 file: " + diskPath);
             }
-
             // Unmount the volume
             if (isMounted(mountPoint)) {
                 disconnectPhysicalDisk(volumeUuid, pool);
             }
-
             // Remove mount point directory
             if (_storageLayer.exists(mountPoint)) {
                 _storageLayer.delete(mountPoint);
             }
-
             // Note: The ONTAP volume itself is deleted by OntapPrimaryDatastoreDriver via API
-
             logger.info("Successfully deleted ONTAP NFS disk: " + volumeUuid);
             return true;
-
         } catch (Exception e) {
             logger.error("Failed to delete ONTAP NFS disk: " + volumeUuid, e);
             return false;
@@ -492,34 +470,27 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public KVMPhysicalDisk copyPhysicalDisk(KVMPhysicalDisk srcDisk, String name, KVMStoragePool destPool, int timeout,
                                            byte[] srcPassphrase, byte[] dstPassphrase, Storage.ProvisioningType provisioningType) {
         logger.info("Copying disk: " + srcDisk.getName() + " -> " + name);
-
         try {
             // Destination path: /mnt/<name>/<name>
             String destMountPoint = _mountPoint + "/" + name;
             String destPath = destMountPoint + "/" + name;
-
             // Ensure destination volume is mounted
             if (!isMounted(destMountPoint)) {
                 throw new CloudRuntimeException("Destination ONTAP volume not mounted: " + name);
             }
-
             // Use qemu-img convert for the copy
             QemuImgFile srcFile = new QemuImgFile(srcDisk.getPath());
             QemuImgFile destFile = new QemuImgFile(destPath, srcDisk.getVirtualSize(), srcDisk.getFormat());
-
             QemuImg qemuImg = new QemuImg(timeout);
             // Note: QemuImg.convert doesn't take passphrase parameters in this version
             // For encrypted volumes, use options map instead
             qemuImg.convert(srcFile, destFile);
-
             logger.info("Successfully copied disk to: " + destPath);
-
             // Return destination disk
             KVMPhysicalDisk destDisk = new KVMPhysicalDisk(destPath, name, destPool);
             destDisk.setFormat(srcDisk.getFormat());
             destDisk.setSize(srcDisk.getSize());
             destDisk.setVirtualSize(srcDisk.getVirtualSize());
-
             return destDisk;
 
         } catch (QemuImgException | LibvirtException e) {
@@ -532,25 +503,18 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public KVMPhysicalDisk createTemplateFromDirectDownloadFile(String templateFilePath, String destTemplatePath,
                                                                KVMStoragePool destPool, Storage.ImageFormat format, int timeout) {
         logger.info("Creating template from direct download: " + templateFilePath + " -> " + destTemplatePath);
-
         try {
             // Use qemu-img convert to create template
             QemuImgFile srcFile = new QemuImgFile(templateFilePath);
             QemuImgFile destFile = new QemuImgFile(destTemplatePath);
-
             QemuImg qemuImg = new QemuImg(timeout);
             qemuImg.convert(srcFile, destFile);
-
             logger.info("Successfully created template: " + destTemplatePath);
-
             // Get the template name from path
             String name = destTemplatePath.substring(destTemplatePath.lastIndexOf("/") + 1);
-
             KVMPhysicalDisk disk = new KVMPhysicalDisk(destTemplatePath, name, destPool);
             disk.setFormat(PhysicalDiskFormat.QCOW2);
-
             return disk;
-
         } catch (QemuImgException | LibvirtException e) {
             logger.error("Failed to create template from direct download", e);
             throw new CloudRuntimeException("Failed to create template: " + e.getMessage());
