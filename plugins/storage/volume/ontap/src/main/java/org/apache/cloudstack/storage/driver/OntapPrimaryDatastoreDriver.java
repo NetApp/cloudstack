@@ -255,7 +255,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
         StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
 
-        String ontapVolumeName = "cloudstack_vol_" + volumeUuid;
+        String incomingName = "cloudstack_vol_" + volumeInfo.getName();
+        String sanitizedName = incomingName.replace('-', '_'); // replaces all '-' with '_'
+        String ontapVolumeName = "cloudstack_vol_" + sanitizedName;
         String junctionPath = "/" + ontapVolumeName;
         long sizeInBytes = volumeInfo.getSize();
 
