@@ -131,15 +131,20 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public boolean connectPhysicalDisk(String volumeUuid, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
         logger.info("Connecting ONTAP NFS volume: " + volumeUuid);
 
-        // Get the per-volume junction path from details
-        // This was set by OntapPrimaryDatastoreDriver as _iScsiName
-        String junctionPath = details.get(DiskTO.MOUNT_POINT);
+        // For ONTAP NFS, volumeUuid is actually the junction path (e.g., "/cloudstack_vol_ROOT_7")
+        // This comes from managedStoreTarget set by OntapPrimaryDatastoreDriver
+        String junctionPath = volumeUuid;
+        
+        // Validate junction path
         if (junctionPath == null || junctionPath.isEmpty()) {
-            logger.error("Missing MOUNT_POINT (junction path) for volume: " + volumeUuid);
+            logger.error("Invalid junction path for volume: " + volumeUuid);
             return false;
         }
 
-        String mountPoint = _mountPoint + "/" + volumeUuid;
+        // Create a sanitized mount point name (remove leading slash, replace special chars)
+        String sanitizedPath = junctionPath.startsWith("/") ? junctionPath.substring(1) : junctionPath;
+        sanitizedPath = sanitizedPath.replace("/", "_");
+        String mountPoint = _mountPoint + "/" + sanitizedPath;
 
         // Check if already mounted
         if (isMounted(mountPoint)) {
