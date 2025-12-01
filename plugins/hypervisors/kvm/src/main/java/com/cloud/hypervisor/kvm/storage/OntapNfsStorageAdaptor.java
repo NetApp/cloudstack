@@ -134,13 +134,11 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         // For ONTAP NFS, volumeUuid is actually the junction path (e.g., "/cloudstack_vol_ROOT_7")
         // This comes from managedStoreTarget set by OntapPrimaryDatastoreDriver
         String junctionPath = volumeUuid;
-        
         // Validate junction path
         if (junctionPath == null || junctionPath.isEmpty()) {
             logger.error("Invalid junction path for volume: " + volumeUuid);
             return false;
         }
-
         // Create a sanitized mount point name (remove leading slash, replace special chars)
         String sanitizedPath = junctionPath.startsWith("/") ? junctionPath.substring(1) : junctionPath;
         sanitizedPath = sanitizedPath.replace("/", "_");
@@ -288,6 +286,15 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         String mountPoint = _mountPoint + "/" + volumeUuid;
         String diskPath = mountPoint + "/" + volumeUuid;
 
+        // Check if file exists - if not, this might be a new disk that needs to be created
+        // For ONTAP managed storage, the disk file doesn't exist until we create it
+        if (!_storageLayer.exists(diskPath)) {
+            logger.info("Disk file does not exist: " + diskPath + ". This is expected for new ONTAP managed volumes. Returning disk object with default format.");
+            // Return a basic disk object - size will be set during creation
+            KVMPhysicalDisk disk = new KVMPhysicalDisk(diskPath, volumeUuid, pool);
+            disk.setFormat(PhysicalDiskFormat.QCOW2); // Default format for new disks
+            return disk;
+        }
         KVMPhysicalDisk disk = new KVMPhysicalDisk(diskPath, volumeUuid, pool);
 
         try {
@@ -311,6 +318,8 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
 
         } catch (QemuImgException | LibvirtException e) {
             logger.warn("Failed to get qemu-img info for: " + diskPath + ", " + e.getMessage());
+            // Set default format if qemu-img fails
+            disk.setFormat(PhysicalDiskFormat.QCOW2);
         }
 
         return disk;
