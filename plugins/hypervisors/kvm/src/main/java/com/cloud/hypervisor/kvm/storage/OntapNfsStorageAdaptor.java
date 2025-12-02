@@ -358,17 +358,22 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         // We need to:
         // 1. Mount the per-volume NFS export (via connectPhysicalDisk)
         // 2. Create the qcow2 file on it
-
+        // Construct the junction path from volume UUID
+        // Volume UUID: 1832f014-1d35-497e-9a3e-aa294fe3c060 -> Junction: /cs_vol_1832f014_1d35_497e_9a3e_aa294fe3c060
+        String volumeUuidWithUnderscores = volumeUuid.replace("-", "_");
+        String junctionPath = "/cs_vol_" + volumeUuidWithUnderscores;
+        // Create details map with junction path for connectPhysicalDisk
+        Map<String, String> details = new HashMap<>();
+        details.put(DiskTO.MOUNT_POINT, junctionPath);
+        // Mount the ONTAP volume first (connectPhysicalDisk handles duplicate mount attempts)
+        boolean mounted = connectPhysicalDisk(volumeUuid, pool, details,false);
+        if (!mounted) {
+            throw new CloudRuntimeException("Failed to mount ONTAP volume for: " + volumeUuid);
+        }
         String mountPoint = getMountPointForVolume(volumeUuid);
         String diskPath = mountPoint + "/" + volumeUuid;
 
         try {
-            // The volume should be mounted via connectPhysicalDisk first
-            // But if not, we can't proceed
-            if (!isMounted(mountPoint)) {
-                throw new CloudRuntimeException("ONTAP volume not mounted for: " + volumeUuid +
-                        ". Volume must be mounted before creating disk.");
-            }
             // Create qcow2 file using qemu-img
             QemuImgFile destFile = new QemuImgFile(diskPath, size, format);
             QemuImg qemuImg = new QemuImg(0);
