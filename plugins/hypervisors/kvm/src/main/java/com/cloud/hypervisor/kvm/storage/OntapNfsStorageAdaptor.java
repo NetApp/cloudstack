@@ -476,10 +476,17 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         try {
             // Get mount point for destination volume (handles junction path properly)
             String destMountPoint = getMountPointForVolume(name);
-            // Extract volume UUID from name (remove leading slash if present)
-            String volumeUuid = name.startsWith("/") ? name.substring(name.lastIndexOf('_') + 1).replace("_", "-") : name;
-            String destPath = destMountPoint + "/" + volumeUuid + ".qcow2";
-            logger.info("Destination mount point: " + destMountPoint + ", file: " + volumeUuid + ".qcow2");
+            // Extract volume UUID from name (junction path format: /cs_vol_c392abfc_d209_4190_b7ea_e64d3e8b16a0)
+            String volumeUuid;
+            if (name.startsWith("/cs_vol_")) {
+                // Extract UUID from junction path: /cs_vol_<uuid_with_underscores> -> <uuid-with-hyphens>
+                volumeUuid = name.substring("/cs_vol_".length()).replace("_", "-");
+            } else {
+                // Already a UUID
+                volumeUuid = name;
+            }
+            String destPath = destMountPoint + "/" + volumeUuid;
+            logger.info("Destination mount point: " + destMountPoint + ", file: " + volumeUuid);
             // Ensure destination volume is mounted
             if (!isMounted(destMountPoint)) {
                 throw new CloudRuntimeException("Destination ONTAP volume not mounted: " + name);
