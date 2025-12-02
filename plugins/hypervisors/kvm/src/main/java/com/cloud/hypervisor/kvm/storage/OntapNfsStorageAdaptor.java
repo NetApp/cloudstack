@@ -472,7 +472,10 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         try {
             // Get mount point for destination volume (handles junction path properly)
             String destMountPoint = getMountPointForVolume(name);
-            String destPath = destMountPoint + "/" + name;
+            // Extract volume UUID from name (remove leading slash if present)
+            String volumeUuid = name.startsWith("/") ? name.substring(name.lastIndexOf('_') + 1).replace("_", "-") : name;
+            String destPath = destMountPoint + "/" + volumeUuid + ".qcow2";
+            logger.info("Destination mount point: " + destMountPoint + ", file: " + volumeUuid + ".qcow2");
             // Ensure destination volume is mounted
             if (!isMounted(destMountPoint)) {
                 throw new CloudRuntimeException("Destination ONTAP volume not mounted: " + name);
@@ -485,8 +488,8 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
             // For encrypted volumes, use options map instead
             qemuImg.convert(srcFile, destFile);
             logger.info("Successfully copied disk to: " + destPath);
-            // Return destination disk
-            KVMPhysicalDisk destDisk = new KVMPhysicalDisk(destPath, name, destPool);
+            // Return destination disk with correct volume UUID as name
+            KVMPhysicalDisk destDisk = new KVMPhysicalDisk(destPath, volumeUuid, destPool);
             destDisk.setFormat(srcDisk.getFormat());
             destDisk.setSize(srcDisk.getSize());
             destDisk.setVirtualSize(srcDisk.getVirtualSize());
