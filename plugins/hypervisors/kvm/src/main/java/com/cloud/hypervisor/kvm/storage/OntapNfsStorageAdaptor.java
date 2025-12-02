@@ -470,8 +470,8 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
                                            byte[] srcPassphrase, byte[] dstPassphrase, Storage.ProvisioningType provisioningType) {
         logger.info("Copying disk: " + srcDisk.getName() + " -> " + name);
         try {
-            // Destination path: /mnt/<name>/<name>
-            String destMountPoint = _mountPoint + "/" + name;
+            // Get mount point for destination volume (handles junction path properly)
+            String destMountPoint = getMountPointForVolume(name);
             String destPath = destMountPoint + "/" + name;
             // Ensure destination volume is mounted
             if (!isMounted(destMountPoint)) {
