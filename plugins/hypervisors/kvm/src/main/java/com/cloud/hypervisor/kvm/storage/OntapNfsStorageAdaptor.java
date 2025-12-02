@@ -360,7 +360,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         // 2. Create the qcow2 file on it
 
         String mountPoint = getMountPointForVolume(volumeUuid);
-        String diskPath = mountPoint + "/" + volumeUuid;
+        String diskPath = mountPoint + "/" + volumeUuid + ".qcow2";
 
         try {
             // The volume should be mounted via connectPhysicalDisk first
@@ -404,7 +404,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     public boolean deletePhysicalDisk(String volumeUuid, KVMStoragePool pool, Storage.ImageFormat format) {
         logger.info("Deleting ONTAP NFS physical disk: " + volumeUuid);
         String mountPoint = getMountPointForVolume(volumeUuid);
-        String diskPath = mountPoint + "/" + volumeUuid;
+        String diskPath = mountPoint + "/" + volumeUuid + ".qcow2";
         try {
             // Delete qcow2 file
             if (_storageLayer.exists(diskPath)) {
