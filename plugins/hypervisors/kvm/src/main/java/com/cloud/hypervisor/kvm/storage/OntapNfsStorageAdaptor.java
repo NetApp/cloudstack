@@ -188,7 +188,7 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
 
     /**
      * Get the mount point for a volume UUID.
-     * Returns the stored mount point from connectPhysicalDisk, or falls back to volumeUuid.
+     * Returns the stored mount point from connectPhysicalDisk, or constructs it from UUID.
      */
     private String getMountPointForVolume(String volumeUuid) {
         // First check if we have a stored mount point (from connectPhysicalDisk)
@@ -196,8 +196,12 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
         if (mountPoint != null) {
             return mountPoint;
         }
-        // Fallback: assume mount at /mnt/<volumeUuid> (old behavior)
-        return _mountPoint + "/" + volumeUuid;
+        // If not in map, construct the expected mount point
+        // Volume UUID format: 3ee3da4b-fa35-4737-9625-4a4a9baa9517
+        // FlexVolume name: cs_vol_3ee3da4b_fa35_4737_9625_4a4a9baa9517
+        // Mount point: /mnt/cs_vol_3ee3da4b_fa35_4737_9625_4a4a9baa9517
+        String volumeNameWithUnderscores = volumeUuid.replace("-", "_");
+        return _mountPoint + "/cs_vol_" + volumeNameWithUnderscores;
     }
 
     /**
@@ -293,9 +297,9 @@ public class OntapNfsStorageAdaptor implements StorageAdaptor {
     @Override
     public KVMPhysicalDisk getPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
         logger.debug("Getting physical disk info for: " + volumeUuid);
-        // Path to qcow2 file: <mountPoint>/<volumeUuid>
+        // Path to qcow2 file: <mountPoint>/<volumeUuid>.qcow2
         String mountPoint = getMountPointForVolume(volumeUuid);
-        String diskPath = mountPoint + "/" + volumeUuid;
+        String diskPath = mountPoint + "/" + volumeUuid + ".qcow2";
 
         // Check if file exists - if not, this might be a new disk that needs to be created
         // For ONTAP managed storage, the disk file doesn't exist until we create it
