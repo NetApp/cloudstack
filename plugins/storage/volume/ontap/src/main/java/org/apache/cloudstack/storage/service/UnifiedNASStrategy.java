@@ -390,10 +390,7 @@ public class UnifiedNASStrategy extends NASStrategy {
 
         try {
             s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
-            // Create command with volume TO (Transfer Object)
             CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
-            // Select endpoint (KVM agent) to send command
-            // epSelector will find an appropriate KVM host in the cluster/pod
             EndPoint ep = epSelector.select(volumeInfo);
             if (ep == null) {
                 String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
@@ -401,7 +398,6 @@ public class UnifiedNASStrategy extends NASStrategy {
                 return new Answer(cmd, false, errMsg);
             }
             s_logger.info("createVolumeOnKVMHost: Sending command to endpoint: {}", ep.getHostAddr());
-            // Send command to KVM agent and wait for response
             Answer answer = ep.sendMessage(cmd);
             if (answer != null && answer.getResult()) {
                 s_logger.info("createVolumeOnKVMHost: Successfully created qcow2 file on KVM host");

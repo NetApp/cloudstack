@@ -65,8 +65,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
-    @Inject private com.cloud.storage.dao.VolumeDao volumeDao;
-    @Inject private EndPointSelector epSelector;
 
     @Override
     public Map<String, String> getCapabilities() {
@@ -317,5 +315,4 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
         }
     }
-
 }
