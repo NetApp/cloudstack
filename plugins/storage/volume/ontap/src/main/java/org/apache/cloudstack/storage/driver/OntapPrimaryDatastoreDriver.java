@@ -22,7 +22,6 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
-import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;

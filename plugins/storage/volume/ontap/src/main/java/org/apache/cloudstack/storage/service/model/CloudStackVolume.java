@@ -19,12 +19,9 @@
 
 package org.apache.cloudstack.storage.service.model;
 
-import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
-import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.Volume;
 
 public class CloudStackVolume {
 
