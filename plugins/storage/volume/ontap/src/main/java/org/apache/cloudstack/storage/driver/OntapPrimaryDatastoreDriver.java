@@ -248,26 +248,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    /**
-     * Optional: Prepares ONTAP volume for optimal qcow2 file storage.
-     *
-     * Future enhancements can include:
-     * - Enable compression for qcow2 files
-     * - Set QoS policies
-     * - Enable deduplication
-     * - Configure snapshot policies
-     *
-     * This is a placeholder for ONTAP-specific optimizations.
-     */
-    private void prepareOntapVolumeForQcow2Storage(DataStore dataStore, VolumeInfo volumeInfo) {
-        // TODO: Implement ONTAP volume optimizations
-        // Examples:
-        // - storageStrategy.enableCompression(volumePath)
-        // - storageStrategy.setQosPolicy(volumePath, iops)
-        // - storageStrategy.enableDeduplication(volumePath)
-        s_logger.debug("prepareOntapVolumeForQcow2Storage: Placeholder for future ONTAP optimizations");
-    }
-
     @Override
     public void deleteAsync(DataStore store, DataObject data, AsyncCompletionCallback<CommandResult> callback) {
         CommandResult commandResult = new CommandResult();
