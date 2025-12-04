@@ -19,6 +19,9 @@
 
 package org.apache.cloudstack.storage.service.model;
 
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.Volume;
@@ -27,10 +30,8 @@ public class CloudStackVolume {
 
     private FileInfo file;
     private Lun lun;
-    private Volume volume;
-    // will be replaced after testing
-    private String cloudstackVolName;
-
+    private String datastoreId;
+    private VolumeInfo volumeInfo;
     public FileInfo getFile() {
         return file;
     }
@@ -46,16 +47,16 @@ public class CloudStackVolume {
     public void setLun(Lun lun) {
         this.lun = lun;
     }
-    public Volume getVolume() {
-        return volume;
+    public String getDatastoreId() {
+        return datastoreId;
     }
-    public void setVolume(Volume volume) {
-        this.volume = volume;
+    public void setDatastoreId(String datastoreId) {
+        this.datastoreId = datastoreId;
     }
-    public String getCloudstackVolName() {
-        return cloudstackVolName;
+    public VolumeInfo getVolumeInfo() {
+        return volumeInfo;
     }
-    public void setCloudstackVolName(String cloudstackVolName) {
-        this.cloudstackVolName = cloudstackVolName;
+    public void setVolumeInfo(VolumeInfo volumeInfot) {
+        this.volumeInfo = volumeInfot;
     }
 }

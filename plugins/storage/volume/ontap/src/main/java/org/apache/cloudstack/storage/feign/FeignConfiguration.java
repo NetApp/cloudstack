@@ -144,16 +144,9 @@ public class FeignConfiguration {
                 try (InputStream bodyStream = response.body().asInputStream()) {
                     json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                     logger.debug("Decoding JSON response: {}", json);
-                    logger.debug("Target type: {}", type);
-                    logger.debug("About to call jsonMapper.readValue()...");
-
                     Object result = null;
                     try {
-                        logger.debug("Calling jsonMapper.constructType()...");
                         var javaType = jsonMapper.getTypeFactory().constructType(type);
-                        logger.debug("constructType() returned: {}", javaType);
-
-                        logger.debug("Calling jsonMapper.readValue() with json and javaType...");
                         result = jsonMapper.readValue(json, javaType);
                         logger.debug("jsonMapper.readValue() completed successfully");
                     } catch (Throwable ex) {

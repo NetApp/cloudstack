@@ -192,12 +192,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         switch (protocol) {
             case NFS:
-                // Use NetworkFilesystem (not ManagedNFS) with managed=true
-                // This routes to LibvirtStorageAdaptor which has full qemu-img support
-                // Same pattern as CloudByte/Elastistor plugin
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-                // Path should be just the NFS export path (junction path), NOT host:path
-                // CloudStack will construct the full mount path as: hostAddress + ":" + path
                 path = "/" + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
                 host = "10.193.192.136"; // TODO hardcoded for now
@@ -233,9 +228,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                     s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
                     throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
                 }
-
                 s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
-
                 details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
                 details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
             } catch (Exception e) {
@@ -245,10 +238,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
-
-        // Add mountpoint detail for ManagedNFS - required by KVM agent's ManagedNfsStorageAdaptor
-        // The 'mountpoint' key is used by connectPhysicalDisk() to mount NFS export
-        details.put("mountpoint", path);
 
         // Set parameters for primary data store
         parameters.setPort(Constants.ONTAP_PORT);
@@ -293,7 +282,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
@@ -330,7 +318,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         strategy.createAccessGroup(accessGroupRequest);
 
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {

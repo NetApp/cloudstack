@@ -22,15 +22,12 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
-import org.apache.cloudstack.storage.command.CreateObjectCommand;
-import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
-import com.cloud.storage.VolumeVO;
 import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
@@ -39,7 +36,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreCapabilities;
-import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver;
 import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
@@ -49,7 +45,6 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -78,6 +73,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
         Map<String, String> mapCapabilities = new HashMap<>();
         // RAW managed initial implementation: snapshot features not yet supported
+        // TODO Set it to false once we start supporting snapshot feature
         mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.FALSE.toString());
         mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.FALSE.toString());
 
@@ -90,37 +86,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public DataStoreTO getStoreTO(DataStore store) {
-        // Load storage pool details from database (includes "mountpoint" added during pool creation)
-        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
-
-        // Set details on the store before creating PrimaryDataStoreTO
-        // This ensures PrimaryDataStoreTO constructor gets the details from database
-        PrimaryDataStore primaryStore = (PrimaryDataStore) store;
-        if (poolDetails != null && !poolDetails.isEmpty()) {
-            // Merge existing details (if any) with database details
-            Map<String, String> existingDetails = primaryStore.getDetails();
-            if (existingDetails == null) {
-                primaryStore.setDetails(poolDetails);
-            } else {
-                // Merge: database details take precedence
-                Map<String, String> mergedDetails = new HashMap<>(existingDetails);
-                mergedDetails.putAll(poolDetails);
-                primaryStore.setDetails(mergedDetails);
-            }
-        }
-
-        // Now create PrimaryDataStoreTO - it will get details from primaryStore.getDetails()
-        PrimaryDataStoreTO storeTO = new PrimaryDataStoreTO(primaryStore);
-
-        s_logger.info("OntapPrimaryDatastoreDriver: getStoreTO: Created PrimaryDataStoreTO for pool: " + store.getName());
-        s_logger.info("  Pool UUID: " + store.getUuid());
-        s_logger.info("  Host Address: " + primaryStore.getHostAddress());
-        s_logger.info("  Path: " + primaryStore.getPath());
-        s_logger.info("  Port: " + primaryStore.getPort());
-        s_logger.info("  Final details in storeTO: " + storeTO.getDetails());
-        return storeTO;
-    }
+    public DataStoreTO getStoreTO(DataStore store) { return null; }
 
     @Override
     public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
@@ -140,13 +106,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]",
                     dataStore, dataObject, dataObject.getType());
             if (dataObject.getType() == DataObjectType.VOLUME) {
-                path = createCloudStackVolumeForTypeVolume(dataStore, dataObject);
-                createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
-            } else if (dataObject.getType() == DataObjectType.TEMPLATE) {
-                // For templates, return the UUID as the install path
-                // This will be used as the filename for the qcow2 file on NFS
-                path = dataObject.getUuid();
-                s_logger.info("createAsync: Template [{}] will use UUID as install path: {}", ((TemplateInfo)dataObject).getName(), path);
+                path = createCloudStackVolumeForTypeVolume(dataStore, (VolumeInfo)dataObject);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
@@ -160,214 +120,32 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             createCmdResult.setResult(e.toString());
         } finally {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
-                s_logger.info("createAsync: Volume metadata created successfully. Path: {}", path);
+                s_logger.info("createAsync: Volume created successfully. Path: {}", path);
             }
             callback.complete(createCmdResult);
         }
     }
 
-    /**
-     * Sends CreateObjectCommand to KVM agent to create qcow2 file using qemu-img.
-     * The KVM agent will call:
-     * - KVMStorageProcessor.createVolume()
-     * - primaryPool.createPhysicalDisk()
-     * - LibvirtStorageAdaptor.createPhysicalDiskByQemuImg()
-     * Which executes: qemu-img create -f qcow2 /mnt/<uuid>/<volumeUuid> <size>
-     *
-     * @param volumeInfo Volume information with size, format, uuid
-     * @return Answer from KVM agent indicating success/failure
-     */
-    private Answer createVolumeOnKVMHost(VolumeInfo volumeInfo) {
-        try {
-            s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
-
-            // Create command with volume TO (Transfer Object)
-            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
-
-            // Select endpoint (KVM agent) to send command
-            // epSelector will find an appropriate KVM host in the cluster/pod
-            EndPoint ep = epSelector.select(volumeInfo);
-
-            if (ep == null) {
-                String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
-                s_logger.error(errMsg);
-                return new Answer(cmd, false, errMsg);
-            }
-
-            s_logger.info("createVolumeOnKVMHost: Sending command to endpoint: {}", ep.getHostAddr());
-
-            // Send command to KVM agent and wait for response
-            Answer answer = ep.sendMessage(cmd);
-
-            if (answer != null && answer.getResult()) {
-                s_logger.info("createVolumeOnKVMHost: Successfully created qcow2 file on KVM host");
-            } else {
-                s_logger.error("createVolumeOnKVMHost: Failed to create qcow2 file: {}",
-                    answer != null ? answer.getDetails() : "null answer");
-            }
-
-            return answer;
-
-        } catch (Exception e) {
-            s_logger.error("createVolumeOnKVMHost: Exception sending CreateObjectCommand", e);
-            return new Answer(null, false, e.toString());
-        }
-    }
-
-    /**
-     * Creates CloudStack volume based on storage protocol type (NFS or iSCSI).
-     *
-     * For Managed NFS (Option 2 Implementation):
-     * - Creates ONTAP volume and sets metadata in CloudStack DB
-     * - Sends CreateObjectCommand to KVM host to create qcow2 file using qemu-img
-     * - ONTAP volume provides the backing NFS storage
-     *
-     * For iSCSI/Block Storage:
-     * - Creates LUN via ONTAP REST API
-     * - Returns LUN path for direct attachment
-     */
-    private String createCloudStackVolumeForTypeVolume(DataStore dataStore, DataObject dataObject) {
+    private String createCloudStackVolumeForTypeVolume(DataStore dataStore, VolumeInfo volumeObject) {
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if(storagePool == null) {
-            s_logger.error("createCloudStackVolumeForTypeVolume: Storage Pool not found for id: {}", dataStore.getId());
-            throw new CloudRuntimeException("createCloudStackVolumeForTypeVolume: Storage Pool not found for id: " + dataStore.getId());
+            s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
         }
-
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
-        String protocol = details.get(Constants.PROTOCOL);
-
-        if (ProtocolType.NFS.name().equalsIgnoreCase(protocol)) {
-            // Step 1: Create ONTAP volume and set metadata
-            String volumeUuid = createManagedNfsVolume(dataStore, dataObject, storagePool);
-
-            // Step 2: Send command to KVM host to create qcow2 file using qemu-img
-            VolumeInfo volumeInfo = (VolumeInfo) dataObject;
-            Answer answer = createVolumeOnKVMHost(volumeInfo);
-
-            if (answer == null || !answer.getResult()) {
-                String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
-                s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
-                throw new CloudRuntimeException(errMsg);
-            }
-
-            return volumeUuid;
-        } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-            return createManagedBlockVolume(dataStore, dataObject, storagePool, details);
-        } else {
-            String errMsg = String.format("createCloudStackVolumeForTypeVolume: Unsupported protocol [%s]", protocol);
-            s_logger.error(errMsg);
-            throw new CloudRuntimeException(errMsg);
-        }
-    }
-
-    /**
-     * Creates Managed NFS Volume with ONTAP backing storage.
-     *
-     * Architecture: 1 CloudStack Storage Pool = 1 ONTAP Volume (shared by all volumes)
-     *
-     * Flow:
-     * 1. createAsync() stores volume metadata and NFS mount point
-     * 2. Volume attach triggers ManagedNfsStorageAdaptor.connectPhysicalDisk()
-     * 3. KVM mounts: nfs://nfsServer/junctionPath to /mnt/volumeUuid
-     * 4. Libvirt creates qcow2 file via storageVolCreateXML()
-     * 5. File created at: /vol/ontap_volume/volumeUuid (on ONTAP)
-     *
-     * Key Details:
-     * - All volumes in same pool share the same ONTAP volume NFS export
-     * - Each volume gets separate libvirt mount point: /mnt/<volumeUuid>
-     * - All qcow2 files stored in same ONTAP volume: /vol/<pool_volume_name>/
-     * - volume._iScsiName stores the NFS junction path (pool.path)
-     *
-     * @param dataStore CloudStack data store (storage pool)
-     * @param dataObject Volume data object
-     * @param storagePool Storage pool VO
-     * @return Volume UUID (used as filename for qcow2 file)
-     */
-    private String createManagedNfsVolume(DataStore dataStore, DataObject dataObject, StoragePoolVO storagePool) {
-        VolumeInfo volumeInfo = (VolumeInfo) dataObject;
-        VolumeVO volume = volumeDao.findById(volumeInfo.getId());
-        String volumeUuid = volumeInfo.getUuid();
-
-        // Get the NFS junction path from storage pool
-        // This is the path that was set during pool creation (e.g., "/my_pool_volume")
-        String junctionPath = storagePool.getPath();
-
-        // Update volume metadata in CloudStack database
-        // Use NetworkFilesystem (not ManagedNFS) - matches pool type set during pool creation
-        volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
-        volume.setPoolId(dataStore.getId());
-        volume.setPath(volumeUuid);  // Filename for qcow2 file
-
-        // For NetworkFilesystem with managed=true, _iScsiName should be set to volume UUID
-        // This maintains compatibility with managed storage behavior
-        volume.set_iScsiName(volumeUuid);
-
-        volumeDao.update(volume.getId(), volume);
-
-        s_logger.info("ONTAP Managed NFS Volume Created: uuid={}, path={}, junctionPath={}, format=QCOW2, " +
-                      "pool={}, size={}GB. Libvirt will create qcow2 file at mount time.",
-                      volumeUuid, volumeUuid, junctionPath, storagePool.getName(),
-                      volumeInfo.getSize() / (1024 * 1024 * 1024));
-
-        // Optional: Prepare ONTAP volume for optimal qcow2 storage (future enhancement)
-        // prepareOntapVolumeForQcow2Storage(dataStore, volumeInfo);
-
-        return volumeUuid;
-    }
-
-    /**
-     * Creates iSCSI/Block volume by calling ONTAP REST API to create a LUN.
-     *
-     * For block storage (iSCSI), the storage provider must create the LUN
-     * before CloudStack can use it. This is different from NFS where the
-     * hypervisor creates the file.
-     *
-     * @param dataStore CloudStack data store
-     * @param dataObject Volume data object
-     * @param storagePool Storage pool VO
-     * @param details Storage pool details containing ONTAP connection info
-     * @return LUN path/name for iSCSI attachment
-     */
-    private String createManagedBlockVolume(DataStore dataStore, DataObject dataObject,
-                                           StoragePoolVO storagePool, Map<String, String> details) {
         StorageStrategy storageStrategy = getStrategyByStoragePoolDetails(details);
-
-        s_logger.info("createManagedBlockVolume: Creating iSCSI LUN on ONTAP SVM [{}]", details.get(Constants.SVM_NAME));
-
-        CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, (VolumeInfo) dataObject);
-
+        s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
+        CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, volumeObject);
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
-
-        if (cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
-            String lunPath = cloudStackVolume.getLun().getName();
-            s_logger.info("createManagedBlockVolume: iSCSI LUN created successfully: {}", lunPath);
-            return lunPath;
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
+            return cloudStackVolume.getLun().getName();
+        } else if (ProtocolType.NFS.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            return volumeObject.getUuid(); // return the volume UUID for agent as path for mounting
         } else {
-            String errMsg = String.format("createManagedBlockVolume: LUN creation failed for volume [%s]. " +
-                                        "LUN or LUN path is null.", dataObject.getUuid());
+            String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + volumeObject;
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
-    }
-
-    /**
-     * Optional: Prepares ONTAP volume for optimal qcow2 file storage.
-     *
-     * Future enhancements can include:
-     * - Enable compression for qcow2 files
-     * - Set QoS policies
-     * - Enable deduplication
-     * - Configure snapshot policies
-     *
-     * This is a placeholder for ONTAP-specific optimizations.
-     */
-    private void prepareOntapVolumeForQcow2Storage(DataStore dataStore, VolumeInfo volumeInfo) {
-        // TODO: Implement ONTAP volume optimizations
-        // Examples:
-        // - storageStrategy.enableCompression(volumePath)
-        // - storageStrategy.setQosPolicy(volumePath, iops)
-        // - storageStrategy.enableDeduplication(volumePath)
-        s_logger.debug("prepareOntapVolumeForQcow2Storage: Placeholder for future ONTAP optimizations");
     }
 
     @Override
@@ -379,6 +157,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             if (data.getType() == DataObjectType.VOLUME) {
                 StoragePoolVO storagePool = storagePoolDao.findById(store.getId());
+                if(storagePool == null) {
+                    s_logger.error("deleteAsync : Storage Pool not found for id: " + store.getId());
+                    throw new CloudRuntimeException("deleteAsync : Storage Pool not found for id: " + store.getId());
+                }
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
                 if (ProtocolType.NFS.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                     // ManagedNFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
@@ -535,4 +317,5 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
         }
     }
+
 }

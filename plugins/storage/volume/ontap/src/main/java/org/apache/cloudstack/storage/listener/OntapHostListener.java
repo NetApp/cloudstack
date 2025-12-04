@@ -38,10 +38,6 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener;
 import com.cloud.host.dao.HostDao;
 
-/**
- * HypervisorHostListener implementation for ONTAP storage.
- * Handles connecting/disconnecting hosts to/from ONTAP-backed storage pools.
- */
 public class OntapHostListener implements HypervisorHostListener {
     protected Logger logger = LogManager.getLogger(getClass());
 

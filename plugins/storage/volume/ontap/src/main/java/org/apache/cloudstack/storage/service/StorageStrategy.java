@@ -150,23 +150,15 @@ public abstract class StorageStrategy {
         Volume volumeRequest = new Volume();
         Svm svm = new Svm();
         svm.setName(svmName);
-
         Nas nas = new Nas();
-        nas.setPath("/" + volumeName);
+        nas.setPath(Constants.PATH_SEPARATOR + volumeName);
 
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
         volumeRequest.setAggregates(aggregates);
         volumeRequest.setSize(size);
-        volumeRequest.setNas(nas); // be default if we don't set path , ONTAP create a volume with mount/junction path // TODO check if we need to append svm name or not
-        // since storage pool also cannot be duplicate so junction path can also be not duplicate so /volumeName will always be unique
-        // Make the POST API call to create the volume
+        volumeRequest.setNas(nas);
         try {
-            /*
-              ONTAP created a default rule of 0.0.0.0 if no export rule are defined while creating volume
-              and since in storage pool creation, cloudstack is not aware of the host , we can either create default or
-              permissive rule and later update it as part of attachCluster or attachZone implementation
-             */
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
                 throw new CloudRuntimeException("Failed to initiate volume creation for " + volumeName);
@@ -201,7 +193,6 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Failed to create volume: " + e.getMessage());
         }
         s_logger.info("Volume created successfully: " + volumeName);
-        // Below code is to update volume uuid to storage pool mapping once and used for all other workflow saving get volume call
         try {
             Map<String, Object> queryParams = Map.of(Constants.NAME, volumeName);
             s_logger.debug("Fetching volume details for: " + volumeName);
