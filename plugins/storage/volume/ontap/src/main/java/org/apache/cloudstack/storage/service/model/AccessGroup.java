@@ -19,13 +19,22 @@
 
 package org.apache.cloudstack.storage.service.model;
 
+import com.cloud.host.HostVO;
+import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.Igroup;
+
+import java.util.List;
 
 public class AccessGroup {
 
     private Igroup igroup;
     private ExportPolicy exportPolicy;
+
+    private List<HostVO> hostsToConnect;
+    private PrimaryDataStoreInfo primaryDataStoreInfo;
+    private Scope scope;
 
     public Igroup getIgroup() {
         return igroup;
@@ -41,5 +50,24 @@ public class AccessGroup {
 
     public void setPolicy(ExportPolicy policy) {
         this.exportPolicy = policy;
+    }
+
+    public List<HostVO> getHostsToConnect() {
+        return hostsToConnect;
+    }
+    public void setHostsToConnect(List<HostVO> hostsToConnect) {
+        this.hostsToConnect = hostsToConnect;
+    }
+    public PrimaryDataStoreInfo getPrimaryDataStoreInfo() {
+        return primaryDataStoreInfo;
+    }
+    public void setPrimaryDataStoreInfo(PrimaryDataStoreInfo primaryDataStoreInfo) {
+        this.primaryDataStoreInfo = primaryDataStoreInfo;
+    }
+    public Scope getScope() {
+        return scope;
+    }
+    public void setScope(Scope scope) {
+        this.scope = scope;
     }
 }

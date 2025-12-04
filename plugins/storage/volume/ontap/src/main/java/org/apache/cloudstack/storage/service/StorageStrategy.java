@@ -25,10 +25,12 @@ import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
+import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
+import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
@@ -37,6 +39,7 @@ import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
@@ -62,6 +65,7 @@ public abstract class StorageStrategy {
     private final SvmFeignClient svmFeignClient;
     private final JobFeignClient jobFeignClient;
     private final NetworkFeignClient networkFeignClient;
+    private final SANFeignClient sanFeignClient;
 
     protected OntapStorage storage;
 
@@ -83,6 +87,7 @@ public abstract class StorageStrategy {
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
         this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
+        this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
     }
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
@@ -279,6 +284,57 @@ public abstract class StorageStrategy {
     }
 
     /**
+     * Get the storage path based on protocol.
+     * For iSCSI: Returns the iSCSI target IQN (e.g., iqn.1992-08.com.netapp:sn.xxx:vs.3)
+     * For NFS: Returns the mount path (to be implemented)
+     *
+     * @return the storage path as a String
+     */
+    public String getStoragePath() {
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        String targetIqn = null;
+        try {
+            if (storage.getProtocol() == ProtocolType.ISCSI) {
+                // For iSCSI, fetch the target IQN from the iSCSI service
+                s_logger.info("Fetching iSCSI target IQN for SVM: {}", storage.getSvmName());
+
+                Map<String, Object> queryParams = new HashMap<>();
+                queryParams.put(Constants.SVM_DOT_NAME, storage.getSvmName());
+                queryParams.put("fields", "enabled,target");
+                queryParams.put("max_records", "1");
+
+                OntapResponse<IscsiService> response = sanFeignClient.getIscsiServices(authHeader, queryParams);
+
+                if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+                    throw new CloudRuntimeException("No iSCSI service found for SVM: " + storage.getSvmName());
+                }
+
+                IscsiService iscsiService = response.getRecords().get(0);
+
+                if (iscsiService.getTarget() == null || iscsiService.getTarget().getName() == null) {
+                    throw new CloudRuntimeException("iSCSI target IQN not found for SVM: " + storage.getSvmName());
+                }
+
+                targetIqn = iscsiService.getTarget().getName();
+                s_logger.info("Retrieved iSCSI target IQN: {}", targetIqn);
+                return targetIqn;
+
+            } else if (storage.getProtocol() == ProtocolType.NFS3) {
+                // TODO: Implement NFS path retrieval logic
+            } else {
+                throw new CloudRuntimeException("Unsupported protocol for path retrieval: " + storage.getProtocol());
+            }
+
+        } catch (FeignException.FeignClientException e) {
+            s_logger.error("Exception while retrieving storage path for protocol {}: {}", storage.getProtocol(), e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to retrieve storage path: " + e.getMessage());
+        }
+        return targetIqn;
+    }
+
+
+
+    /**
      * Get the network ip interface
      *
      * @return the network interface ip as a String
@@ -289,7 +345,7 @@ public abstract class StorageStrategy {
         String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {
             Map<String, Object> queryParams = new HashMap<>();
-            queryParams.put(Constants.SVMDOTNAME, storage.getSvmName());
+            queryParams.put(Constants.SVM_DOT_NAME, storage.getSvmName());
             if (storage.getProtocol() != null) {
                 switch (storage.getProtocol()) {
                     case NFS3:
@@ -378,7 +434,7 @@ public abstract class StorageStrategy {
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
-    abstract AccessGroup createAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup createAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -388,7 +444,7 @@ public abstract class StorageStrategy {
      *
      * @param accessGroup the access group to delete
      */
-    abstract void deleteAccessGroup(AccessGroup accessGroup);
+    abstract public void deleteAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
