@@ -57,7 +57,7 @@ public class OntapHostListener implements HypervisorHostListener {
         logger.info("Connect to host " + hostId + " from pool " + poolId);
         Host host = _hostDao.findById(hostId);
         if (host == null) {
-            logger.error("Failed to add host by HostListener as host was not found with id : {}", hostId);
+            logger.error("host was not found with id : {}", hostId);
             return false;
         }
 

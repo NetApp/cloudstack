@@ -195,7 +195,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 path = "/" + storagePoolName;
                 s_logger.info("Setting NFS path for storage pool: " + path);
-                host = "10.193.192.136"; // TODO hardcoded for now
+                // host = "10.193.192.136"; // TODO hardcoded for now,uncomment and replace it with data lif
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);

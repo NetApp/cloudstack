@@ -21,7 +21,7 @@ package org.apache.cloudstack.storage.utils;
 
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
@@ -56,7 +56,7 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, VolumeInfo volumeObject) {
+    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject volumeObject) {
         CloudStackVolume cloudStackVolumeRequest = null;
 
         String protocol = details.get(Constants.PROTOCOL);

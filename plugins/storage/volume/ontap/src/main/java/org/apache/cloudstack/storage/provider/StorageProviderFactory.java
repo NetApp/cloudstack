@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.provider;
 
+import com.cloud.utils.component.ComponentContext;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -39,6 +40,7 @@ public class StorageProviderFactory {
             case NFS:
                 if (!ontapStorage.getIsDisaggregated()) {
                     UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
+                    ComponentContext.inject(unifiedNASStrategy);
                     unifiedNASStrategy.setOntapStorage(ontapStorage);
                     return unifiedNASStrategy;
                 }
@@ -46,6 +48,7 @@ public class StorageProviderFactory {
             case ISCSI:
                 if (!ontapStorage.getIsDisaggregated()) {
                     UnifiedSANStrategy unifiedSANStrategy = new UnifiedSANStrategy(ontapStorage);
+                    ComponentContext.inject(unifiedSANStrategy);
                     unifiedSANStrategy.setOntapStorage(ontapStorage);
                     return unifiedSANStrategy;
                 }

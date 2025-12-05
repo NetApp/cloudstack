@@ -19,7 +19,7 @@
 
 package org.apache.cloudstack.storage.service.model;
 
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
 
@@ -28,7 +28,7 @@ public class CloudStackVolume {
     private FileInfo file;
     private Lun lun;
     private String datastoreId;
-    private VolumeInfo volumeInfo;
+    private DataObject volumeInfo; // This is needed as we need DataObject to be passed to agent to create volume
     public FileInfo getFile() {
         return file;
     }
@@ -50,10 +50,10 @@ public class CloudStackVolume {
     public void setDatastoreId(String datastoreId) {
         this.datastoreId = datastoreId;
     }
-    public VolumeInfo getVolumeInfo() {
+    public DataObject getVolumeInfo() {
         return volumeInfo;
     }
-    public void setVolumeInfo(VolumeInfo volumeInfot) {
-        this.volumeInfo = volumeInfot;
+    public void setVolumeInfo(DataObject volumeInfo) {
+        this.volumeInfo = volumeInfo;
     }
 }

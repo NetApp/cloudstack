@@ -26,9 +26,9 @@ import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
@@ -48,6 +48,7 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.Utility;
+import org.apache.cloudstack.storage.volume.VolumeObject;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -82,16 +83,21 @@ public class UnifiedNASStrategy extends NASStrategy {
     @Override
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         s_logger.info("createCloudStackVolume: Create cloudstack volume " + cloudstackVolume);
-        // Step 1: set cloudstack volume metadata
-        String volumeUuid = updateCloudStackVolumeMetadata(cloudstackVolume.getDatastoreId(), cloudstackVolume.getVolumeInfo());
-        // Step 2: Send command to KVM host to create qcow2 file using qemu-img
-        Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
+        try {
+            // Step 1: set cloudstack volume metadata
+            String volumeUuid = updateCloudStackVolumeMetadata(cloudstackVolume.getDatastoreId(), cloudstackVolume.getVolumeInfo());
+            // Step 2: Send command to KVM host to create qcow2 file using qemu-img
+            Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
             if (answer == null || !answer.getResult()) {
                 String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
                 s_logger.error("createCloudStackVolumeForTypeVolume: " + errMsg);
                 throw new CloudRuntimeException(errMsg);
             }
             return cloudstackVolume;
+        }catch (Exception e) {
+            s_logger.error("createCloudStackVolumeForTypeVolume: error occured " + e);
+            throw new CloudRuntimeException(e);
+        }
     }
 
     @Override
@@ -374,18 +380,29 @@ public class UnifiedNASStrategy extends NASStrategy {
         return exportPolicy;
     }
 
-    private String updateCloudStackVolumeMetadata(String dataStoreId, VolumeInfo volumeInfo) {
-        s_logger.info("createManagedNfsVolume called with datastoreID: {} volumeInfo: {} ", dataStoreId, volumeInfo );
-        VolumeVO volume = volumeDao.findById(volumeInfo.getId());
-        String volumeUuid = volumeInfo.getUuid();
-        volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
-        volume.setPoolId(Long.parseLong(dataStoreId)); //need to check if volume0 already has this data filled
-        volume.setPath(volumeUuid);  // Filename for qcow2 file
-        volumeDao.update(volume.getId(), volume);
-        return volumeUuid;
+    private String updateCloudStackVolumeMetadata(String dataStoreId, DataObject volumeInfo) {
+        s_logger.info("updateCloudStackVolumeMetadata called with datastoreID: {} volumeInfo: {} ", dataStoreId, volumeInfo );
+       try {
+           VolumeObject volumeObject = (VolumeObject) volumeInfo;
+           long volumeId = volumeObject.getId();
+           s_logger.info("VolumeInfo ID from VolumeObject: {}", volumeId);
+           VolumeVO volume = volumeDao.findById(volumeId);
+           if (volume == null) {
+               throw new CloudRuntimeException("Volume not found with id: " + volumeId);
+           }
+           String volumeUuid = volumeInfo.getUuid();
+           volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
+           volume.setPoolId(Long.parseLong(dataStoreId));
+           volume.setPath(volumeUuid);  // Filename for qcow2 file
+           volumeDao.update(volume.getId(), volume);
+           return volumeUuid;
+       }catch (Exception e){
+           s_logger.error("Exception while updating volumeInfo: {} in volume: {}", dataStoreId, volumeInfo.getUuid(), e);
+           throw new CloudRuntimeException("Exception while updating volumeInfo: " + e.getMessage());
+       }
     }
 
-    private Answer createVolumeOnKVMHost(VolumeInfo volumeInfo) {
+    private Answer createVolumeOnKVMHost(DataObject volumeInfo) {
         s_logger.info("createVolumeOnKVMHost called with volumeInfo: {} ", volumeInfo);
 
         try {

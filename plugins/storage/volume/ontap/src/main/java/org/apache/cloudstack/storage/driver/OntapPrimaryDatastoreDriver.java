@@ -103,7 +103,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]",
                     dataStore, dataObject, dataObject.getType());
             if (dataObject.getType() == DataObjectType.VOLUME) {
-                path = createCloudStackVolumeForTypeVolume(dataStore, (VolumeInfo)dataObject);
+                VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+                path = createCloudStackVolumeForTypeVolume(dataStore, volumeInfo);
                 createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
