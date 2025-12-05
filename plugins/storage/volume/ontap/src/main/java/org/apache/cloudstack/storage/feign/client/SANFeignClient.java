@@ -27,7 +27,6 @@ import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
 import java.util.Map;
 
 //TODO: Proper URLs should be added in the RequestLine annotations below
