@@ -70,5 +70,4 @@ public class AccessGroup {
     public void setScope(Scope scope) {
         this.scope = scope;
     }
-
 }
