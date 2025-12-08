@@ -19,14 +19,13 @@
 
 package org.apache.cloudstack.storage.utils;
 
+import com.cloud.storage.ScopeType;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
-import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
-import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.LunSpace;
-import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -53,41 +52,40 @@ public class Utility {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject dataObject) {
-       CloudStackVolume cloudStackVolumeRequest = null;
+    public static String getOSTypeFromHypervisor(String hypervisorType){
+        switch (hypervisorType) {
+            case Constants.KVM:
+                return Lun.OsTypeEnum.LINUX.name();
+            default:
+                String errMsg = "getOSTypeFromHypervisor : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                s_logger.error(errMsg);
+                throw new CloudRuntimeException(errMsg);
+        }
+    }
 
-       String protocol = details.get(Constants.PROTOCOL);
-       if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-           cloudStackVolumeRequest = new CloudStackVolume();
-           Lun lunRequest = new Lun();
-           Svm svm = new Svm();
-           svm.setName(details.get(Constants.SVM_NAME));
-           lunRequest.setSvm(svm);
+    public static StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+        if (details == null || details.isEmpty()) {
+            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
+        }
+        String protocol = details.get(Constants.PROTOCOL);
+        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), Long.parseLong(details.get(Constants.SIZE)),
+                ProtocolType.valueOf(protocol),
+                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
+        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
+        boolean isValid = storageStrategy.connect();
+        if (isValid) {
+            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
+            return storageStrategy;
+        } else {
+            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
+        }
+    }
 
-           LunSpace lunSpace = new LunSpace();
-           lunSpace.setSize(dataObject.getSize());
-           lunRequest.setSpace(lunSpace);
-           //Lun name is full path like in unified "/vol/VolumeName/LunName"
-           String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.PATH_SEPARATOR + dataObject.getName();
-           lunRequest.setName(lunFullName);
-
-           String hypervisorType = storagePool.getHypervisor().name();
-           String osType = null;
-           switch (hypervisorType) {
-               case Constants.KVM:
-                   osType = Lun.OsTypeEnum.LINUX.getValue();
-                   break;
-               default:
-                   String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
-                   s_logger.error(errMsg);
-                   throw new CloudRuntimeException(errMsg);
-           }
-           lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
-
-           cloudStackVolumeRequest.setLun(lunRequest);
-           return cloudStackVolumeRequest;
-       } else {
-           throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
-       }
+    public static String getIgroupName(String svmName, ScopeType scopeType, Long scopeId) {
+        //Igroup name format: cs_svmName_scopeId
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeType.toString().toLowerCase() + Constants.UNDERSCORE + scopeId;
     }
 }
