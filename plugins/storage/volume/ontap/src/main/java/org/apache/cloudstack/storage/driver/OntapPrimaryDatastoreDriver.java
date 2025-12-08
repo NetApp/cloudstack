@@ -18,8 +18,11 @@
  */
 package org.apache.cloudstack.storage.driver;
 
+import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
@@ -40,11 +43,12 @@ import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
-import org.apache.cloudstack.storage.provider.StorageProviderFactory;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -58,13 +62,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
+
     @Override
     public Map<String, String> getCapabilities() {
         s_logger.trace("OntapPrimaryDatastoreDriver: getCapabilities: Called");
         Map<String, String> mapCapabilities = new HashMap<>();
-
-        mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.TRUE.toString());
-        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        // RAW managed initial implementation: snapshot features not yet supported
+        // TODO Set it to false once we start supporting snapshot feature
+        mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.FALSE.toString());
+        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.FALSE.toString());
 
         return mapCapabilities;
     }
@@ -75,18 +81,93 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public DataStoreTO getStoreTO(DataStore store) {
-        return null;
-    }
+    public DataStoreTO getStoreTO(DataStore store) { return null; }
 
     @Override
     public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
+        CreateCmdResult createCmdResult = null;
+        String path = null;
+        String errMsg = null;
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("createAsync: dataStore should not be null");
+        }
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("createAsync: dataObject should not be null");
+        }
+        if (callback == null) {
+            throw new InvalidParameterValueException("createAsync: callback should not be null");
+        }
+        try {
+            s_logger.info("createAsync: Started for data store [{}] and data object [{}] of type [{}]",
+                    dataStore, dataObject, dataObject.getType());
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                VolumeInfo volumeInfo = (VolumeInfo) dataObject;
+                path = createCloudStackVolumeForTypeVolume(dataStore, volumeInfo);
+                createCmdResult = new CreateCmdResult(path, new Answer(null, true, null));
+            } else {
+                errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
+                s_logger.error(errMsg);
+                throw new CloudRuntimeException(errMsg);
+            }
+        } catch (Exception e) {
+            errMsg = e.getMessage();
+            s_logger.error("createAsync: Failed for dataObject [{}]: {}", dataObject, errMsg);
+            createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
+            createCmdResult.setResult(e.toString());
+        } finally {
+            if (createCmdResult != null && createCmdResult.isSuccess()) {
+                s_logger.info("createAsync: Volume created successfully. Path: {}", path);
+            }
+            callback.complete(createCmdResult);
+        }
+    }
 
+    private String createCloudStackVolumeForTypeVolume(DataStore dataStore, VolumeInfo volumeObject) {
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if(storagePool == null) {
+            s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+        }
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+        s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
+        CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, volumeObject);
+        CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
+            return cloudStackVolume.getLun().getName();
+        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            return volumeObject.getUuid(); // return the volume UUID for agent as path for mounting
+        } else {
+            String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + volumeObject;
+            s_logger.error(errMsg);
+            throw new CloudRuntimeException(errMsg);
+        }
     }
 
     @Override
     public void deleteAsync(DataStore store, DataObject data, AsyncCompletionCallback<CommandResult> callback) {
-
+        CommandResult commandResult = new CommandResult();
+        try {
+            if (store == null || data == null) {
+                throw new CloudRuntimeException("deleteAsync: store or data is null");
+            }
+            if (data.getType() == DataObjectType.VOLUME) {
+                StoragePoolVO storagePool = storagePoolDao.findById(store.getId());
+                if(storagePool == null) {
+                    s_logger.error("deleteAsync : Storage Pool not found for id: " + store.getId());
+                    throw new CloudRuntimeException("deleteAsync : Storage Pool not found for id: " + store.getId());
+                }
+                Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+                if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                    // ManagedNFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
+                    s_logger.info("deleteAsync: ManagedNFS volume {} no-op ONTAP deletion", data.getId());
+                }
+            }
+        } catch (Exception e) {
+            commandResult.setResult(e.getMessage());
+        } finally {
+            callback.complete(commandResult);
+        }
     }
 
     @Override
@@ -121,7 +202,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
-
     }
 
     @Override
@@ -161,7 +241,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean canProvideStorageStats() {
-        return true;
+        return false;
     }
 
     @Override
@@ -171,7 +251,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean canProvideVolumeStats() {
-        return true;
+        return false; // Not yet implemented for RAW managed NFS
     }
 
     @Override
@@ -212,25 +292,5 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Override
     public void detachVolumeFromAllStorageNodes(Volume volume) {
 
-    }
-
-    private StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
-        if (details == null || details.isEmpty()) {
-            s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
-        }
-        String protocol = details.get(Constants.PROTOCOL);
-        OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), Long.parseLong(details.get(Constants.SIZE)), ProtocolType.valueOf(protocol),
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
-        StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
-        if (isValid) {
-            s_logger.info("Connection to Ontap SVM [{}] successful", details.get(Constants.SVM_NAME));
-            return storageStrategy;
-        } else {
-            s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-            throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
-        }
     }
 }

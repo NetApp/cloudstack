@@ -22,10 +22,15 @@ package org.apache.cloudstack.storage.utils;
 import com.cloud.storage.ScopeType;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -50,6 +55,52 @@ public class Utility {
     public static String generateAuthHeader (String username, String password) {
         byte[] encodedBytes = Base64Utils.encode((username + AUTH_HEADER_COLON + password).getBytes());
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
+    }
+
+    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject volumeObject) {
+        CloudStackVolume cloudStackVolumeRequest = null;
+
+        String protocol = details.get(Constants.PROTOCOL);
+        ProtocolType protocolType = ProtocolType.valueOf(protocol);
+        switch (protocolType) {
+            case NFS3:
+                cloudStackVolumeRequest = new CloudStackVolume();
+                cloudStackVolumeRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                cloudStackVolumeRequest.setVolumeInfo(volumeObject);
+                break;
+            case ISCSI:
+                cloudStackVolumeRequest = new CloudStackVolume();
+                Lun lunRequest = new Lun();
+                Svm svm = new Svm();
+                svm.setName(details.get(Constants.SVM_NAME));
+                lunRequest.setSvm(svm);
+
+                LunSpace lunSpace = new LunSpace();
+                lunSpace.setSize(volumeObject.getSize());
+                lunRequest.setSpace(lunSpace);
+                //Lun name is full path like in unified "/vol/VolumeName/LunName"
+                String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.SLASH + volumeObject.getName();
+                lunRequest.setName(lunFullName);
+
+                String hypervisorType = storagePool.getHypervisor().name();
+                String osType = null;
+                switch (hypervisorType) {
+                    case Constants.KVM:
+                        osType = Lun.OsTypeEnum.LINUX.getValue();
+                        break;
+                    default:
+                        String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                        s_logger.error(errMsg);
+                        throw new CloudRuntimeException(errMsg);
+                }
+                lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+                cloudStackVolumeRequest.setLun(lunRequest);
+                break;
+            default:
+                throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
+
+        }
+        return cloudStackVolumeRequest;
     }
 
     public static String getOSTypeFromHypervisor(String hypervisorType){

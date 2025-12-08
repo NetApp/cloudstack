@@ -36,6 +36,7 @@ public class AccessGroup {
     private PrimaryDataStoreInfo primaryDataStoreInfo;
     private Scope scope;
 
+
     public Igroup getIgroup() {
         return igroup;
     }
@@ -51,7 +52,6 @@ public class AccessGroup {
     public void setPolicy(ExportPolicy policy) {
         this.exportPolicy = policy;
     }
-
     public List<HostVO> getHostsToConnect() {
         return hostsToConnect;
     }

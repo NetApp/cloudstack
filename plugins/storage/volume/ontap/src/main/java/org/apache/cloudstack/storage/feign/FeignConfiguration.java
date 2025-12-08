@@ -137,6 +137,7 @@ public class FeignConfiguration {
             @Override
             public Object decode(Response response, Type type) throws IOException, DecodeException {
                 if (response.body() == null) {
+                    logger.debug("Response body is null, returning null");
                     return null;
                 }
                 String json = null;
@@ -145,8 +146,11 @@ public class FeignConfiguration {
                     logger.debug("Decoding JSON response: {}", json);
                     return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
                 } catch (IOException e) {
-                    logger.error("Error decoding JSON response. Status: {}, Raw body: {}", response.status(), json, e);
+                    logger.error("IOException during decoding. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
+                } catch (Exception e) {
+                    logger.error("Unexpected error during decoding. Status: {}, Type: {}, Raw body: {}", response.status(), type, json, e);
+                    throw new DecodeException(response.status(), "Unexpected error during decoding", response.request(), e);
                 }
             }
         };

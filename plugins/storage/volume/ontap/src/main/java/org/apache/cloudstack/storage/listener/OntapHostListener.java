@@ -16,147 +16,176 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.cloudstack.storage.listener;
 
-import com.cloud.agent.AgentManager;
-import com.cloud.agent.api.Answer;
-import com.cloud.agent.api.ModifyStoragePoolCommand;
-import com.cloud.host.HostVO;
-import com.cloud.host.dao.HostDao;
-import com.cloud.storage.DataStoreRole;
-import com.cloud.storage.StoragePool;
-import com.cloud.storage.StoragePoolHostVO;
-import com.cloud.storage.dao.StoragePoolHostDao;
-import com.cloud.utils.exception.CloudRuntimeException;
-import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
-import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener;
-import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
-import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+package org.apache.cloudstack.storage.listener;
 
 import javax.inject.Inject;
 
-/**
- * OntapHostListener handles host lifecycle events for ONTAP storage pools.
- *
- * For ONTAP iSCSI storage pools:
- * - The igroup (initiator group) is created/updated in OntapPrimaryDatastoreLifecycle.attachCluster()
- * - The actual iSCSI target discovery and login is handled by StorageManager via ModifyStoragePoolCommand
- * - This listener simply manages the storage pool-host relationship in the database
- *
- * For ONTAP NFS storage pools:
- * - The export policy is configured during storage pool creation
- * - The actual NFS mount is handled by StorageManager via ModifyStoragePoolCommand
- * - This listener simply manages the storage pool-host relationship in the database
- */
+import com.cloud.agent.api.ModifyStoragePoolCommand;
+import com.cloud.agent.api.ModifyStoragePoolAnswer;
+import com.cloud.agent.api.StoragePoolInfo;
+import com.cloud.alert.AlertManager;
+import com.cloud.storage.StoragePoolHostVO;
+import com.cloud.storage.dao.StoragePoolHostDao;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import com.cloud.agent.AgentManager;
+import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.DeleteStoragePoolCommand;
+import com.cloud.host.Host;
+import com.cloud.storage.StoragePool;
+import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener;
+import com.cloud.host.dao.HostDao;
+
 public class OntapHostListener implements HypervisorHostListener {
     protected Logger logger = LogManager.getLogger(getClass());
 
-    @Inject private HostDao hostDao;
-    @Inject private AgentManager agentMgr;
-    @Inject private PrimaryDataStoreDao storagePoolDao;
-    @Inject private DataStoreManager dataStoreMgr;
-    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject
+    private AgentManager _agentMgr;
+    @Inject
+    private AlertManager _alertMgr;
+    @Inject
+    private PrimaryDataStoreDao _storagePoolDao;
+    @Inject
+    private HostDao _hostDao;
     @Inject private StoragePoolHostDao storagePoolHostDao;
 
-    @Override
-    public boolean hostAdded(long hostId) {
-        HostVO host = hostDao.findById(hostId);
-
-        if (host == null) {
-            logger.error("hostAdded: Host {} not found", hostId);
-            return false;
-        }
-
-        if (host.getClusterId() == null) {
-            logger.error("hostAdded: Host {} has no associated cluster", hostId);
-            return false;
-        }
-
-        logger.info("hostAdded: Host {} added to cluster {}", hostId, host.getClusterId());
-        return true;
-    }
 
     @Override
-    public boolean hostConnect(long hostId, long storagePoolId) {
-        logger.debug("hostConnect: Connecting host {} to storage pool {}", hostId, storagePoolId);
-
-        HostVO host = hostDao.findById(hostId);
+    public boolean hostConnect(long hostId, long poolId)  {
+        logger.info("Connect to host " + hostId + " from pool " + poolId);
+        Host host = _hostDao.findById(hostId);
         if (host == null) {
-            logger.error("hostConnect: Host {} not found", hostId);
+            logger.error("host was not found with id : {}", hostId);
             return false;
         }
 
-        // Create or update the storage pool host mapping in the database
-        // The actual storage pool connection (iSCSI login or NFS mount) is handled
-        // by the StorageManager via ModifyStoragePoolCommand sent to the host agent
-        StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(storagePoolId, hostId);
-        StoragePool storagePool = (StoragePool)dataStoreMgr.getDataStore(storagePoolId, DataStoreRole.Primary);
-        if (storagePoolHost == null) {
-            storagePoolHost = new StoragePoolHostVO(storagePoolId, hostId, "");
-            storagePoolHostDao.persist(storagePoolHost);
-            ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, storagePool);
-            Answer answer = agentMgr.easySend(host.getId(), cmd);
-            if (answer == null || !answer.getResult()) {
-                storagePoolDao.expunge(storagePool.getId());
-                throw new CloudRuntimeException("attachCluster: Failed to attach storage pool to host: " + host.getId() +
-                        " due to " + (answer != null ? answer.getDetails() : "no answer from agent"));
+        // TODO add host type check also since we support only KVM for now, host.getHypervisorType().equals(HypervisorType.KVM)
+        StoragePool pool = _storagePoolDao.findById(poolId);
+        if (pool == null) {
+            logger.error("Failed to connect host - storage pool not found with id: {}", poolId);
+            return false;
+        }
+        logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
+        try {
+            // Create the ModifyStoragePoolCommand to send to the agent
+            // Note: Always send command even if database entry exists, because agent may have restarted
+            // and lost in-memory pool registration. The command handler is idempotent.
+            ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool);
+
+            Answer answer = _agentMgr.easySend(hostId, cmd);
+
+            if (answer == null) {
+                throw new CloudRuntimeException(String.format("Unable to get an answer to the modify storage pool command (%s)", pool));
             }
-            logger.info("Connection established between storage pool {} and host {}", storagePool, host);
-        } else {
-            // TODO: Update any necessary details if needed, by fetching OntapVolume info from ONTAP
-            logger.debug("hostConnect: Storage pool-host mapping already exists for pool {} and host {}",
-                    storagePool.getName(), host.getName());
-        }
 
+            if (!answer.getResult()) {
+                String msg = String.format("Unable to attach storage pool %s to host %d", pool, hostId);
+
+                _alertMgr.sendAlert(AlertManager.AlertType.ALERT_TYPE_HOST, pool.getDataCenterId(), pool.getPodId(), msg, msg);
+
+                throw new CloudRuntimeException(String.format(
+                        "Unable to establish a connection from agent to storage pool %s due to %s", pool, answer.getDetails()));
+            }
+
+            // Get the mount path from the answer
+            ModifyStoragePoolAnswer mspAnswer = (ModifyStoragePoolAnswer) answer;
+            StoragePoolInfo poolInfo = mspAnswer.getPoolInfo();
+            if (poolInfo == null) {
+                throw new CloudRuntimeException("ModifyStoragePoolAnswer returned null poolInfo");
+            }
+
+            String localPath = poolInfo.getLocalPath();
+            logger.info("Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
+
+            // Update or create the storage_pool_host_ref entry with the correct local_path
+            StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(poolId, hostId);
+
+            if (storagePoolHost == null) {
+                storagePoolHost = new StoragePoolHostVO(poolId, hostId, localPath);
+                storagePoolHostDao.persist(storagePoolHost);
+                logger.info("Created storage_pool_host_ref entry for pool {} and host {}", pool.getName(), host.getName());
+            } else {
+                storagePoolHost.setLocalPath(localPath);
+                storagePoolHostDao.update(storagePoolHost.getId(), storagePoolHost);
+                logger.info("Updated storage_pool_host_ref entry with local_path: {}", localPath);
+            }
+
+            // Update pool capacity/usage information
+            StoragePoolVO poolVO = _storagePoolDao.findById(poolId);
+            if (poolVO != null && poolInfo.getCapacityBytes() > 0) {
+                poolVO.setCapacityBytes(poolInfo.getCapacityBytes());
+                poolVO.setUsedBytes(poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes());
+                _storagePoolDao.update(poolVO.getId(), poolVO);
+                logger.info("Updated storage pool capacity: {} GB, used: {} GB", poolInfo.getCapacityBytes() / (1024 * 1024 * 1024), (poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes()) / (1024 * 1024 * 1024));
+            }
+
+        } catch (Exception e) {
+            logger.error("Exception while connecting host {} to storage pool {}", host.getName(), pool.getName(), e);
+            // CRITICAL: Don't throw exception - it crashes the agent and causes restart loops
+            // Return false to indicate failure without crashing
+            return false;
+        }
         return true;
     }
 
     @Override
-    public boolean hostDisconnected(long hostId, long storagePoolId) {
-        logger.debug("hostDisconnected: Disconnecting host {} from storage pool {}",
-                    hostId, storagePoolId);
+    public boolean hostDisconnected(Host host, StoragePool pool) {
+        logger.info("Disconnect from host " + host.getId() + " from pool " + pool.getName());
 
-        StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(storagePoolId, hostId);
-        if (storagePoolHost != null) {
-            storagePoolHostDao.deleteStoragePoolHostDetails(hostId, storagePoolId);
-            logger.info("hostDisconnected: Removed storage pool-host mapping for pool {} and host {}",
-                       storagePoolId, hostId);
-        } else {
-            logger.debug("hostDisconnected: No storage pool-host mapping found for pool {} and host {}",
-                        storagePoolId, hostId);
+        Host hostToremove = _hostDao.findById(host.getId());
+        if (hostToremove == null) {
+            logger.error("Failed to add host by HostListener as host was not found with id : {}", host.getId());
+            return false;
         }
+        // TODO add storage pool get validation
+        logger.info("Disconnecting host {} from ONTAP storage pool {}", host.getName(), pool.getName());
 
-        return true;
+        try {
+            DeleteStoragePoolCommand cmd = new DeleteStoragePoolCommand(pool);
+            long hostId = host.getId();
+            Answer answer = _agentMgr.easySend(hostId, cmd);
+
+            if (answer != null && answer.getResult()) {
+                logger.info("Successfully disconnected host {} from ONTAP storage pool {}", host.getName(), pool.getName());
+                return true;
+            } else {
+                String errMsg = (answer != null) ? answer.getDetails() : "Unknown error";
+                logger.warn("Failed to disconnect host {} from storage pool {}. Error: {}", host.getName(), pool.getName(), errMsg);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("Exception while disconnecting host {} from storage pool {}", host.getName(), pool.getName(), e);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean hostDisconnected(long hostId, long poolId) {
+        return false;
     }
 
     @Override
     public boolean hostAboutToBeRemoved(long hostId) {
-        HostVO host = hostDao.findById(hostId);
-        if (host == null) {
-            logger.error("hostAboutToBeRemoved: Host {} not found", hostId);
-            return false;
-        }
-
-        logger.info("hostAboutToBeRemoved: Host {} about to be removed from cluster {}",
-                   hostId, host.getClusterId());
-
-        // Note: When a host is removed, the igroup initiator should be removed in
-        // the appropriate lifecycle method, not here
-        return true;
+        return false;
     }
 
     @Override
     public boolean hostRemoved(long hostId, long clusterId) {
-        logger.info("hostRemoved: Host {} removed from cluster {}", hostId, clusterId);
-        return true;
+        return false;
     }
 
     @Override
     public boolean hostEnabled(long hostId) {
-        logger.debug("hostEnabled: Host {} enabled", hostId);
-        return true;
+        return false;
     }
-}
 
+    @Override
+    public boolean hostAdded(long hostId) {
+        return false;
+    }
+
+}

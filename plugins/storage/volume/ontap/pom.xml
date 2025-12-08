@@ -31,11 +31,11 @@
         <spring-cloud.version>2021.0.7</spring-cloud.version>
         <openfeign.version>11.0</openfeign.version>
         <json.version>20230227</json.version>
-        <jackson-databind.version>2.13.4</jackson-databind.version>
         <httpclient.version>4.5.14</httpclient.version>
         <swagger-annotations.version>1.6.2</swagger-annotations.version>
         <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>2.22.2</maven-surefire-plugin.version>
+        <jackson-databind.version>2.13.4</jackson-databind.version>
     </properties>
     <dependencyManagement>
         <dependencies>
