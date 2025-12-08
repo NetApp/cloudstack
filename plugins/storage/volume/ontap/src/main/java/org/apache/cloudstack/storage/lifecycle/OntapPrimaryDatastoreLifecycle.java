@@ -45,6 +45,7 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -220,6 +221,21 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
             s_logger.info("Using Data LIF for storage access: " + dataLIF);
             details.put(Constants.DATA_LIF, dataLIF);
+            s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
+                    (volumeSize / (1024 * 1024 * 1024)) + " GB)");
+            try {
+                Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+                if (volume == null) {
+                    s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
+                    throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
+                }
+                s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
+                details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
+                details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
+            } catch (Exception e) {
+                s_logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
+                throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
+            }
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
