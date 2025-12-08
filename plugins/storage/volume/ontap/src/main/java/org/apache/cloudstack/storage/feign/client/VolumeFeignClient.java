@@ -32,11 +32,15 @@ public interface VolumeFeignClient {
 
     @RequestLine("DELETE /api/storage/volumes/{uuid}")
     @Headers({"Authorization: {authHeader}"})
-    void deleteVolume(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    JobResponse deleteVolume(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     @RequestLine("POST /api/storage/volumes")
     @Headers({"Authorization: {authHeader}"})
     JobResponse createVolumeWithJob(@Param("authHeader") String authHeader, Volume volumeRequest);
+
+    @RequestLine("GET /api/storage/volumes")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Volume> getAllVolumes(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryParams);
 
     @RequestLine("GET /api/storage/volumes/{uuid}")
     @Headers({"Authorization: {authHeader}"})

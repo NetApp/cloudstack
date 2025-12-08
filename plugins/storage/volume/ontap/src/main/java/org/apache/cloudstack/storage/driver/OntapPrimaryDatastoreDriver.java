@@ -137,7 +137,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
             return cloudStackVolume.getLun().getName();
-        } else if (ProtocolType.NFS.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             return volumeObject.getUuid(); // return the volume UUID for agent as path for mounting
         } else {
             String errMsg = "createCloudStackVolumeForTypeVolume: Volume creation failed. Lun or Lun Path is null for dataObject: " + volumeObject;
@@ -160,7 +160,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     throw new CloudRuntimeException("deleteAsync : Storage Pool not found for id: " + store.getId());
                 }
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
-                if (ProtocolType.NFS.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                     // ManagedNFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
                     s_logger.info("deleteAsync: ManagedNFS volume {} no-op ONTAP deletion", data.getId());
                 }
@@ -303,7 +303,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         String protocol = details.get(Constants.PROTOCOL);
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), Long.parseLong(details.get(Constants.SIZE)), ProtocolType.valueOf(protocol),
                 Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();

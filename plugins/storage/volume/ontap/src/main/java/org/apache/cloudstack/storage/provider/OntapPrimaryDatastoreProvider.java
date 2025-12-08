@@ -74,7 +74,6 @@ public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
         primaryDatastoreDriver = ComponentContext.inject(OntapPrimaryDatastoreDriver.class);
         primaryDatastoreLifecycle = ComponentContext.inject(OntapPrimaryDatastoreLifecycle.class);
         listener = ComponentContext.inject(OntapHostListener.class);
-
         return true;
     }
 

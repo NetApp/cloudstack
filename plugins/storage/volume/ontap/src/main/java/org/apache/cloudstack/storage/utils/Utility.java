@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.utils;
 
+import com.cloud.storage.ScopeType;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
@@ -62,7 +63,7 @@ public class Utility {
         String protocol = details.get(Constants.PROTOCOL);
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
         switch (protocolType) {
-            case NFS:
+            case NFS3:
                 cloudStackVolumeRequest = new CloudStackVolume();
                 cloudStackVolumeRequest.setDatastoreId(String.valueOf(storagePool.getId()));
                 cloudStackVolumeRequest.setVolumeInfo(volumeObject);
@@ -78,7 +79,7 @@ public class Utility {
                 lunSpace.setSize(volumeObject.getSize());
                 lunRequest.setSpace(lunSpace);
                 //Lun name is full path like in unified "/vol/VolumeName/LunName"
-                String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.PATH_SEPARATOR + volumeObject.getName();
+                String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.SLASH + volumeObject.getName();
                 lunRequest.setName(lunFullName);
 
                 String hypervisorType = storagePool.getHypervisor().name();
@@ -102,6 +103,17 @@ public class Utility {
         return cloudStackVolumeRequest;
     }
 
+    public static String getOSTypeFromHypervisor(String hypervisorType){
+        switch (hypervisorType) {
+            case Constants.KVM:
+                return Lun.OsTypeEnum.LINUX.name();
+            default:
+                String errMsg = "getOSTypeFromHypervisor : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
+                s_logger.error(errMsg);
+                throw new CloudRuntimeException(errMsg);
+        }
+    }
+
     public static StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
         if (details == null || details.isEmpty()) {
             s_logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
@@ -109,7 +121,8 @@ public class Utility {
         }
         String protocol = details.get(Constants.PROTOCOL);
         OntapStorage ontapStorage = new OntapStorage(details.get(Constants.USERNAME), details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), ProtocolType.valueOf(protocol),
+                details.get(Constants.MANAGEMENT_LIF), details.get(Constants.SVM_NAME), Long.parseLong(details.get(Constants.SIZE)),
+                ProtocolType.valueOf(protocol),
                 Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED)));
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
@@ -120,5 +133,10 @@ public class Utility {
             s_logger.error("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
             throw new CloudRuntimeException("getStrategyByStoragePoolDetails: Connection to Ontap SVM [" + details.get(Constants.SVM_NAME) + "] failed");
         }
+    }
+
+    public static String getIgroupName(String svmName, ScopeType scopeType, Long scopeId) {
+        //Igroup name format: cs_svmName_scopeId
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeType.toString().toLowerCase() + Constants.UNDERSCORE + scopeId;
     }
 }

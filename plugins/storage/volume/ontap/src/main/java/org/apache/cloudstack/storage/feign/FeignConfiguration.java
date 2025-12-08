@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.feign;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import feign.RequestInterceptor;
 import feign.Retryer;
 import feign.Client;
@@ -30,7 +31,6 @@ import feign.codec.DecodeException;
 import feign.codec.EncodeException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.conn.ConnectionKeepAliveStrategy;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
@@ -55,11 +55,11 @@ public class FeignConfiguration {
     private final int retryMaxInterval = 5;
     private final String ontapFeignMaxConnection = "80";
     private final String ontapFeignMaxConnectionPerRoute = "20";
-    private final ObjectMapper jsonMapper;
+    private final ObjectMapper objectMapper;
 
     public FeignConfiguration() {
-        this.jsonMapper = new ObjectMapper();
-        this.jsonMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        this.objectMapper = new ObjectMapper();
+        this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
     public Client createClient() {
@@ -122,7 +122,7 @@ public class FeignConfiguration {
                     return;
                 }
                 try {
-                    byte[] jsonBytes = jsonMapper.writeValueAsBytes(object);
+                    byte[] jsonBytes = objectMapper.writeValueAsBytes(object);
                     template.body(jsonBytes, StandardCharsets.UTF_8);
                     template.header("Content-Type", "application/json");
                 } catch (JsonProcessingException e) {
@@ -144,23 +144,7 @@ public class FeignConfiguration {
                 try (InputStream bodyStream = response.body().asInputStream()) {
                     json = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                     logger.debug("Decoding JSON response: {}", json);
-                    Object result = null;
-                    try {
-                        var javaType = jsonMapper.getTypeFactory().constructType(type);
-                        result = jsonMapper.readValue(json, javaType);
-                        logger.debug("jsonMapper.readValue() completed successfully");
-                    } catch (Throwable ex) {
-                        logger.error("EXCEPTION in jsonMapper.readValue()! Type: {}, Message: {}", ex.getClass().getName(), ex.getMessage(), ex);
-                        throw ex;
-                    }
-
-                    if (result == null) {
-                        logger.warn("Decoded result is null!");
-                    } else {
-                        logger.debug("Successfully decoded to object of type: {}", result.getClass().getName());
-                    }
-                    logger.debug("Returning result from decoder");
-                    return result;
+                    return objectMapper.readValue(json, objectMapper.getTypeFactory().constructType(type));
                 } catch (IOException e) {
                     logger.error("IOException during decoding. Status: {}, Raw body: {}", response.status(), json, e);
                     throw new DecodeException(response.status(), "Error decoding JSON response", response.request(), e);
