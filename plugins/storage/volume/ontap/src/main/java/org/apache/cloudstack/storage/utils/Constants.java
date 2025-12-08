@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.utils;
 
+
 public class Constants {
 
     public static final String NFS = "nfs";
@@ -28,7 +29,10 @@ public class Constants {
     public static final String SVM_NAME = "svmName";
     public static final String USERNAME = "username";
     public static final String PASSWORD = "password";
+    public static final String DATA_LIF = "dataLIF";
     public static final String MANAGEMENT_LIF = "managementLIF";
+    public static final String VOLUME_NAME = "volumeName";
+    public static final String VOLUME_UUID = "volumeUUID";
     public static final String IS_DISAGGREGATED = "isDisaggregated";
     public static final String RUNNING = "running";
 
@@ -40,24 +44,41 @@ public class Constants {
     public static final String JOB_FAILURE = "failure";
     public static final String JOB_SUCCESS = "success";
 
+    public static final String TRUE = "true";
+    public static final String FALSE = "false";
+
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
+    public static final String DATA_NFS = "data_nfs";
+    public static final String DATA_ISCSI = "data_iscsi";
+    public static final String IP_ADDRESS = "ip.address";
+    public static final String SERVICES = "services";
+    public static final String RETURN_RECORDS = "return_records";
 
     public static final int JOB_MAX_RETRIES = 100;
     public static final int CREATE_VOLUME_CHECK_SLEEP_TIME = 2000;
 
-    public static final String PATH_SEPARATOR = "/";
+    public static final String SLASH = "/";
     public static final String EQUALS = "=";
     public static final String SEMICOLON = ";";
     public static final String COMMA = ",";
+    public static final String HYPHEN = "-";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
+    public static final String ONTAP_NAME_REGEX = "^[a-zA-Z][a-zA-Z0-9_]*$";
     public static final String KVM = "KVM";
 
     public static final String HTTPS = "https://";
-
+    public static final String SVM_DOT_NAME = "svm.name";
+    public static final String LUN_DOT_NAME = "lun.name";
+    public static final String IQN = "iqn";
+    public static final String LUN_DOT_UUID = "lun.uuid";
+    public static final String IGROUP_DOT_NAME = "igroup.name";
+    public static final String IGROUP_DOT_UUID = "igroup.uuid";
+    public static final String UNDERSCORE = "_";
+    public static final String CS = "cs";
 }

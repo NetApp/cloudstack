@@ -24,14 +24,14 @@
     <parent>
         <groupId>org.apache.cloudstack</groupId>
         <artifactId>cloudstack-plugins</artifactId>
-        <version>4.22.0.0-SNAPSHOT</version>
+        <version>4.23.0.0-SNAPSHOT</version>
         <relativePath>../../../pom.xml</relativePath>
     </parent>
     <properties>
         <spring-cloud.version>2021.0.7</spring-cloud.version>
         <openfeign.version>11.0</openfeign.version>
         <json.version>20230227</json.version>
-        <jackson-databind.version>2.15.2</jackson-databind.version>
+        <jackson-databind.version>2.13.4</jackson-databind.version>
         <httpclient.version>4.5.14</httpclient.version>
         <swagger-annotations.version>1.6.2</swagger-annotations.version>
         <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>

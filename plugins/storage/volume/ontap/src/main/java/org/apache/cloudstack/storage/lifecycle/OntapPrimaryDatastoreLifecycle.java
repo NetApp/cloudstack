@@ -23,12 +23,14 @@ package org.apache.cloudstack.storage.lifecycle;
 import com.cloud.agent.api.StoragePoolInfo;
 import com.cloud.dc.ClusterVO;
 import com.cloud.dc.dao.ClusterDao;
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.resource.ResourceManager;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
+import com.cloud.storage.StoragePoolAutomation;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.google.common.base.Preconditions;
 import org.apache.cloudstack.engine.subsystem.api.storage.ClusterScope;
@@ -38,12 +40,18 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -59,6 +67,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StorageManager _storageMgr;
     @Inject private ResourceManager _resourceMgr;
     @Inject private PrimaryDataStoreHelper _dataStoreHelper;
+    @Inject private PrimaryDataStoreDao storagePoolDao;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
+    @Inject private StoragePoolAutomation _storagePoolAutomation;
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     // ONTAP minimum volume size is 1.56 GB (1677721600 bytes)
@@ -81,6 +93,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         String storagePoolName = (String) dsInfos.get("name");
         String providerName = (String) dsInfos.get("providerName");
         Long capacityBytes = (Long) dsInfos.get("capacityBytes");
+        boolean managed = (boolean) dsInfos.get("managed");
         String tags = (String) dsInfos.get("tags");
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
 
@@ -132,6 +145,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
 
+        s_logger.debug("ONTAP primary storage will be created as " + (managed ? "managed" : "unmanaged"));
+        if (!managed) {
+            throw new CloudRuntimeException("ONTAP primary storage must be managed");
+        }
+
         // Required ONTAP detail keys
         Set<String> requiredKeys = Set.of(
                 Constants.USERNAME,
@@ -180,50 +198,59 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         // Default for IS_DISAGGREGATED if needed
         details.putIfAbsent(Constants.IS_DISAGGREGATED, "false");
 
-        // Determine storage pool type and path based on protocol
-        String path;
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
-        switch (protocol) {
-            case NFS3:
-                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-                path = details.get(Constants.MANAGEMENT_LIF) + ":/" + storagePoolName;
-                s_logger.info("Setting NFS path for storage pool: " + path);
-                break;
-            case ISCSI:
-                parameters.setType(Storage.StoragePoolType.Iscsi);
-                path = "iqn.1992-08.com.netapp:" + details.get(Constants.SVM_NAME) + "." + storagePoolName;
-                s_logger.info("Setting iSCSI path for storage pool: " + path);
-                break;
-            default:
-                throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
-        }
 
         // Connect to ONTAP and create volume
+        long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(
                 details.get(Constants.USERNAME),
                 details.get(Constants.PASSWORD),
                 details.get(Constants.MANAGEMENT_LIF),
                 details.get(Constants.SVM_NAME),
+                volumeSize,
                 protocol,
                 Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED).toLowerCase()));
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
-            long volumeSize = Long.parseLong(details.get(Constants.SIZE));
-            s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
-                    (volumeSize / (1024 * 1024 * 1024)) + " GB)");
-            storageStrategy.createStorageVolume(storagePoolName, volumeSize);
+            // Get the DataLIF for data access
+            String dataLIF = storageStrategy.getNetworkInterface();
+            if (dataLIF == null || dataLIF.isEmpty()) {
+                throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
+            }
+            s_logger.info("Using Data LIF for storage access: " + dataLIF);
+            details.put(Constants.DATA_LIF, dataLIF);
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
+        // Determine storage pool type, path and port based on protocol
+        String path;
+        int port;
+        switch (protocol) {
+            case NFS3:
+                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                path = Constants.SLASH + storagePoolName;
+                port = 2049;
+                s_logger.info("Setting NFS path for storage pool: " + path + ", port: " + port);
+                break;
+            case ISCSI:
+                parameters.setType(Storage.StoragePoolType.Iscsi);
+                path = storageStrategy.getStoragePath();
+                port = 3260;
+                s_logger.info("Setting iSCSI path for storage pool: " + path + ", port: " + port);
+                break;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
+        }
+
         // Set parameters for primary data store
-        parameters.setHost(details.get(Constants.MANAGEMENT_LIF));
-        parameters.setPort(Constants.ONTAP_PORT);
+        parameters.setHost(details.get(Constants.DATA_LIF));
+        parameters.setPort(port);
         parameters.setPath(path);
-        parameters.setTags(tags != null ? tags : "");
-        parameters.setIsTagARule(isTagARule != null ? isTagARule : Boolean.FALSE);
+        parameters.setTags(tags);
+        parameters.setIsTagARule(isTagARule);
         parameters.setDetails(details);
         parameters.setUuid(UUID.randomUUID().toString());
         parameters.setZoneId(zoneId);
@@ -231,7 +258,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         parameters.setClusterId(clusterId);
         parameters.setName(storagePoolName);
         parameters.setProviderName(providerName);
-        parameters.setManaged(true); // ONTAP storage is always managed
+        parameters.setManaged(managed);
         parameters.setCapacityBytes(capacityBytes);
         parameters.setUsedBytes(0);
 
@@ -241,16 +268,46 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
-        PrimaryDataStoreInfo primarystore = (PrimaryDataStoreInfo)dataStore;
-        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primarystore);
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("attachCluster: dataStore should not be null");
+        }
+        if (scope == null) {
+            throw new InvalidParameterValueException("attachCluster: scope should not be null");
+        }
 
-        logger.debug(String.format("Attaching the pool to each of the hosts %s in the cluster: %s", hostsToConnect, primarystore.getClusterId()));
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if (storagePool == null) {
+            s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+        }
+        s_logger.info("Found the Storage Pool: " + storagePool.getName() + " for id: " + dataStore.getId());
+        PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
+        List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
+        // TODO- need to check if no host to connect then throw exception or just continue
+        logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        primaryStore.setDetails(details);
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        //TODO - check if no host to connect then also need to create access group without initiators
+        try {
+            AccessGroup accessGroupRequest = new AccessGroup();
+            accessGroupRequest.setHostsToConnect(hostsToConnect);
+            accessGroupRequest.setScope(scope);
+            accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+            logger.info("attachCluster: Creating access group on storage system for cluster");
+            strategy.createAccessGroup(accessGroupRequest);
+        } catch (Exception e) {
+            throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster. Exception: " + e.getMessage());
+        }
+        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster");
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
-                _storageMgr.connectHostToSharedPool(host, dataStore.getId());
+                _storageMgr.connectHostToSharedPool(host, primaryStore.getId());
+                logger.debug("attachCluster: Successfully established a connection between host {} and storage pool {}", host.getId(), primaryStore.getId());
             } catch (Exception e) {
-                logger.warn("Unable to establish a connection between " + host + " and " + dataStore, e);
+                logger.warn("attachCluster: Unable to establish a connection between " + host + " and " + primaryStore, e);
+                return false;
             }
         }
         _dataStoreHelper.attachCluster(dataStore);
@@ -265,15 +322,44 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Override
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
         logger.debug("In attachZone for ONTAP primary storage");
+        if (dataStore == null) {
+            throw new InvalidParameterValueException("attachZone: dataStore should not be null");
+        }
+        if (scope == null) {
+            throw new InvalidParameterValueException("attachZone: scope should not be null");
+        }
+//        List<String> hostsIdentifier = new ArrayList<>();
+        StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
+        if (storagePool == null) {
+            s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("attachZone : Storage Pool not found for id: " + dataStore.getId());
+        }
+        PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
+        // TODO- need to check if no host to connect then throw exception or just continue
+        logger.debug("attachZone: Eligible Up and Enabled hosts: {}", hostsToConnect);
 
-        logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+        primaryStore.setDetails(details);
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
+        try {
+            AccessGroup accessGroupRequest = new AccessGroup();
+            accessGroupRequest.setHostsToConnect(hostsToConnect);
+            accessGroupRequest.setScope(scope);
+            accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
+            logger.info("attachCluster: Creating access group on storage system for zone");
+            strategy.createAccessGroup(accessGroupRequest);
+        } catch (Exception e) {
+            throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+        }
+        logger.debug("attachCluster: Attaching the pool to each of the host in the zone");
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
+                logger.debug("attachCluster: Successfully established a connection between host {} and storage pool {}", host.getId(), primaryStore.getId());
             } catch (Exception e) {
                 logger.warn("Unable to establish a connection between " + host + " and " + dataStore, e);
+                return false;
             }
         }
         _dataStoreHelper.attachZone(dataStore);
@@ -282,18 +368,65 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean maintain(DataStore store) {
-        return true;
+        _storagePoolAutomation.maintain(store);
+        return _dataStoreHelper.maintain(store);
     }
 
     @Override
     public boolean cancelMaintain(DataStore store) {
-        return true;
+        _storagePoolAutomation.cancelMaintain(store);
+        return _dataStoreHelper.cancelMaintain(store);
     }
 
     @Override
     public boolean deleteDataStore(DataStore store) {
-        return true;
+        s_logger.info("deleteDataStore: Starting deletion process for storage pool id: {}", store.getId());
+
+        long storagePoolId = store.getId();
+        // Get the StoragePool details
+        StoragePool storagePool = _storageMgr.getStoragePool(storagePoolId);
+        if (storagePool == null) {
+            s_logger.warn("deleteDataStore: Storage pool not found for id: {}, skipping deletion", storagePoolId);
+            return true; // Return true since the entity doesn't exist
+        }
+
+        try {
+            // Fetch storage pool details
+            Map<String, String> details = _datastoreDetailsDao.listDetailsKeyPairs(storagePoolId);
+            if (details == null || details.isEmpty()) {
+                s_logger.warn("deleteDataStore: No details found for storage pool id: {}, proceeding with CS entity deletion only", storagePoolId);
+                return _dataStoreHelper.deletePrimaryDataStore(store);
+            }
+
+            s_logger.info("deleteDataStore: Deleting access groups for storage pool '{}'", storagePool.getName());
+
+            // Get the storage strategy to interact with ONTAP
+            StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+
+            // Cast DataStore to PrimaryDataStoreInfo to get full details
+            PrimaryDataStoreInfo primaryDataStoreInfo = (PrimaryDataStoreInfo) store;
+            primaryDataStoreInfo.setDetails(details);
+
+            // Create AccessGroup object with PrimaryDataStoreInfo
+            AccessGroup accessGroup = new AccessGroup();
+            accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
+
+            // Call deleteAccessGroup - it will figure out scope, protocol, and all details internally
+            storageStrategy.deleteAccessGroup(accessGroup);
+
+            s_logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
+
+        } catch (Exception e) {
+            s_logger.error("deleteDataStore: Failed to delete access groups for storage pool id: {}. Error: {}",
+                    storagePoolId, e.getMessage(), e);
+            // Continue with CloudStack entity deletion even if ONTAP cleanup fails
+            s_logger.warn("deleteDataStore: Proceeding with CloudStack entity deletion despite ONTAP cleanup failure");
+        }
+
+        // Delete the CloudStack primary data store entity
+        return _dataStoreHelper.deletePrimaryDataStore(store);
     }
+
 
     @Override
     public boolean migrateToObjectStore(DataStore store) {
@@ -307,12 +440,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public void enableStoragePool(DataStore store) {
-
+        _dataStoreHelper.enable(store);
     }
 
     @Override
     public void disableStoragePool(DataStore store) {
-
+        _dataStoreHelper.disable(store);
     }
 
     @Override
@@ -325,4 +458,3 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     }
 }
-

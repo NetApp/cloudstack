@@ -18,28 +18,32 @@
  */
 package org.apache.cloudstack.storage.feign.client;
 
+import feign.QueryMap;
 import org.apache.cloudstack.storage.feign.model.Igroup;
+import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
-import java.net.URI;
+import java.util.Map;
 
 //TODO: Proper URLs should be added in the RequestLine annotations below
 public interface SANFeignClient {
+    // iSCSI Service APIs
+    @RequestLine("GET /api/protocols/san/iscsi/services")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<IscsiService> getIscsiServices(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
     // LUN Operation APIs
-    @RequestLine("POST /")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader,
-                                @Param("returnRecords") boolean returnRecords,
-                                Lun lun);
-
-    @RequestLine("GET /")
+    @RequestLine("POST /api/storage/luns?return_records={returnRecords}")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<Lun> getLunResponse(@Param("authHeader") String authHeader);
+    OntapResponse<Lun> createLun(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Lun lun);
+
+    @RequestLine("GET /api/storage/luns")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Lun> getLunResponse(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
     @RequestLine("GET /{uuid}")
     @Headers({"Authorization: {authHeader}"})
@@ -54,36 +58,35 @@ public interface SANFeignClient {
     void deleteLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     // iGroup Operation APIs
-    @RequestLine("POST /")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
-    OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader,
-                                      @Param("returnRecords") boolean returnRecords,
-                                      Igroup igroupRequest);
+    @RequestLine("POST /api/protocols/san/igroups?return_records={returnRecords}")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Igroup> createIgroup(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Igroup igroupRequest);
 
-    @RequestLine("GET /")
-    @Headers({"Authorization: {authHeader}"}) // TODO: Check this again, uuid should be part of the path?
-    OntapResponse<Igroup> getIgroupResponse(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    @RequestLine("GET /api/protocols/san/igroups")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Igroup> getIgroupResponse(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
     @RequestLine("GET /{uuid}")
     @Headers({"Authorization: {authHeader}"})
     Igroup getIgroupByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    @RequestLine("DELETE /{uuid}")
+    @RequestLine("DELETE /api/protocols/san/igroups/{uuid}")
     @Headers({"Authorization: {authHeader}"})
-    void deleteIgroup(@Param("baseUri") URI baseUri, @Param("authHeader") String authHeader, @Param("uuid") String uuid);
+    void deleteIgroup(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
     // LUN Maps Operation APIs
-    @RequestLine("POST /")
-    @Headers({"Authorization: {authHeader}"})
-    OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, LunMap lunMap);
+    @RequestLine("POST /api/protocols/san/lun-maps")
+    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, LunMap lunMap);
 
-    @RequestLine("GET /")
-    @Headers({"Authorization: {authHeader}"})
-    OntapResponse<LunMap> getLunMapResponse(@Param("authHeader") String authHeader);
 
-    @RequestLine("DELETE /{lunUuid}/{igroupUuid}")
+    @RequestLine("GET /api/protocols/san/lun-maps")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<LunMap> getLunMapResponse(@Param("authHeader") String authHeader,  @QueryMap Map<String, Object> queryMap);
+
+    @RequestLine("DELETE /api/protocols/san/lun-maps/{lunUuid}/{igroupUuid}")
     @Headers({"Authorization: {authHeader}"})
     void deleteLunMap(@Param("authHeader") String authHeader,
-                     @Param("lunUuid") String lunUuid,
-                     @Param("igroupUuid") String igroupUuid);
+                      @Param("lunUuid") String lunUUID,
+                      @Param("igroupUuid") String igroupUUID);
 }
