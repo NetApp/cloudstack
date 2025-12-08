@@ -37,7 +37,7 @@ public class StorageProviderFactory {
         ProtocolType protocol = ontapStorage.getProtocol();
         s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
         switch (protocol) {
-            case NFS:
+            case NFS3:
                 if (!ontapStorage.getIsDisaggregated()) {
                     UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
                     ComponentContext.inject(unifiedNASStrategy);
