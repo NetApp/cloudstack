@@ -32,6 +32,7 @@ import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
+import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
@@ -181,6 +182,8 @@ public abstract class StorageStrategy {
         Volume volumeRequest = new Volume();
         Svm svm = new Svm();
         svm.setName(svmName);
+        Nas nas = new Nas();
+        nas.setPath(Constants.SLASH + volumeName);
 
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
@@ -189,10 +192,8 @@ public abstract class StorageStrategy {
         aggr.setUuid(aggregates.get(0).getUuid());
         volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
-        // Make the POST API call to create the volume
+        volumeRequest.setNas(nas);
         try {
-            // Create URI for POST CreateVolume API
-            // Call the VolumeFeignClient to create the volume
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
                 throw new CloudRuntimeException("Failed to initiate volume creation for " + volumeName);
@@ -226,8 +227,37 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Mismatch in created volume name. Expected: " + volumeName + ", Found: " + createdVolume.getName());
         }
         s_logger.info("Volume created successfully: " + volumeName);
-        // Return the created Volume object
-        return createdVolume;
+        try {
+            Map<String, Object> queryParams = Map.of(Constants.NAME, volumeName);
+            s_logger.debug("Fetching volume details for: " + volumeName);
+
+            OntapResponse<Volume> ontapVolume = volumeFeignClient.getVolume(authHeader, queryParams);
+            s_logger.debug("Feign call completed. Processing response...");
+
+            if (ontapVolume == null) {
+                s_logger.error("OntapResponse is null for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Response is null");
+            }
+            s_logger.debug("OntapResponse is not null. Checking records field...");
+
+            if (ontapVolume.getRecords() == null) {
+                s_logger.error("OntapResponse.records is null for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Records list is null");
+            }
+            s_logger.debug("Records field is not null. Size: " + ontapVolume.getRecords().size());
+
+            if (ontapVolume.getRecords().isEmpty()) {
+                s_logger.error("OntapResponse.records is empty for volume: " + volumeName);
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": No records found");
+            }
+
+            Volume volume = ontapVolume.getRecords().get(0);
+            s_logger.info("Volume retrieved successfully: " + volumeName + ", UUID: " + volume.getUuid());
+            return volume;
+        } catch (Exception e) {
+            s_logger.error("Exception while retrieving volume details for: " + volumeName, e);
+            throw new CloudRuntimeException("Failed to fetch volume: " + volumeName + ". Error: " + e.getMessage(), e);
+        }
     }
 
     /**
