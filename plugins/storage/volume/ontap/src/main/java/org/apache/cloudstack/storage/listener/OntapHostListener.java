@@ -144,26 +144,14 @@ public class OntapHostListener implements HypervisorHostListener {
             logger.error("Failed to add host by HostListener as host was not found with id : {}", host.getId());
             return false;
         }
-        // TODO add storage pool get validation
-        logger.info("Disconnecting host {} from ONTAP storage pool {}", host.getName(), pool.getName());
-
-        try {
-            DeleteStoragePoolCommand cmd = new DeleteStoragePoolCommand(pool);
-            long hostId = host.getId();
-            Answer answer = _agentMgr.easySend(hostId, cmd);
-
-            if (answer != null && answer.getResult()) {
-                logger.info("Successfully disconnected host {} from ONTAP storage pool {}", host.getName(), pool.getName());
-                return true;
-            } else {
-                String errMsg = (answer != null) ? answer.getDetails() : "Unknown error";
-                logger.warn("Failed to disconnect host {} from storage pool {}. Error: {}", host.getName(), pool.getName(), errMsg);
-                return false;
-            }
-        } catch (Exception e) {
-            logger.error("Exception while disconnecting host {} from storage pool {}", host.getName(), pool.getName(), e);
-            return false;
+        logger.debug("hostDisconnected called for host {}, pool {}", host.getName(), pool.getName());
+        
+        StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(pool.getId(), host.getId());
+        if (storagePoolHost != null) {
+            storagePoolHostDao.deleteStoragePoolHostDetails(host.getId(), pool.getId());
         }
+        
+        return true;
     }
 
     @Override
