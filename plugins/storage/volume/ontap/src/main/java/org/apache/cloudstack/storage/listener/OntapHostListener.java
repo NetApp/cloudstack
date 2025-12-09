@@ -32,7 +32,6 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
-import com.cloud.agent.api.DeleteStoragePoolCommand;
 import com.cloud.host.Host;
 import com.cloud.storage.StoragePool;
 import com.cloud.utils.exception.CloudRuntimeException;
@@ -145,12 +144,10 @@ public class OntapHostListener implements HypervisorHostListener {
             return false;
         }
         logger.debug("hostDisconnected called for host {}, pool {}", host.getName(), pool.getName());
-        
         StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(pool.getId(), host.getId());
         if (storagePoolHost != null) {
             storagePoolHostDao.deleteStoragePoolHostDetails(host.getId(), pool.getId());
         }
-        
         return true;
     }
 
