@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.listener;
 
 import javax.inject.Inject;
 
+import com.cloud.agent.api.DeleteStoragePoolCommand;
 import com.cloud.agent.api.ModifyStoragePoolCommand;
 import com.cloud.agent.api.ModifyStoragePoolAnswer;
 import com.cloud.agent.api.StoragePoolInfo;
@@ -72,12 +73,29 @@ public class OntapHostListener implements HypervisorHostListener {
         }
         logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
         try {
-            // Create the ModifyStoragePoolCommand to send to the agent
+            java.util.Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(poolId);
+            // First, cleanup any stale/inconsistent pool definition from libvirt
+            // This is necessary because after maintenance mode cycles, the pool definition
+            // may persist in libvirt even though the actual mount is gone, causing
+            // "Found existing defined storage pool, using it" followed by mount failures.
+            // Note: By the time hostConnect is called during maintenance cancel, all VMs
+            // have been stopped/migrated, so it's safe to destroy the pool definition.
+            DeleteStoragePoolCommand deleteCmd = new DeleteStoragePoolCommand(pool);
+            deleteCmd.setDetails(details);
+            // Don't set removeDatastore - we want the actual cleanup to happen
+            try {
+                Answer deleteAnswer = _agentMgr.easySend(hostId, deleteCmd);
+                if (deleteAnswer != null && deleteAnswer.getResult()) {
+                    logger.debug("Cleaned up stale pool definition for {} on host {}", pool.getName(), host.getName());
+                }
+            } catch (Exception e) {
+                // Ignore cleanup errors - pool might not exist, which is acceptable
+                logger.debug("Pool cleanup: {} (expected if pool doesn't exist)", e.getMessage());
+            }
+            // Now create the ModifyStoragePoolCommand to establish fresh connection
             // Note: Always send command even if database entry exists, because agent may have restarted
             // and lost in-memory pool registration. The command handler is idempotent.
-            java.util.Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(poolId);
             ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool, details);
-
             Answer answer = _agentMgr.easySend(hostId, cmd);
 
             if (answer == null) {
