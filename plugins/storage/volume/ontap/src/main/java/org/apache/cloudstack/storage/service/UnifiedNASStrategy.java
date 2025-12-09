@@ -143,6 +143,7 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
+        // We need to delete the export policy
         //TODO
     }
 

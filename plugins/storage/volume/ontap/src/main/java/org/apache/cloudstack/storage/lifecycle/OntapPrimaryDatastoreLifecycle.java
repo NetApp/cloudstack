@@ -352,13 +352,19 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean maintain(DataStore store) {
-        _storagePoolAutomation.maintain(store);
+        s_logger.info("Enable maintenance mode for datastore {}", store.getId());
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+        _storagePoolAutomation.maintain(store, details);
+        s_logger.info("Enabled maintenance mode for datastore {}", store.getId());
         return _dataStoreHelper.maintain(store);
     }
 
     @Override
     public boolean cancelMaintain(DataStore store) {
-        _storagePoolAutomation.cancelMaintain(store);
+        s_logger.info("Cancel maintenance mode for datastore {}", store.getId());
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+        _storagePoolAutomation.cancelMaintain(store, details);
+        s_logger.info("Cancelled maintenance mode for datastore {}", store.getId());
         return _dataStoreHelper.cancelMaintain(store);
     }
 
@@ -394,6 +400,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             // Create AccessGroup object with PrimaryDataStoreInfo
             AccessGroup accessGroup = new AccessGroup();
             accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
+            accessGroup.setScope(store.getScope());
 
             // Call deleteAccessGroup - it will figure out scope, protocol, and all details internally
             storageStrategy.deleteAccessGroup(accessGroup);
@@ -403,6 +410,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         } catch (Exception e) {
             s_logger.error("deleteDataStore: Failed to delete access groups for storage pool id: {}. Error: {}",
                     storagePoolId, e.getMessage(), e);
+            // TODO need to ask the reason behind this ? This is keeping stale entries in storage_pool_details, storage_pool etc tables
             // Continue with CloudStack entity deletion even if ONTAP cleanup fails
             s_logger.warn("deleteDataStore: Proceeding with CloudStack entity deletion despite ONTAP cleanup failure");
         }

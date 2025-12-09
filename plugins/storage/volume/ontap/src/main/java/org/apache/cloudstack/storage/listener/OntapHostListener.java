@@ -27,6 +27,7 @@ import com.cloud.agent.api.StoragePoolInfo;
 import com.cloud.alert.AlertManager;
 import com.cloud.storage.StoragePoolHostVO;
 import com.cloud.storage.dao.StoragePoolHostDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 import com.cloud.agent.AgentManager;
@@ -52,6 +53,7 @@ public class OntapHostListener implements HypervisorHostListener {
     @Inject
     private HostDao _hostDao;
     @Inject private StoragePoolHostDao storagePoolHostDao;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
 
 
     @Override
@@ -74,7 +76,8 @@ public class OntapHostListener implements HypervisorHostListener {
             // Create the ModifyStoragePoolCommand to send to the agent
             // Note: Always send command even if database entry exists, because agent may have restarted
             // and lost in-memory pool registration. The command handler is idempotent.
-            ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool);
+            java.util.Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(poolId);
+            ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool, details);
 
             Answer answer = _agentMgr.easySend(hostId, cmd);
 
