@@ -4133,7 +4133,6 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
         cmdList.add(StartInternalLBVMCmd.class);
         cmdList.add(ListInternalLBVMsCmd.class);
         cmdList.add(ListNetworkIsolationMethodsCmd.class);
-        cmdList.add(ListNetworkIsolationMethodsCmd.class);
         cmdList.add(CreateNetworkACLListCmd.class);
         cmdList.add(DeleteNetworkACLListCmd.class);
         cmdList.add(ListNetworkACLListsCmd.class);
