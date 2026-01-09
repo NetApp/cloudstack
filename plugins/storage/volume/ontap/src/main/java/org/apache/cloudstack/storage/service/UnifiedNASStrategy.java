@@ -29,7 +29,9 @@ import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
+import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
@@ -66,6 +68,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     private final JobFeignClient jobFeignClient;
     @Inject private VolumeDao volumeDao;
     @Inject private EndPointSelector epSelector;
+    @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
 
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
@@ -132,6 +135,9 @@ public class UnifiedNASStrategy extends NASStrategy {
             s_logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", createdPolicy.getName());
             // attach export policy to volume of storage pool
             assignExportPolicyToVolume(volumeUUID,createdPolicy.getName());
+            // save the export policy details in storage pool details
+            storagePoolDetailsDao.addDetail(accessGroup.getPrimaryDataStoreInfo().getId(), Constants.EXPORT_POLICY_ID, String.valueOf(createdPolicy.getId()), true);
+            storagePoolDetailsDao.addDetail(accessGroup.getPrimaryDataStoreInfo().getId(), Constants.EXPORT_POLICY_NAME, createdPolicy.getName(), true);
             s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
             accessGroup.setPolicy(policyRequest);
             return accessGroup;
@@ -143,7 +149,38 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
-        //TODO
+        s_logger.info("deleteAccessGroup: Deleting export policy");
+
+        if (accessGroup == null) {
+            throw new CloudRuntimeException("deleteAccessGroup: Invalid accessGroup object - accessGroup is null");
+        }
+
+        // Get PrimaryDataStoreInfo from accessGroup
+        PrimaryDataStoreInfo primaryDataStoreInfo = accessGroup.getPrimaryDataStoreInfo();
+        if (primaryDataStoreInfo == null) {
+            throw new CloudRuntimeException("deleteAccessGroup: PrimaryDataStoreInfo is null in accessGroup");
+        }
+
+        try {
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            String svmName = storage.getSvmName();
+            // Determine export policy attached to the storage pool
+            String exportPolicyName = primaryDataStoreInfo.getDetails().get(Constants.EXPORT_POLICY_NAME);
+            String exportPolicyId = primaryDataStoreInfo.getDetails().get(Constants.EXPORT_POLICY_ID);
+
+            try {
+                nasFeignClient.deleteExportPolicyById(authHeader,exportPolicyId);
+                s_logger.info("Export policy deleted successfully: {}", exportPolicyName);
+
+                s_logger.info("deleteAccessGroup: Successfully deleted export policy '{}'", exportPolicyName);
+            } catch (Exception e) {
+                s_logger.error("deleteAccessGroup: Failed to delete iGroup. Exception: {}", e.getMessage(), e);
+                throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
+            }
+        } catch (Exception e) {
+            s_logger.error("deleteAccessGroup: Failed to delete iGroup. Exception: {}", e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -340,13 +377,10 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
     }
 
-    private String generateExportPolicyName(String svmName, String volumeName){
-        return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
-    }
 
     private ExportPolicy createExportPolicyRequest(AccessGroup accessGroup,String svmName , String volumeName){
 
-        String exportPolicyName = generateExportPolicyName(svmName,volumeName);
+        String exportPolicyName = Utility.generateExportPolicyName(svmName,volumeName);
         ExportPolicy exportPolicy = new ExportPolicy();
 
         List<ExportRule> rules = new ArrayList<>();
