@@ -131,6 +131,8 @@ public abstract class StorageStrategy {
                 throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
             }
             // Set the aggregates which are according to the storage requirements
+            int maxAvailableAggregateSpace = storage.getSize().intValue();
+            Aggregate aggrChosen = null;
             for (Aggregate aggr : aggrs) {
                 s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
                 Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
@@ -142,13 +144,18 @@ public abstract class StorageStrategy {
                     s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
                     continue;
                 }
-                s_logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
-                this.aggregates = List.of(aggr);
+                if (aggrResp.getAvailableBlockStorageSpace() >= maxAvailableAggregateSpace) {
+                    maxAvailableAggregateSpace = aggrResp.getAvailableBlockStorageSpace().intValue();
+                    aggrChosen = aggr;
+                }
             }
+
+            this.aggregates = List.of(aggrChosen);
             if (this.aggregates == null || this.aggregates.isEmpty()) {
                 s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
                 throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
             }
+            s_logger.info("Selected aggregate: " + aggrChosen.getName() + " for volume operations.");
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
