@@ -124,56 +124,14 @@ public abstract class StorageStrategy {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
             }
-            // TODO: Implement logic to select appropriate aggregate based on storage requirements
+
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 s_logger.error("No aggregates are assigned to SVM " + svmName);
                 throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
             }
-            // Set the aggregates which are according to the storage requirements;
-            long maxAvailableAggregateSpaceBytes = -1L;
-            Aggregate aggrChosen = null;
-            for (Aggregate aggr : aggrs) {
-                s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
-                Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
 
-                if (aggrResp == null) {
-                    s_logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
-                    continue;
-                }
-
-                if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
-                    s_logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
-                    continue;
-                }
-
-                if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null) {
-                    s_logger.warn("Aggregate " + aggr.getName() + " does not have space information. Skipping this aggregate.");
-                    continue;
-                }
-
-                // ONTAP reports available space in bytes. Compare in long to avoid overflow.
-                final long availableBytes = aggrResp.getAvailableBlockStorageSpace().longValue();
-
-                if (availableBytes <= storage.getSize().longValue()) {
-                    s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Required=" +
-                            storage.getSize().longValue() + " bytes, available=" + availableBytes + " bytes. Skipping this aggregate.");
-                    continue;
-                }
-
-                if (availableBytes > maxAvailableAggregateSpaceBytes) {
-                    maxAvailableAggregateSpaceBytes = availableBytes;
-                    aggrChosen = aggr;
-                }
-            }
-
-            if (aggrChosen == null) {
-                s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
-                throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
-            }
-
-            this.aggregates = List.of(aggrChosen);
-            s_logger.info("Selected aggregate: " + aggrChosen.getName() + " for volume operations.");
+            this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
@@ -200,6 +158,10 @@ public abstract class StorageStrategy {
             s_logger.error("No aggregates available to create volume on SVM " + svmName);
             throw new CloudRuntimeException("No aggregates available to create volume on SVM " + svmName);
         }
+        if (size == null || size <= 0) {
+            throw new CloudRuntimeException("Invalid volume size provided: " + size);
+        }
+
         // Get the AuthHeader
         String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
 
@@ -212,9 +174,53 @@ public abstract class StorageStrategy {
 
         volumeRequest.setName(volumeName);
         volumeRequest.setSvm(svm);
+
+        // Pick the best aggregate for this specific request (largest available, online, and sufficient space).
+        long maxAvailableAggregateSpaceBytes = -1L;
+        Aggregate aggrChosen = null;
+        for (Aggregate aggr : aggregates) {
+            s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
+            Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
+
+            if (aggrResp == null) {
+                s_logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
+                continue;
+            }
+
+            if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
+                s_logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
+                continue;
+            }
+
+            if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null) {
+                s_logger.warn("Aggregate " + aggr.getName() + " does not have space information. Skipping this aggregate.");
+                continue;
+            }
+
+            final long availableBytes = aggrResp.getAvailableBlockStorageSpace().longValue();
+            s_logger.debug("Aggregate " + aggr.getName() + " available bytes=" + availableBytes + ", requested=" + size);
+
+            if (availableBytes <= size) {
+                s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Required=" +
+                        size + " bytes, available=" + availableBytes + " bytes. Skipping this aggregate.");
+                continue;
+            }
+
+            if (availableBytes > maxAvailableAggregateSpaceBytes) {
+                maxAvailableAggregateSpaceBytes = availableBytes;
+                aggrChosen = aggr;
+            }
+        }
+
+        if (aggrChosen == null) {
+            s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+            throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume operations.");
+        }
+        s_logger.info("Selected aggregate: " + aggrChosen.getName() + " for volume operations.");
+
         Aggregate aggr = new Aggregate();
-        aggr.setName(aggregates.get(0).getName());
-        aggr.setUuid(aggregates.get(0).getUuid());
+        aggr.setName(aggrChosen.getName());
+        aggr.setUuid(aggrChosen.getUuid());
         volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
         volumeRequest.setNas(nas);
