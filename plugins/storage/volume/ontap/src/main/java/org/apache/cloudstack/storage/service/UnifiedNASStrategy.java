@@ -160,7 +160,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         if (primaryDataStoreInfo == null) {
             throw new CloudRuntimeException("deleteAccessGroup: PrimaryDataStoreInfo is null in accessGroup");
         }
-
+        s_logger.info("deleteAccessGroup: Deleting export policy for the storage pool {}", primaryDataStoreInfo.getName());
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             String svmName = storage.getSvmName();
