@@ -170,16 +170,14 @@ public class UnifiedNASStrategy extends NASStrategy {
 
             try {
                 nasFeignClient.deleteExportPolicyById(authHeader,exportPolicyId);
-                s_logger.info("Export policy deleted successfully: {}", exportPolicyName);
-
                 s_logger.info("deleteAccessGroup: Successfully deleted export policy '{}'", exportPolicyName);
             } catch (Exception e) {
-                s_logger.error("deleteAccessGroup: Failed to delete iGroup. Exception: {}", e.getMessage(), e);
-                throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
+                s_logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+                throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
             }
         } catch (Exception e) {
-            s_logger.error("deleteAccessGroup: Failed to delete iGroup. Exception: {}", e.getMessage(), e);
-            throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
+            s_logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
         }
     }
 
