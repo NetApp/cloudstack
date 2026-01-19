@@ -139,4 +139,8 @@ public class Utility {
         //Igroup name format: cs_svmName_scopeId
         return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeType.toString().toLowerCase() + Constants.UNDERSCORE + scopeId;
     }
+
+    public static String generateExportPolicyName(String svmName, String volumeName){
+        return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
+    }
 }
