@@ -25,9 +25,27 @@ import org.apache.cloudstack.storage.feign.model.Lun;
 
 public class CloudStackVolume {
 
+    /**
+     * Filed used for request:
+     *   a. snapshot worflows will get source file details from it.
+     */
     private FileInfo file;
+    /**
+     * Filed used for request:
+     *   a. snapshot worflows will get source LUN details from it.
+     */
     private Lun lun;
     private String datastoreId;
+    /**
+     * FlexVolume UUID on which this cloudstack volume is created.
+     *    a. Field is eligible for unified storage only.
+     *    b. It will be null for the disaggregated storage.
+     */
+    private String flexVolumeUuid;
+    /**
+     * Field serves for snapshot workflows
+     */
+    private String destinationPath;
     private DataObject volumeInfo; // This is needed as we need DataObject to be passed to agent to create volume
     public FileInfo getFile() {
         return file;
@@ -36,6 +54,10 @@ public class CloudStackVolume {
     public void setFile(FileInfo file) {
         this.file = file;
     }
+
+    public String getDestinationPath() { return this.destinationPath; }
+
+    public void setDestinationPath(String destinationPath) { this.destinationPath = destinationPath; }
 
     public Lun getLun() {
         return lun;
@@ -55,5 +77,11 @@ public class CloudStackVolume {
     }
     public void setVolumeInfo(DataObject volumeInfo) {
         this.volumeInfo = volumeInfo;
+    }
+    public String getFlexVolumeUuid() {
+        return flexVolumeUuid;
+    }
+    public void setFlexVolumeUuid(String flexVolumeUuid) {
+        this.flexVolumeUuid = flexVolumeUuid;
     }
 }
