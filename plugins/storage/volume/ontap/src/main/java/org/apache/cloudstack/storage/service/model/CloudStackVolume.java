@@ -27,12 +27,12 @@ public class CloudStackVolume {
 
     /**
      * Filed used for request:
-     *   a. snapshot worflows will get source file details from it.
+     *   a. snapshot workflows will get source file details from it.
      */
     private FileInfo file;
     /**
      * Filed used for request:
-     *   a. snapshot worflows will get source LUN details from it.
+     *   a. snapshot workflows will get source LUN details from it.
      */
     private Lun lun;
     private String datastoreId;
