@@ -108,33 +108,55 @@ public abstract class StorageStrategy {
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
             } else {
-                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                s_logger.error("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                return false;
             }
 
             // Validations
             s_logger.info("Validating SVM state and protocol settings...");
             if (!Objects.equals(svm.getState(), Constants.RUNNING)) {
                 s_logger.error("SVM " + svmName + " is not in running state.");
-                throw new CloudRuntimeException("SVM " + svmName + " is not in running state.");
+                return false;
             }
             if (Objects.equals(storage.getProtocol(), Constants.NFS) && !svm.getNfsEnabled()) {
                 s_logger.error("NFS protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+                return false;
             } else if (Objects.equals(storage.getProtocol(), Constants.ISCSI) && !svm.getIscsiEnabled()) {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
+                return false;
             }
-
+            // TODO: Implement logic to select appropriate aggregate based on storage requirements
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 s_logger.error("No aggregates are assigned to SVM " + svmName);
-                throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
+                return false;
+            }
+            // Set the aggregates which are according to the storage requirements
+            for (Aggregate aggr : aggrs) {
+                s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
+                Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
+                if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
+                    s_logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
+                    continue;
+                } else if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null ||
+                        aggrResp.getAvailableBlockStorageSpace() <= storage.getSize().doubleValue()) {
+                    s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
+                    continue;
+                }
+                s_logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
+                this.aggregates = List.of(aggr);
+                break;
+            }
+            if (this.aggregates == null || this.aggregates.isEmpty()) {
+                s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+                return false;
             }
 
             this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
-            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
+           s_logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
+           return false;
         }
         return true;
     }
@@ -472,7 +494,17 @@ public abstract class StorageStrategy {
      *
      * @param cloudstackVolume the CloudStack volume to delete
      */
-    abstract void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     cloneLun       for iSCSI, FC protocols
+     *     cloneFile      for NFS3.0 and NFS4.1 protocols
+     *     cloneNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param cloudstackVolume the CloudStack volume to copy
+     */
+    abstract public void copyCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -527,17 +559,27 @@ public abstract class StorageStrategy {
      * Method encapsulates the behavior based on the opted protocol in subclasses
      *     lunMap  for iSCSI and FC protocols
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
-     * @param values
+     * @param values map including SVM name, LUN name, and igroup name
+     * @return map containing logical unit number for the new/existing mapping
      */
-    abstract public void enableLogicalAccess(Map<String,String> values);
+    abstract public Map<String,String> enableLogicalAccess(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
      *     lunUnmap  for iSCSI and FC protocols
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
-     * @param values
+     * @param values map including LUN UUID and iGroup UUID
      */
     abstract public void disableLogicalAccess(Map<String, String> values);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunMap lookup for iSCSI/FC protocols (GET-only, no side-effects)
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values map with SVM name, LUN name, and igroup name
+     * @return map containing logical unit number if mapping exists; otherwise null
+     */
+    abstract public Map<String, String> getLogicalAccess(Map<String, String> values);
 
     private Boolean jobPollForSuccess(String jobUUID) {
         //Create URI for GET Job API
