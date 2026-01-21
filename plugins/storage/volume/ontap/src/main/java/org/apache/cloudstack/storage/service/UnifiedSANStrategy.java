@@ -104,8 +104,13 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
+        return null;
+    }
+
+    @Override
+    public CloudStackVolume snapshotCloudStackVolume(CloudStackVolume cloudstackVolume) {
         return null;
     }
 
