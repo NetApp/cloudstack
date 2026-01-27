@@ -447,8 +447,19 @@ public abstract class StorageStrategy {
             OntapResponse<IpInterface> response =
                     networkFeignClient.getNetworkIpInterfaces(authHeader, queryParams);
             if (response != null && response.getRecords() != null && !response.getRecords().isEmpty()) {
-                // For simplicity, return the first interface's name
-                IpInterface ipInterface = response.getRecords().get(0);
+                IpInterface ipInterface = null;
+                // For simplicity, return the first interface's name (Of IPv4 type for NFS3)
+                if (storage.getProtocol() == ProtocolType.ISCSI) {
+                    ipInterface = response.getRecords().get(0);
+                } else if (storage.getProtocol() == ProtocolType.NFS3) {
+                    for (IpInterface iface : response.getRecords()) {
+                        if (iface.getIp().getAddress().contains(".")) {
+                            ipInterface = iface;
+                            break;
+                        }
+                    }
+                }
+
                 s_logger.info("Retrieved network interface: " + ipInterface.getIp().getAddress());
                 return ipInterface.getIp().getAddress();
             } else {

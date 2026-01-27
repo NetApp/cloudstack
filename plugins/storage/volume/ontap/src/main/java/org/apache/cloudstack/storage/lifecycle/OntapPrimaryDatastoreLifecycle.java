@@ -415,6 +415,20 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                     hostIdentifiers.add(host.getStorageUrl());
                 }
                 break;
+            case NFS3:
+                String ip = "";
+                for (HostVO host : hosts) {
+                    if (host != null) {
+                        ip =  host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : "";
+                        if (ip.isEmpty() && host.getPrivateIpAddress() != null || host.getPrivateIpAddress().trim().isEmpty()) {
+                            return false;
+                        } else {
+                            ip = ip.isEmpty() ? host.getPrivateIpAddress().trim() : ip;
+                        }
+                    }
+                    hostIdentifiers.add(ip);
+                }
+                break;
             default:
                 throw new CloudRuntimeException("validateProtocolSupportAndFetchHostsIdentifier : Unsupported protocol: " + protocolType.name());
         }
@@ -471,15 +485,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             PrimaryDataStoreInfo primaryDataStoreInfo = (PrimaryDataStoreInfo) store;
             primaryDataStoreInfo.setDetails(details);
 
-            // Create AccessGroup object with PrimaryDataStoreInfo
-            AccessGroup accessGroup = new AccessGroup();
-            accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
-
-            // Call deleteAccessGroup - it will figure out scope, protocol, and all details internally
-            storageStrategy.deleteAccessGroup(accessGroup);
-
-            s_logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
-
             // Call deleteStorageVolume to delete the underlying ONTAP volume
             s_logger.info("deleteDataStore: Deleting ONTAP volume for storage pool '{}'", storagePool.getName());
             Volume volume = new Volume();
@@ -497,6 +502,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 s_logger.error("deleteDataStore: Exception while retrieving volume UUID for storage pool id: {}. Error: {}",
                         storagePoolId, e.getMessage(), e);
             }
+            AccessGroup accessGroup = new AccessGroup();
+            accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
+            // Delete access groups associated with this storage pool
+            storageStrategy.deleteAccessGroup(accessGroup);
+            s_logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
 
         } catch (Exception e) {
             s_logger.error("deleteDataStore: Failed to delete access groups for storage pool id: {}. Error: {}",
