@@ -48,7 +48,7 @@ public class Igroup {
     private String name = null;
 
     @JsonProperty("protocol")
-    private ProtocolEnum protocol = ProtocolEnum.mixed;
+    private ProtocolEnum protocol = null;
     @JsonProperty("svm")
     private Svm svm = null;
     @JsonProperty("uuid")

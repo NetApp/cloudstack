@@ -65,7 +65,7 @@ public class OntapPrimaryDatastoreProvider implements PrimaryDataStoreProvider {
     @Override
     public String getName() {
         s_logger.trace("OntapPrimaryDatastoreProvider: getName: Called");
-        return "ONTAP Primary Datastore Provider";
+        return "ONTAP";
     }
 
     @Override

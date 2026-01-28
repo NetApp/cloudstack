@@ -110,12 +110,17 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
     }
 
     @Override
-    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
+
+    }
+
+    @Override
+    public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap) {
         //TODO
         return null;
     }
@@ -188,19 +193,26 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
+    public AccessGroup getAccessGroup(Map<String, String> values) {
         //TODO
         return null;
     }
 
     @Override
-    void enableLogicalAccess(Map<String, String> values) {
+    public Map <String, String> enableLogicalAccess(Map<String, String> values) {
+        //TODO
+        return null;
+    }
+
+    @Override
+    public void disableLogicalAccess(Map<String, String> values) {
         //TODO
     }
 
     @Override
-    void disableLogicalAccess(Map<String, String> values) {
-        //TODO
+    public Map<String, String> getLogicalAccess(Map<String, String> values) {
+        // NAS does not use LUN mapping; nothing to fetch
+        return null;
     }
 
 

@@ -19,6 +19,8 @@ package com.cloud.hypervisor.kvm.storage;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImg.PhysicalDiskFormat;
@@ -96,10 +98,15 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         String result = iScsiAdmCmd.execute();
 
         if (result != null) {
-            logger.debug("Failed to add iSCSI target " + volumeUuid);
-            System.out.println("Failed to add iSCSI target " + volumeUuid);
+            // Node record may already exist from a previous run; accept and proceed
+            if (isNonFatalNodeCreate(result)) {
+                logger.debug("iSCSI node already exists for {}@{}:{}, proceeding", getIqn(volumeUuid), pool.getSourceHost(), pool.getSourcePort());
+            } else {
+                logger.debug("Failed to add iSCSI target " + volumeUuid);
+                System.out.println("Failed to add iSCSI target " + volumeUuid);
 
-            return false;
+                return false;
+            }
         } else {
             logger.debug("Successfully added iSCSI target " + volumeUuid);
             System.out.println("Successfully added to iSCSI target " + volumeUuid);
@@ -123,21 +130,28 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             }
         }
 
-        // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --login
-        iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
+        final String host = pool.getSourceHost();
+        final int port = pool.getSourcePort();
+        final String iqn = getIqn(volumeUuid);
 
+        // Always try to login; treat benign outcomes as success (idempotent)
+        iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
         iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", getIqn(volumeUuid));
-        iScsiAdmCmd.add("-p", pool.getSourceHost() + ":" + pool.getSourcePort());
+        iScsiAdmCmd.add("-T", iqn);
+        iScsiAdmCmd.add("-p", host + ":" + port);
         iScsiAdmCmd.add("--login");
 
         result = iScsiAdmCmd.execute();
 
         if (result != null) {
-            logger.debug("Failed to log in to iSCSI target " + volumeUuid);
-            System.out.println("Failed to log in to iSCSI target " + volumeUuid);
+            if (isNonFatalLogin(result)) {
+                logger.debug("iSCSI login returned benign message for {}@{}:{}: {}", iqn, host, port, result);
+            } else {
+                logger.debug("Failed to log in to iSCSI target " + volumeUuid + ": " + result);
+                System.out.println("Failed to log in to iSCSI target " + volumeUuid);
 
-            return false;
+                return false;
+            }
         } else {
             logger.debug("Successfully logged in to iSCSI target " + volumeUuid);
             System.out.println("Successfully logged in to iSCSI target " + volumeUuid);
@@ -158,8 +172,23 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         return true;
     }
 
+    // Removed sessionExists() call to avoid noisy sudo/iscsiadm session queries that may fail on some setups
+
+    private boolean isNonFatalLogin(String result) {
+        if (result == null) return true;
+        String msg = result.toLowerCase();
+        // Accept messages where the session already exists
+        return msg.contains("already present") || msg.contains("already logged in") || msg.contains("session exists");
+    }
+
+    private boolean isNonFatalNodeCreate(String result) {
+        if (result == null) return true;
+        String msg = result.toLowerCase();
+        return msg.contains("already exists") || msg.contains("database exists") || msg.contains("exists");
+    }
+
     private void waitForDiskToBecomeAvailable(String volumeUuid, KVMStoragePool pool) {
-        int numberOfTries = 10;
+        int numberOfTries = 30;
         int timeBetweenTries = 1000;
 
         while (getPhysicalDisk(volumeUuid, pool).getSize() == 0 && numberOfTries > 0) {
@@ -238,6 +267,15 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
     }
 
     private long getDeviceSize(String deviceByPath) {
+        try {
+            if (!Files.exists(Paths.get(deviceByPath))) {
+                logger.debug("Device by-path does not exist yet: " + deviceByPath);
+                return 0L;
+            }
+        } catch (Exception ignore) {
+            // If FS check fails for any reason, fall back to blockdev call
+        }
+
         Script iScsiAdmCmd = new Script(true, "blockdev", 0, logger);
 
         iScsiAdmCmd.add("--getsize64", deviceByPath);

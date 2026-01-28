@@ -26,4 +26,25 @@ public abstract class SANStrategy extends StorageStrategy {
         super(ontapStorage);
     }
 
+    /**
+     * Ensures the LUN is mapped to the specified access group (igroup).
+     * If a mapping already exists, returns the existing LUN number.
+     * If not, creates a new mapping and returns the assigned LUN number.
+     *
+     * @param svmName the SVM name
+     * @param lunName the LUN name
+     * @param accessGroupName the igroup name
+     * @return the logical unit number as a String
+     */
+    public abstract String ensureLunMapped(String svmName, String lunName, String accessGroupName);
+
+    /**
+     * Validates that the host initiator is present in the access group (igroup).
+     *
+     * @param hostInitiator the host initiator IQN
+     * @param svmName the SVM name
+     * @param accessGroupName the igroup name
+     * @return true if the initiator is found in the igroup, false otherwise
+     */
+    public abstract boolean validateInitiatorInAccessGroup(String hostInitiator, String svmName, String accessGroupName);
 }
