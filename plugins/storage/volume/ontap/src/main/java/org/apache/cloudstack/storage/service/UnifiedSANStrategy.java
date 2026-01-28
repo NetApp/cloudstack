@@ -550,4 +550,67 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
         return null;
     }
+
+    @Override
+    public String ensureLunMapped(String svmName, String lunName, String accessGroupName) {
+        s_logger.info("ensureLunMapped: Ensuring LUN [{}] is mapped to igroup [{}] on SVM [{}]", lunName, accessGroupName, svmName);
+
+        // Check existing map first
+        Map<String, String> getMap = Map.of(
+                Constants.LUN_DOT_NAME, lunName,
+                Constants.SVM_DOT_NAME, svmName,
+                Constants.IGROUP_DOT_NAME, accessGroupName
+        );
+        Map<String, String> mapResp = getLogicalAccess(getMap);
+        if (mapResp != null && mapResp.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
+            String lunNumber = mapResp.get(Constants.LOGICAL_UNIT_NUMBER);
+            s_logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
+            return lunNumber;
+        }
+
+        // Create if not exists
+        Map<String, String> enableMap = Map.of(
+                Constants.LUN_DOT_NAME, lunName,
+                Constants.SVM_DOT_NAME, svmName,
+                Constants.IGROUP_DOT_NAME, accessGroupName
+        );
+        Map<String, String> response = enableLogicalAccess(enableMap);
+        if (response == null || !response.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
+            throw new CloudRuntimeException("ensureLunMapped: Failed to map LUN [" + lunName + "] to iGroup [" + accessGroupName + "]");
+        }
+        s_logger.info("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}] with LUN number [{}]", lunName, accessGroupName, response.get(Constants.LOGICAL_UNIT_NUMBER));
+        return response.get(Constants.LOGICAL_UNIT_NUMBER);
+    }
+
+    @Override
+    public boolean validateInitiatorInAccessGroup(String hostInitiator, String svmName, String accessGroupName) {
+        s_logger.info("validateInitiatorInAccessGroup: Validating initiator [{}] is in igroup [{}] on SVM [{}]", hostInitiator, accessGroupName, svmName);
+
+        if (hostInitiator == null || hostInitiator.isEmpty()) {
+            s_logger.warn("validateInitiatorInAccessGroup: host initiator is null or empty");
+            return false;
+        }
+
+        Map<String, String> getAccessGroupMap = Map.of(
+                Constants.NAME, accessGroupName,
+                Constants.SVM_DOT_NAME, svmName
+        );
+        AccessGroup accessGroup = getAccessGroup(getAccessGroupMap);
+        if (accessGroup == null || accessGroup.getIgroup() == null) {
+            s_logger.warn("validateInitiatorInAccessGroup: iGroup [{}] not found on SVM [{}]", accessGroupName, svmName);
+            return false;
+        }
+
+        Igroup igroup = accessGroup.getIgroup();
+        if (igroup.getInitiators() != null) {
+            for (Initiator initiator : igroup.getInitiators()) {
+                if (initiator.getName().equalsIgnoreCase(hostInitiator)) {
+                    s_logger.info("validateInitiatorInAccessGroup: Initiator [{}] validated successfully in igroup [{}]", hostInitiator, accessGroupName);
+                    return true;
+                }
+            }
+        }
+        s_logger.warn("validateInitiatorInAccessGroup: Initiator [{}] NOT found in igroup [{}]", hostInitiator, accessGroupName);
+        return false;
+    }
 }

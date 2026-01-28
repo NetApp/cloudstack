@@ -50,10 +50,10 @@ import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.service.SANStrategy;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -67,6 +67,19 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Primary datastore driver for NetApp ONTAP storage systems.
+ * This driver handles volume lifecycle operations (create, delete, grant/revoke access)
+ * for both iSCSI (LUN-based) and NFS protocols against ONTAP storage backends.
+ *
+ * For iSCSI protocol:
+ * - Creates LUNs on ONTAP and maps them to initiator groups (igroups)
+ * - Manages LUN mappings for host access control
+ *
+ * For NFS protocol:
+ * - Delegates file operations to KVM host/libvirt
+ * - ONTAP volume/export management handled at storage pool creation time
+ */
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreDriver.class);
@@ -84,7 +97,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         // TODO Set it to false once we start supporting snapshot feature
         mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.FALSE.toString());
         mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.FALSE.toString());
-
         return mapCapabilities;
     }
 
@@ -94,12 +106,31 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public DataStoreTO getStoreTO(DataStore store) { return null; }
+    public DataStoreTO getStoreTO(DataStore store) {
+        return null;
+    }
 
+    /**
+     * Asynchronously creates a volume on the ONTAP storage system.
+     *
+     * For iSCSI protocol:
+     * - Creates a LUN on ONTAP via the SAN strategy
+     * - Stores LUN UUID and name in volume_details table for later reference
+     * - Creates a LUN mapping to the appropriate igroup (based on cluster/zone scope)
+     * - Sets the iSCSI path on the volume for host attachment
+     *
+     * For NFS protocol:
+     * - Associates the volume with the storage pool (actual file creation handled by hypervisor)
+     *
+     * @param dataStore The target data store (storage pool)
+     * @param dataObject The volume to create
+     * @param callback Callback to notify completion
+     */
     @Override
     public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
         CreateCmdResult createCmdResult = null;
-        String errMsg = null;
+        String errMsg;
+
         if (dataStore == null) {
             throw new InvalidParameterValueException("createAsync: dataStore should not be null");
         }
@@ -109,54 +140,68 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (callback == null) {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
+
         try {
-            s_logger.info("createAsync: Started for data store name [{}] and data object name [{}] of type [{}]", dataStore.getName(), dataObject.getName(), dataObject.getType());
+            s_logger.info("createAsync: Started for data store name [{}] and data object name [{}] of type [{}]",
+                    dataStore.getName(), dataObject.getName(), dataObject.getType());
+
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
             if (storagePool == null) {
-                s_logger.error("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
-                throw new CloudRuntimeException("createCloudStackVolume : Storage Pool not found for id: " + dataStore.getId());
+                s_logger.error("createAsync: Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("createAsync: Storage Pool not found for id: " + dataStore.getId());
             }
+
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeInfo volInfo = (VolumeInfo) dataObject;
-                // Create LUN/backing for volume and record relevant details
-                CloudStackVolume created = createCloudStackVolume(dataStore, volInfo);
 
-                // Immediately ensure LUN-map exists and update VolumeVO path
-                if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                    String svmName = details.get(Constants.SVM_NAME);
-                    String lunName = volumeDetailsDao.findDetail(volInfo.getId(), Constants.LUN_DOT_NAME) != null ?
-                            volumeDetailsDao.findDetail(volInfo.getId(), Constants.LUN_DOT_NAME).getValue() : null;
-                    if (lunName == null) {
-                        // Fallback from returned LUN
-                        lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
-                    }
-                    if (lunName == null) {
-                        throw new CloudRuntimeException("createAsync: Missing LUN name for volume " + volInfo.getId());
-                    }
-                    long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? storagePool.getClusterId() : storagePool.getDataCenterId();
-                    String lunNumber = ensureLunMapped(storagePool, svmName, lunName, scopeId);
+                // Create the backend storage object (LUN for iSCSI, no-op for NFS)
+                CloudStackVolume created = createCloudStackVolume(dataStore, volInfo, details);
 
-                    VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
-                    if (volumeVO != null) {
+                // Update CloudStack volume record with storage pool association and protocol-specific details
+                VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
+                if (volumeVO != null) {
+                    volumeVO.setPoolType(storagePool.getPoolType());
+                    volumeVO.setPoolId(storagePool.getId());
+
+                    if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                        String svmName = details.get(Constants.SVM_NAME);
+                        String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
+                        if (lunName == null) {
+                            throw new CloudRuntimeException("createAsync: Missing LUN name for volume " + volInfo.getId());
+                        }
+
+                        // Determine scope ID based on storage pool scope (cluster or zone level igroup)
+                        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER)
+                                ? storagePool.getClusterId()
+                                : storagePool.getDataCenterId();
+
+                        // Persist LUN details for future operations (delete, grant/revoke access)
+                        volumeDetailsDao.addDetail(volInfo.getId(), Constants.LUN_DOT_UUID, created.getLun().getUuid(), false);
+                        volumeDetailsDao.addDetail(volInfo.getId(), Constants.LUN_DOT_NAME, lunName, false);
+                        if (created.getLun().getUuid() != null) {
+                            volumeVO.setFolder(created.getLun().getUuid());
+                        }
+
+                        // Create LUN-to-igroup mapping and retrieve the assigned LUN ID
+                        UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
+                        String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
+                        String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+
+                        // Construct iSCSI path: /<iqn>/<lun_id> format for KVM/libvirt attachment
                         String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
                         volumeVO.set_iScsiName(iscsiPath);
                         volumeVO.setPath(iscsiPath);
-                        volumeVO.setPoolType(storagePool.getPoolType());
-                        volumeVO.setPoolId(storagePool.getId());
-                        volumeDao.update(volumeVO.getId(), volumeVO);
                         s_logger.info("createAsync: Volume [{}] iSCSI path set to {}", volumeVO.getId(), iscsiPath);
+
+                    } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                        // For NFS, the hypervisor handles file creation; we only track pool association
+                        s_logger.info("createAsync: Managed NFS volume [{}] associated with pool {}",
+                                volumeVO.getId(), storagePool.getId());
                     }
-                } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                    // Ensure pool fields are recorded for managed NFS as well
-                    VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
-                    if (volumeVO != null) {
-                        volumeVO.setPoolType(storagePool.getPoolType());
-                        volumeVO.setPoolId(storagePool.getId());
-                        volumeDao.update(volumeVO.getId(), volumeVO);
-                        s_logger.info("createAsync: Managed NFS volume [{}] associated with pool {}", volumeVO.getId(), storagePool.getId());
-                    }
+
+                    volumeDao.update(volumeVO.getId(), volumeVO);
                 }
                 createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
             } else {
@@ -177,82 +222,46 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    private CloudStackVolume createCloudStackVolume(DataStore dataStore, DataObject dataObject) {
+    /**
+     * Creates a CloudStack volume on the ONTAP backend using the appropriate storage strategy.
+     *
+     * @param dataStore The target data store
+     * @param dataObject The volume to create
+     * @param details Storage pool configuration details
+     * @return CloudStackVolume containing the created backend object (LUN for iSCSI)
+     */
+    private CloudStackVolume createCloudStackVolume(DataStore dataStore, DataObject dataObject, Map<String, String> details) {
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if (storagePool == null) {
             s_logger.error("createCloudStackVolume: Storage Pool not found for id: {}", dataStore.getId());
             throw new CloudRuntimeException("createCloudStackVolume: Storage Pool not found for id: " + dataStore.getId());
         }
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
 
         if (dataObject.getType() == DataObjectType.VOLUME) {
             VolumeInfo volumeObject = (VolumeInfo) dataObject;
-
             CloudStackVolume cloudStackVolumeRequest = Utility.createCloudStackVolumeRequestByProtocol(storagePool, details, volumeObject);
-            CloudStackVolume cloudStackVolume = storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
-            if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL)) && cloudStackVolume.getLun() != null && cloudStackVolume.getLun().getName() != null) {
-                s_logger.info("createCloudStackVolume: iSCSI LUN object created for volume [{}]", volumeObject.getId());
-                volumeDetailsDao.addDetail(volumeObject.getId(), Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid(), false);
-                volumeDetailsDao.addDetail(volumeObject.getId(), Constants.LUN_DOT_NAME, cloudStackVolume.getLun().getName(), false);
-                VolumeVO volumeVO = volumeDao.findById(volumeObject.getId());
-                if (volumeVO != null) {
-                    volumeVO.setPath(null);
-                    if (cloudStackVolume.getLun().getUuid() != null) {
-                        volumeVO.setFolder(cloudStackVolume.getLun().getUuid());
-                    }
-                    volumeVO.setPoolType(storagePool.getPoolType());
-                    volumeVO.setPoolId(storagePool.getId());
-                    volumeDao.update(volumeVO.getId(), volumeVO);
-                }
-            } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                s_logger.info("createCloudStackVolume: Managed NFS object created for volume [{}]", volumeObject.getId());
-                // For Managed NFS, set pool fields on Volume
-                VolumeVO volumeVO = volumeDao.findById(volumeObject.getId());
-                if (volumeVO != null) {
-                    volumeVO.setPoolType(storagePool.getPoolType());
-                    volumeVO.setPoolId(storagePool.getId());
-                    volumeDao.update(volumeVO.getId(), volumeVO);
-                }
-            } else {
-                String errMsg = "createCloudStackVolume: Volume creation failed for dataObject: " + volumeObject;
-                s_logger.error(errMsg);
-                throw new CloudRuntimeException(errMsg);
-            }
-            return cloudStackVolume;
+            return storageStrategy.createCloudStackVolume(cloudStackVolumeRequest);
         } else {
             throw new CloudRuntimeException("createCloudStackVolume: Unsupported DataObjectType: " + dataObject.getType());
         }
     }
 
-    private String ensureLunMapped(StoragePoolVO storagePool, String svmName, String lunName, long scopeId) {
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
-        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
-        String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
-
-        // Check existing map first. getLogicalAccess returns null (no exception) when map doesn't exist.
-        Map<String, String> getMap = new HashMap<>();
-        getMap.put(Constants.LUN_DOT_NAME, lunName);
-        getMap.put(Constants.SVM_DOT_NAME, svmName);
-        getMap.put(Constants.IGROUP_DOT_NAME, accessGroupName);
-        Map<String, String> mapResp = storageStrategy.getLogicalAccess(getMap);
-        if (mapResp != null && mapResp.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
-            String lunNumber = mapResp.get(Constants.LOGICAL_UNIT_NUMBER);
-            s_logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
-            return lunNumber;
-        }
-        // Create if not exists
-        Map<String, String> enableMap = new HashMap<>();
-        enableMap.put(Constants.LUN_DOT_NAME, lunName);
-        enableMap.put(Constants.SVM_DOT_NAME, svmName);
-        enableMap.put(Constants.IGROUP_DOT_NAME, accessGroupName);
-        Map<String, String> response = storageStrategy.enableLogicalAccess(enableMap);
-        if (response == null || !response.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
-            throw new CloudRuntimeException("ensureLunMapped: Failed to map LUN [" + lunName + "] to iGroup [" + accessGroupName + "]");
-        }
-        return response.get(Constants.LOGICAL_UNIT_NUMBER);
-    }
-
+    /**
+     * Asynchronously deletes a volume from the ONTAP storage system.
+     *
+     * For iSCSI protocol:
+     * - Retrieves LUN details from volume_details table
+     * - Deletes the LUN from ONTAP (LUN mappings are automatically removed)
+     *
+     * For NFS protocol:
+     * - No ONTAP operation needed; file deletion handled by KVM host/libvirt
+     *
+     * @param store The data store containing the volume
+     * @param data The volume to delete
+     * @param callback Callback to notify completion
+     */
     @Override
     public void deleteAsync(DataStore store, DataObject data, AsyncCompletionCallback<CommandResult> callback) {
         CommandResult commandResult = new CommandResult();
@@ -260,37 +269,45 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (store == null || data == null) {
                 throw new CloudRuntimeException("deleteAsync: store or data is null");
             }
+
             if (data.getType() == DataObjectType.VOLUME) {
                 StoragePoolVO storagePool = storagePoolDao.findById(store.getId());
-                if(storagePool == null) {
-                    s_logger.error("deleteAsync : Storage Pool not found for id: " + store.getId());
-                    throw new CloudRuntimeException("deleteAsync : Storage Pool not found for id: " + store.getId());
+                if (storagePool == null) {
+                    s_logger.error("deleteAsync: Storage Pool not found for id: " + store.getId());
+                    throw new CloudRuntimeException("deleteAsync: Storage Pool not found for id: " + store.getId());
                 }
+
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+
                 if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                    // ManagedNFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
-                    s_logger.info("deleteAsync: ManagedNFS volume {} no-op ONTAP deletion", data.getId());
+                    // NFS file deletion is handled by the hypervisor; no ONTAP REST call needed
+                    s_logger.info("deleteAsync: ManagedNFS volume {} - file deletion handled by hypervisor", data.getId());
+
                 } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                     StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
                     VolumeInfo volumeObject = (VolumeInfo) data;
-                    s_logger.info("deleteAsync: Deleting volume & LUN for volume id [{}]", volumeObject.getId());
+                    s_logger.info("deleteAsync: Deleting LUN for volume id [{}]", volumeObject.getId());
+
+                    // Retrieve LUN identifiers stored during volume creation
                     String lunName = volumeDetailsDao.findDetail(volumeObject.getId(), Constants.LUN_DOT_NAME).getValue();
                     String lunUUID = volumeDetailsDao.findDetail(volumeObject.getId(), Constants.LUN_DOT_UUID).getValue();
                     if (lunName == null) {
                         throw new CloudRuntimeException("deleteAsync: Missing LUN name for volume " + volumeObject.getId());
                     }
+
                     CloudStackVolume delRequest = new CloudStackVolume();
                     Lun lun = new Lun();
                     lun.setName(lunName);
                     lun.setUuid(lunUUID);
                     delRequest.setLun(lun);
                     storageStrategy.deleteCloudStackVolume(delRequest);
-                    // Set the result
+
                     commandResult.setResult(null);
                     commandResult.setSuccess(true);
-                    s_logger.info("deleteAsync: Volume LUN [{}] deleted successfully", lunName);
+                    s_logger.info("deleteAsync: LUN [{}] deleted successfully", lunName);
+
                 } else {
-                    throw new CloudRuntimeException("deleteAsync: Unsupported protocol for deletion: " + details.get(Constants.PROTOCOL));
+                    throw new CloudRuntimeException("deleteAsync: Unsupported protocol: " + details.get(Constants.PROTOCOL));
                 }
             }
         } catch (Exception e) {
@@ -326,23 +343,42 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return null;
     }
 
+    /**
+     * Grants a host access to a volume on the ONTAP storage system.
+     *
+     * For iSCSI protocol:
+     * - Validates that the host's iSCSI initiator (IQN) is present in the target igroup
+     * - Ensures the LUN is mapped to the igroup (creates mapping if not exists)
+     * - Updates the volume's iSCSI path with the assigned LUN ID
+     *
+     * For NFS protocol:
+     * - No explicit grant needed; NFS exports are configured at storage pool level
+     *
+     * @param dataObject The volume to grant access to
+     * @param host The host requesting access
+     * @param dataStore The data store containing the volume
+     * @return true if access was granted successfully
+     */
     @Override
     public boolean grantAccess(DataObject dataObject, Host host, DataStore dataStore) {
-        if (dataStore == null) {
-            throw new InvalidParameterValueException("grantAccess: dataStore should not be null");
-        }
-        if (dataObject == null) {
-            throw new InvalidParameterValueException("grantAccess: dataObject should not be null");
-        }
-        if (host == null) {
-            throw new InvalidParameterValueException("grantAccess: host should not be null");
-        }
         try {
+            if (dataStore == null) {
+                throw new InvalidParameterValueException("grantAccess: dataStore should not be null");
+            }
+            if (dataObject == null) {
+                throw new InvalidParameterValueException("grantAccess: dataObject should not be null");
+            }
+            if (host == null) {
+                throw new InvalidParameterValueException("grantAccess: host should not be null");
+            }
+
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
             if (storagePool == null) {
                 s_logger.error("grantAccess: Storage Pool not found for id: " + dataStore.getId());
-                throw new CloudRuntimeException("grantAccess : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("grantAccess: Storage Pool not found for id: " + dataStore.getId());
             }
+
+            // ONTAP managed storage only supports cluster and zone scoped pools
             if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
                 s_logger.error("grantAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
                 throw new CloudRuntimeException("grantAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
@@ -351,24 +387,36 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
                 if (volumeVO == null) {
-                    s_logger.error("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
-                    throw new CloudRuntimeException("grantAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    s_logger.error("grantAccess: CloudStack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("grantAccess: CloudStack Volume not found for id: " + dataObject.getId());
                 }
+
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
                 String svmName = details.get(Constants.SVM_NAME);
                 String cloudStackVolumeName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue();
                 long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
-                // Validate initiator membership
-                validateHostInitiatorInIgroup(storagePool, svmName, scopeId, host);
-                // Ensure mapping exists
-                String lunNumber = ensureLunMapped(storagePool, svmName, cloudStackVolumeName, scopeId);
-                // Update Volume path if missing or changed
-                String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
-                if (volumeVO.getPath() == null || !volumeVO.getPath().equals(iscsiPath)) {
-                    volumeVO.set_iScsiName(iscsiPath);
-                    volumeVO.setPath(iscsiPath);
+
+                if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                    UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
+                    String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
+
+                    // Verify host initiator is registered in the igroup before allowing access
+                    if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroupName)) {
+                        throw new CloudRuntimeException("grantAccess: Host initiator [" + host.getStorageUrl() +
+                                "] is not present in iGroup [" + accessGroupName + "]");
+                    }
+
+                    // Create or retrieve existing LUN mapping
+                    String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
+
+                    // Update volume path if changed (e.g., after migration or re-mapping)
+                    String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
+                    if (volumeVO.getPath() == null || !volumeVO.getPath().equals(iscsiPath)) {
+                        volumeVO.set_iScsiName(iscsiPath);
+                        volumeVO.setPath(iscsiPath);
+                    }
                 }
-                // Ensure pool fields are set (align with SolidFire)
+
                 volumeVO.setPoolType(storagePool.getPoolType());
                 volumeVO.setPoolId(storagePool.getId());
                 volumeDao.update(volumeVO.getId(), volumeVO);
@@ -376,66 +424,62 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
             }
-        } catch(Exception e){
+            return true;
+        } catch (Exception e) {
             s_logger.error("grantAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
-            throw new CloudRuntimeException("grantAccess: Failed with error :" + e.getMessage());
-        }
-        return true;
-    }
-
-    private void validateHostInitiatorInIgroup(StoragePoolVO storagePool, String svmName, long scopeId, Host host) {
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
-        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
-        String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
-        AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
-        if (host == null || host.getStorageUrl() == null) {
-            throw new CloudRuntimeException("validateHostInitiatorInIgroup: host/initiator required but not provided");
-        }
-        if (!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
-            s_logger.error("validateHostInitiatorInIgroup: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
-            throw new CloudRuntimeException("validateHostInitiatorInIgroup: initiator [" + host.getStorageUrl() + "] is not present in iGroup [" + accessGroupName + "]");
+            throw new CloudRuntimeException("grantAccess: Failed with error: " + e.getMessage(), e);
         }
     }
 
-    private boolean hostInitiatorFoundInIgroup(String hostInitiator, Igroup igroup) {
-        if(igroup != null && igroup.getInitiators() != null && hostInitiator != null && !hostInitiator.isEmpty()) {
-            for(Initiator initiator : igroup.getInitiators()) {
-                if(initiator.getName().equalsIgnoreCase(hostInitiator)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
+    /**
+     * Revokes a host's access to a volume on the ONTAP storage system.
+     *
+     * For iSCSI protocol:
+     * - Validates the volume is not attached to an active VM
+     * - Removes the LUN mapping from the igroup
+     *
+     * For NFS protocol:
+     * - No explicit revoke needed; NFS exports remain at storage pool level
+     *
+     * @param dataObject The volume to revoke access from
+     * @param host The host losing access
+     * @param dataStore The data store containing the volume
+     */
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
-        if (dataStore == null) {
-            throw new InvalidParameterValueException("revokeAccess: data store should not be null");
-        }
-        if (dataObject == null) {
-            throw new InvalidParameterValueException("revokeAccess: data object should not be null");
-        }
-        if (host == null) {
-            throw new InvalidParameterValueException("revokeAccess: host should not be null");
-        }
-        if (dataObject.getType() == DataObjectType.VOLUME) {
-            Volume volume = volumeDao.findById(dataObject.getId());
-            if (volume.getInstanceId() != null) {
-                VirtualMachine vm = vmDao.findById(volume.getInstanceId());
-                if (vm != null && !Arrays.asList(VirtualMachine.State.Destroyed, VirtualMachine.State.Expunging, VirtualMachine.State.Error).contains(vm.getState())) {
-                    s_logger.debug("revokeAccess: Volume [{}] is still attached to VM [{}] in state [{}], skipping revokeAccess",
-                            dataObject.getId(), vm.getInstanceName(), vm.getState());
-                    return;
+        try {
+            if (dataStore == null) {
+                throw new InvalidParameterValueException("revokeAccess: dataStore should not be null");
+            }
+            if (dataObject == null) {
+                throw new InvalidParameterValueException("revokeAccess: dataObject should not be null");
+            }
+            if (host == null) {
+                throw new InvalidParameterValueException("revokeAccess: host should not be null");
+            }
+
+            // Safety check: don't revoke access if volume is still attached to an active VM
+            if (dataObject.getType() == DataObjectType.VOLUME) {
+                Volume volume = volumeDao.findById(dataObject.getId());
+                if (volume.getInstanceId() != null) {
+                    VirtualMachine vm = vmDao.findById(volume.getInstanceId());
+                    if (vm != null && !Arrays.asList(
+                            VirtualMachine.State.Destroyed,
+                            VirtualMachine.State.Expunging,
+                            VirtualMachine.State.Error).contains(vm.getState())) {
+                        s_logger.debug("revokeAccess: Volume [{}] is still attached to VM [{}] in state [{}], skipping revokeAccess",
+                                dataObject.getId(), vm.getInstanceName(), vm.getState());
+                        return;
+                    }
                 }
             }
-        }
-        try {
+
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
             if (storagePool == null) {
                 s_logger.error("revokeAccess: Storage Pool not found for id: " + dataStore.getId());
-                throw new CloudRuntimeException("revokeAccess : Storage Pool not found for id: " + dataStore.getId());
+                throw new CloudRuntimeException("revokeAccess: Storage Pool not found for id: " + dataStore.getId());
             }
+
             if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
                 s_logger.error("revokeAccess: Only Cluster and Zone scoped primary storage is supported for storage Pool: " + storagePool.getName());
                 throw new CloudRuntimeException("revokeAccess: Only Cluster and Zone scoped primary storage is supported for Storage Pool: " + storagePool.getName());
@@ -444,22 +488,31 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeVO volumeVO = volumeDao.findById(dataObject.getId());
                 if (volumeVO == null) {
-                    s_logger.error("revokeAccess: Cloud Stack Volume not found for id: " + dataObject.getId());
-                    throw new CloudRuntimeException("revokeAccess : Cloud Stack Volume not found for id: " + dataObject.getId());
+                    s_logger.error("revokeAccess: CloudStack Volume not found for id: " + dataObject.getId());
+                    throw new CloudRuntimeException("revokeAccess: CloudStack Volume not found for id: " + dataObject.getId());
                 }
                 revokeAccessForVolume(storagePool, volumeVO, host);
             } else {
                 s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
             }
-        } catch(Exception e){
+        } catch (Exception e) {
             s_logger.error("revokeAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
-            throw new CloudRuntimeException("revokeAccess: Failed with error :" + e.getMessage());
+            throw new CloudRuntimeException("revokeAccess: Failed with error: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Revokes volume access by removing the LUN mapping from the igroup.
+     * This method handles the iSCSI-specific logic for access revocation.
+     *
+     * @param storagePool The storage pool containing the volume
+     * @param volumeVO The volume to revoke access from
+     * @param host The host losing access
+     */
     private void revokeAccessForVolume(StoragePoolVO storagePool, VolumeVO volumeVO, Host host) {
         s_logger.info("revokeAccessForVolume: Revoking access to volume [{}] for host [{}]", volumeVO.getName(), host.getName());
+
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
@@ -468,57 +521,84 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
 
+            // Retrieve LUN name from volume details; if missing, volume may not have been fully created
             String lunName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME) != null ?
                     volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue() : null;
             if (lunName == null) {
-                s_logger.warn("revokeAccessForVolume: No LUN name detail found for volume [{}]; assuming no backend LUN to revoke", volumeVO.getId());
+                s_logger.warn("revokeAccessForVolume: No LUN name found for volume [{}]; skipping revoke", volumeVO.getId());
                 return;
             }
 
+            // Verify LUN still exists on ONTAP (may have been manually deleted)
             CloudStackVolume cloudStackVolume = getCloudStackVolumeByName(storageStrategy, svmName, lunName);
             if (cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getUuid() == null) {
-                s_logger.warn("revokeAccessForVolume: LUN for volume [{}] not found on ONTAP, assuming already deleted", volumeVO.getId());
+                s_logger.warn("revokeAccessForVolume: LUN for volume [{}] not found on ONTAP, skipping revoke", volumeVO.getId());
                 return;
             }
 
+            // Verify igroup still exists on ONTAP
             AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
             if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getUuid() == null) {
-                s_logger.warn("revokeAccessForVolume: iGroup [{}] not found on ONTAP, assuming already deleted", accessGroupName);
+                s_logger.warn("revokeAccessForVolume: iGroup [{}] not found on ONTAP, skipping revoke", accessGroupName);
                 return;
             }
 
-            if (!hostInitiatorFoundInIgroup(host.getStorageUrl(), accessGroup.getIgroup())) {
-                s_logger.error("revokeAccessForVolume: initiator [{}] is not present in iGroup [{}]", host.getStorageUrl(), accessGroupName);
+            // Verify host initiator is in the igroup before attempting to remove mapping
+            SANStrategy sanStrategy = (UnifiedSANStrategy) storageStrategy;
+            if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroup.getIgroup().getName())) {
+                s_logger.warn("revokeAccessForVolume: Initiator [{}] is not in iGroup [{}], skipping revoke",
+                        host.getStorageUrl(), accessGroupName);
                 return;
             }
 
+            // Remove the LUN mapping from the igroup
             Map<String, String> disableLogicalAccessMap = new HashMap<>();
             disableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid());
             disableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
             storageStrategy.disableLogicalAccess(disableLogicalAccessMap);
+
+            s_logger.info("revokeAccessForVolume: Successfully revoked access to LUN [{}] for host [{}]",
+                    lunName, host.getName());
         }
     }
 
-
+    /**
+     * Retrieves a CloudStack volume (LUN) from ONTAP by name.
+     *
+     * @param storageStrategy The storage strategy to use for the lookup
+     * @param svmName The SVM name containing the LUN
+     * @param cloudStackVolumeName The LUN name to look up
+     * @return CloudStackVolume if found, null otherwise
+     */
     private CloudStackVolume getCloudStackVolumeByName(StorageStrategy storageStrategy, String svmName, String cloudStackVolumeName) {
         Map<String, String> getCloudStackVolumeMap = new HashMap<>();
         getCloudStackVolumeMap.put(Constants.NAME, cloudStackVolumeName);
         getCloudStackVolumeMap.put(Constants.SVM_DOT_NAME, svmName);
+
         CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeMap);
         if (cloudStackVolume == null || cloudStackVolume.getLun() == null || cloudStackVolume.getLun().getName() == null) {
-            s_logger.error("getCloudStackVolumeByName: LUN [{}] not found on ONTAP; returning null", cloudStackVolumeName);
+            s_logger.warn("getCloudStackVolumeByName: LUN [{}] not found on ONTAP", cloudStackVolumeName);
             return null;
         }
         return cloudStackVolume;
     }
 
+    /**
+     * Retrieves an access group (igroup) from ONTAP by name.
+     *
+     * @param storageStrategy The storage strategy to use for the lookup
+     * @param svmName The SVM name containing the igroup
+     * @param accessGroupName The igroup name to look up
+     * @return AccessGroup if found, null otherwise
+     */
     private AccessGroup getAccessGroupByName(StorageStrategy storageStrategy, String svmName, String accessGroupName) {
         Map<String, String> getAccessGroupMap = new HashMap<>();
         getAccessGroupMap.put(Constants.NAME, accessGroupName);
         getAccessGroupMap.put(Constants.SVM_DOT_NAME, svmName);
+
         AccessGroup accessGroup = storageStrategy.getAccessGroup(getAccessGroupMap);
         if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null) {
-            s_logger.error("getAccessGroupByName: iGroup [{}] not found on ONTAP; returning null", accessGroupName);
+            s_logger.warn("getAccessGroupByName: iGroup [{}] not found on ONTAP", accessGroupName);
             return null;
         }
         return accessGroup;
