@@ -275,7 +275,7 @@
             <template #label>
               <tooltip-label :title="$t('label.ontap.ip')" :tooltip="$t('label.ontap.ip.tooltip')"/>
             </template>
-            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.netapp.url.tooltip')"/>
+            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.netapp.ip.tooltip')"/>
           </a-form-item>
           <a-form-item name="ontapUsername" ref="ontapUsername">
             <template #label>
