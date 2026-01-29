@@ -800,7 +800,7 @@ export default {
       } else if (value === 'Flash Array' || value === 'Primera') {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
-      } else if (value === 'Flash Array' || value === 'Primera') {
+      } else if (value === 'ONTAP') {
         this.protocols = ['NFSv3', 'ISCSI']
         this.form.protocol = 'NFSv3'
       } else {
