@@ -242,7 +242,7 @@
             </a-select>
           </a-form-item>
         </div>
-        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.protocol !== 'FiberChannel'">
+        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.provider !== 'ONTAP' && form.protocol !== 'FiberChannel'">
           <a-form-item name="managed" ref="managed">
             <template #label>
               <tooltip-label :title="$t('label.ismanaged')" :tooltip="apiParams.managed.description"/>
@@ -268,6 +268,38 @@
               <tooltip-label :title="$t('label.url')" :tooltip="apiParams.url.description"/>
             </template>
             <a-input v-model:value="form.url" :placeholder="apiParams.url.description" />
+          </a-form-item>
+        </div>
+        <div v-if="form.provider === 'ONTAP'">
+          <a-form-item name="ontapIP" ref="ontapIP">
+            <template #label>
+              <tooltip-label :title="$t('label.ontap.ip')" :tooltip="$t('label.ontap.ip.tooltip')"/>
+            </template>
+            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.netapp.url.tooltip')"/>
+          </a-form-item>
+          <a-form-item name="ontapUsername" ref="ontapUsername">
+            <template #label>
+              <tooltip-label :title="$t('label.username')" :tooltip="$t('label.ontap.username.tooltip')"/>
+            </template>
+            <a-input v-model:value="form.ontapUsername" :placeholder="$t('label.ontap.username.tooltip')"/>
+          </a-form-item>
+          <a-form-item name="ontapPassword" ref="ontapPassword">
+            <template #label>
+              <tooltip-label :title="$t('label.password')" :tooltip="$t('label.ontap.password')"/>
+            </template>
+            <a-input-password v-model:value="form.ontapPassword" :placeholder="$t('label.ontap.password')"/>
+          </a-form-item>
+          <a-form-item name="ontapSvmName" ref="ontapSvmName">
+            <template #label>
+              <tooltip-label :title="$t('label.ontap.svm.name')" :tooltip="$t('label.ontap.svm.name')"/>
+            </template>
+            <a-input-password v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
+          </a-form-item>
+          <a-form-item name="capacityBytes" ref="capacityBytes">
+            <template #label>
+              <tooltip-label :title="$t('label.capacitybytes')" :tooltip="apiParams.capacitybytes.description"/>
+            </template>
+            <a-input v-model:value="form.capacityBytes" :placeholder="apiParams.capacitybytes.description" />
           </a-form-item>
         </div>
         <div v-if="form.provider === 'PowerFlex'">
@@ -768,6 +800,9 @@ export default {
       } else if (value === 'Flash Array' || value === 'Primera') {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
+      } else if (value === 'Flash Array' || value === 'Primera') {
+        this.protocols = ['NFSv3', 'ISCSI']
+        this.form.protocol = 'NFSv3'
       } else {
         this.fetchHypervisor(value)
       }
