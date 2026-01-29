@@ -275,7 +275,7 @@
             <template #label>
               <tooltip-label :title="$t('label.ontap.ip')" :tooltip="$t('label.ontap.ip.tooltip')"/>
             </template>
-            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.netapp.ip.tooltip')"/>
+            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.ontap.ip.tooltip')"/>
           </a-form-item>
           <a-form-item name="ontapUsername" ref="ontapUsername">
             <template #label>
@@ -293,7 +293,7 @@
             <template #label>
               <tooltip-label :title="$t('label.ontap.svm.name')" :tooltip="$t('label.ontap.svm.name')"/>
             </template>
-            <a-input-password v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
+            <a-input v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
           </a-form-item>
           <a-form-item name="capacityBytes" ref="capacityBytes">
             <template #label>
@@ -801,8 +801,8 @@ export default {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
       } else if (value === 'ONTAP') {
-        this.protocols = ['NFSv3', 'ISCSI']
-        this.form.protocol = 'NFSv3'
+        this.protocols = ['NFS3', 'ISCSI']
+        this.form.protocol = 'NFS3'
       } else {
         this.fetchHypervisor(value)
       }
