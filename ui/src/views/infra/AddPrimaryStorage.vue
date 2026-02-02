@@ -932,9 +932,11 @@ export default {
           params['details[0].api_password'] = values.flashArrayPassword
           url = values.flashArrayURL
         } else if (values.provider === 'ONTAP') {
-          params['details[0].username'] = values.ontapUsername
-          params['details[0].password'] = values.ontapPassword
-          params['details[0].svm_name'] = values.ontapSvmName
+          params['details[0].ontap_storageArrayIP'] = values.ontapIP
+          params['details[0].ontap_username'] = values.ontapUsername
+          params['details[0].ontap_password'] = values.ontapPassword
+          params['details[0].ontap_svmName'] = values.ontapSvmName
+          params['details[0].ontap_protocol'] = values.protocol
           values.managed = true
           url = this.ontapURL(values.ontapIP)
         }
