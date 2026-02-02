@@ -83,10 +83,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
      */
     @Override
     public DataStore initialize(Map<String, Object> dsInfos) {
-        s_logger.info("initialize::::::::::::::: dsInfos " + dsInfos.toString());
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
+        s_logger.info("initialize::::::::::::::: dsInfos " + dsInfos.toString());
         String url = (String) dsInfos.get("url");
         Long zoneId = (Long) dsInfos.get("zoneId");
         Long podId = (Long) dsInfos.get("podId");
