@@ -793,6 +793,12 @@ export default {
        gateway + '/' + encodeURIComponent(pool)
       return url
     },
+
+    ontapURL (ontapIp) {
+      var url = 'https://' + ontapIp
+      return url
+    },
+
     updateProviderAndProtocol (value) {
       if (value === 'PowerFlex') {
         this.protocols = ['custom']
@@ -957,6 +963,10 @@ export default {
         if (values.provider === 'PowerFlex') {
           params.url = this.powerflexURL(values.powerflexGateway, values.powerflexGatewayUsername,
             values.powerflexGatewayPassword, values.powerflexStoragePool)
+        }
+
+        if (values.provider === 'ONTAP') {
+          params.url = this.ontapURL(values.ontapIP)
         }
 
         if (this.selectedTags.length > 0) {
