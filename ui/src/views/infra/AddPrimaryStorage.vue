@@ -941,7 +941,12 @@ export default {
             params.capacityIops = values.capacityIops.split(',').join('')
           }
         }
-
+        console.log('URL value is ::: ', url);
+        if (values.provider === 'ONTAP') {
+          console.log('URL value is getting set ::: ', url);
+          url = this.ontapURL(values.ontapIP)
+        }
+        console.log('URL value is now ::: ', url);
         params.url = url
         if (values.provider !== 'DefaultPrimary' && values.provider !== 'PowerFlex') {
           if (values.managed) {
