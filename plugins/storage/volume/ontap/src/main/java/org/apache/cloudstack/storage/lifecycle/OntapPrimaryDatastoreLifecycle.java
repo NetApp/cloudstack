@@ -87,6 +87,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
         s_logger.info("initialize::::::::::::::: dsInfos " + dsInfos.toString());
+        Map<String, String> details = (Map<String, String>) dsInfos.get("details");
+        s_logger.info("initialize details::::::::::::::: details " + details.toString());
         String url = (String) dsInfos.get("url");
         Long zoneId = (Long) dsInfos.get("zoneId");
         Long podId = (Long) dsInfos.get("podId");
@@ -103,8 +105,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         s_logger.debug("Received capacityBytes from UI: " + capacityBytes);
 
         // Additional details requested for ONTAP primary storage pool creation
-        @SuppressWarnings("unchecked")
-        Map<String, String> details = (Map<String, String>) dsInfos.get("details");
+        //Map<String, String> details = (Map<String, String>) dsInfos.get("details");
 
         // Validate and set capacity
         if (capacityBytes == null || capacityBytes <= 0) {

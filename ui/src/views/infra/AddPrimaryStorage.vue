@@ -931,6 +931,12 @@ export default {
           params['details[0].api_username'] = values.flashArrayUsername
           params['details[0].api_password'] = values.flashArrayPassword
           url = values.flashArrayURL
+        } else if (values.provider === 'ONTAP') {
+          params['details[0].username'] = values.ontapUsername
+          params['details[0].password'] = values.ontapPassword
+          params['details[0].svm_name'] = values.ontapSvmName
+          values.managed = true
+          url = this.ontapURL(values.ontapIP)
         }
 
         if (values.provider === 'Linstor' || values.protocol === 'Linstor') {
@@ -941,12 +947,7 @@ export default {
             params.capacityIops = values.capacityIops.split(',').join('')
           }
         }
-        console.log('URL value is ::: ', url)
-        if (values.provider === 'ONTAP') {
-          console.log('URL value is getting set ::: ', url)
-          url = this.ontapURL(values.ontapIP)
-        }
-        console.log('URL value is now ::: ', url)
+
         params.url = url
         if (values.provider !== 'DefaultPrimary' && values.provider !== 'PowerFlex') {
           if (values.managed) {
@@ -968,10 +969,6 @@ export default {
         if (values.provider === 'PowerFlex') {
           params.url = this.powerflexURL(values.powerflexGateway, values.powerflexGatewayUsername,
             values.powerflexGatewayPassword, values.powerflexStoragePool)
-        }
-
-        if (values.provider === 'ONTAP') {
-          params.url = this.ontapURL(values.ontapIP)
         }
 
         if (this.selectedTags.length > 0) {
