@@ -271,36 +271,46 @@
           </a-form-item>
         </div>
         <div v-if="form.provider === 'ONTAP'">
-          <a-form-item name="ontapIP" ref="ontapIP">
-            <template #label>
+          <div class="form-row">
+            <div class="form-label">
               <tooltip-label :title="$t('label.ontap.ip')" :tooltip="$t('label.ontap.ip.tooltip')"/>
-            </template>
-            <a-input v-model:value="form.ontapIP" :placeholder="$t('label.ontap.ip.tooltip')"/>
-          </a-form-item>
-          <a-form-item name="ontapUsername" ref="ontapUsername">
-            <template #label>
+            </div>
+            <div class="form-input">
+              <a-input v-model:value="form.ontapIP" :placeholder="$t('label.ontap.ip.tooltip')"/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-label">
               <tooltip-label :title="$t('label.username')" :tooltip="$t('label.ontap.username.tooltip')"/>
-            </template>
-            <a-input v-model:value="form.ontapUsername" :placeholder="$t('label.ontap.username.tooltip')"/>
-          </a-form-item>
-          <a-form-item name="ontapPassword" ref="ontapPassword">
-            <template #label>
+            </div>
+            <div class="form-input">
+              <a-input v-model:value="form.ontapUsername" :placeholder="$t('label.ontap.username.tooltip')"/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-label">
               <tooltip-label :title="$t('label.password')" :tooltip="$t('label.ontap.password')"/>
-            </template>
-            <a-input-password v-model:value="form.ontapPassword" :placeholder="$t('label.ontap.password')"/>
-          </a-form-item>
-          <a-form-item name="ontapSvmName" ref="ontapSvmName">
-            <template #label>
+            </div>
+            <div class="form-input">
+              <a-input-password v-model:value="form.ontapPassword" :placeholder="$t('label.ontap.password')"/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-label">
               <tooltip-label :title="$t('label.ontap.svm.name')" :tooltip="$t('label.ontap.svm.name')"/>
-            </template>
-            <a-input v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
-          </a-form-item>
-          <a-form-item name="capacityBytes" ref="capacityBytes">
-            <template #label>
+            </div>
+            <div class="form-input">
+              <a-input v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-label">
               <tooltip-label :title="$t('label.capacitybytes')" :tooltip="apiParams.capacitybytes.description"/>
-            </template>
-            <a-input v-model:value="form.capacityBytes" :placeholder="apiParams.capacitybytes.description" />
-          </a-form-item>
+            </div>
+            <div class="form-input">
+              <a-input v-model:value="form.capacityBytes" :placeholder="apiParams.capacitybytes.description" />
+            </div>
+          </div>
         </div>
         <div v-if="form.provider === 'PowerFlex'">
           <a-form-item name="powerflexGateway" ref="powerflexGateway">
@@ -932,7 +942,7 @@ export default {
           params['details[0].api_password'] = values.flashArrayPassword
           url = values.flashArrayURL
         } else if (values.provider === 'ONTAP') {
-          params['details[0].ontap_IP'] = values.ontapIP
+          params['details[0].ontap_ip'] = values.ontapIP
           params['details[0].ontap_username'] = values.ontapUsername
           params['details[0].ontap_password'] = values.ontapPassword
           params['details[0].ontap_svmName'] = values.ontapSvmName
@@ -1002,5 +1012,21 @@ export default {
   @media (min-width: 1000px) {
     width: 500px;
   }
+  .form-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .form-label {
+    flex: 1;
+    margin-right: 16px;
+  }
+
+  .form-input {
+    flex: 2;
+  }
+
 }
 </style>
