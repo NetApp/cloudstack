@@ -184,7 +184,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         for (Map.Entry<String, String> e : details.entrySet()) {
             String key = e.getKey();
             String val = e.getValue();
-            if (!requiredKeys.contains(key)) {
+            if (!allowedKeys.contains(key)) {
                 throw new CloudRuntimeException("Unexpected ONTAP detail key in URL: " + key);
             }
             if (val == null || val.isEmpty()) {

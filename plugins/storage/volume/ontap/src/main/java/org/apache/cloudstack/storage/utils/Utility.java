@@ -20,7 +20,6 @@
 package org.apache.cloudstack.storage.utils;
 
 import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.storage.ScopeType;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
