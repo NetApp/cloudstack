@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.service;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.utils.exception.CloudRuntimeException;
+import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
@@ -87,6 +88,10 @@ public class UnifiedSANStrategy extends SANStrategy {
             CloudStackVolume createdCloudStackVolume = new CloudStackVolume();
             createdCloudStackVolume.setLun(lun);
             return createdCloudStackVolume;
+        } catch (FeignException e) {
+            s_logger.error("FeignException occurred while creating LUN: {}, Status: {}, Exception: {}",
+                    cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
         } catch (Exception e) {
             s_logger.error("Exception occurred while creating LUN: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
@@ -111,16 +116,12 @@ public class UnifiedSANStrategy extends SANStrategy {
             Map<String, Object> queryParams = Map.of("allow_delete_while_mapped", "true");
             try {
                 sanFeignClient.deleteLun(authHeader, cloudstackVolume.getLun().getUuid(), queryParams);
-            } catch (Exception ex) {
-                String errMsg = ex.getMessage();
-                if (errMsg != null && (errMsg.contains("entry doesn't exist")
-                        || errMsg.contains("does not exist")
-                        || errMsg.contains("not found")
-                        || errMsg.contains("status 404"))) {
-                    s_logger.warn("deleteCloudStackVolume: Lun {} does not exist ({}), skipping deletion", cloudstackVolume.getLun().getName(), errMsg);
+            } catch (FeignException feignEx) {
+                if (feignEx.status() == 404) {
+                    s_logger.warn("deleteCloudStackVolume: Lun {} does not exist (status 404), skipping deletion", cloudstackVolume.getLun().getName());
                     return;
                 }
-                throw ex;
+                throw feignEx;
             }
             s_logger.info("deleteCloudStackVolume: Lun deleted successfully. LunName: {}", cloudstackVolume.getLun().getName());
         } catch (Exception e) {
@@ -150,6 +151,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             String lunCloneName = cloudstackVolume.getLun().getName() + "_clone";
             lunCloneRequest.setName(lunCloneName);
             sanFeignClient.createLun(authHeader, true, lunCloneRequest);
+        } catch (FeignException e) {
+            s_logger.error("FeignException occurred while creating Lun clone: {}, Status: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to create Lun clone: " + e.getMessage());
         } catch (Exception e) {
             s_logger.error("Exception occurred while creating Lun clone: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun clone: " + e.getMessage());
@@ -185,14 +189,16 @@ public class UnifiedSANStrategy extends SANStrategy {
             CloudStackVolume cloudStackVolume = new CloudStackVolume();
             cloudStackVolume.setLun(lun);
             return cloudStackVolume;
-        } catch (Exception e) {
-            String errMsg = e.getMessage();
-            if (errMsg != null && errMsg.contains("not found")) {
-                s_logger.warn("getCloudStackVolume: Lun '{}' on SVM '{}' not found ({}). Returning null.", lunName, svmName, errMsg);
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                s_logger.warn("getCloudStackVolume: Lun '{}' on SVM '{}' not found (status 404). Returning null.", lunName, svmName);
                 return null;
             }
-            s_logger.error("Exception occurred while fetching Lun, Exception: {}", errMsg);
-            throw new CloudRuntimeException("Failed to fetch Lun details: " + errMsg);
+            s_logger.error("FeignException occurred while fetching Lun, Status: {}, Exception: {}", e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while fetching Lun, Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
         }
     }
 
@@ -221,7 +227,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             Igroup igroupRequest = new Igroup();
             List<String> hostsIdentifier = new ArrayList<>();
             String svmName = dataStoreDetails.get(Constants.SVM_NAME);
-            igroupName = Utility.getIgroupName(svmName, accessGroup.getScope().getScopeType(), accessGroup.getScope().getScopeId());
+            String storagePoolUuid = accessGroup.getPrimaryDataStoreInfo().getUuid();
+            igroupName = Utility.getIgroupName(svmName, storagePoolUuid);
             Hypervisor.HypervisorType hypervisorType = accessGroup.getPrimaryDataStoreInfo().getHypervisor();
 
             ProtocolType protocol = ProtocolType.valueOf(dataStoreDetails.get(Constants.PROTOCOL));
@@ -261,21 +268,20 @@ public class UnifiedSANStrategy extends SANStrategy {
                 }
                 igroupRequest.setInitiators(initiators);
             }
-            igroupRequest.setProtocol(Igroup.ProtocolEnum.valueOf("iscsi"));
+            igroupRequest.setProtocol(Igroup.ProtocolEnum.valueOf(Constants.ISCSI));
             // Create Igroup
             s_logger.debug("createAccessGroup: About to call sanFeignClient.createIgroup with igroupName: {}", igroupName);
             AccessGroup createdAccessGroup = new AccessGroup();
             OntapResponse<Igroup> createdIgroup = null;
             try {
                 createdIgroup = sanFeignClient.createIgroup(authHeader, true, igroupRequest);
-            } catch (Exception feignEx) {
-                String errMsg = feignEx.getMessage();
-                if (errMsg != null && errMsg.contains(("5374023"))) {
-                    s_logger.warn("createAccessGroup: Igroup with name {} already exists. Fetching existing Igroup.", igroupName);
+            } catch (FeignException feignEx) {
+                if (feignEx.status() == 409) {
+                    s_logger.warn("createAccessGroup: Igroup with name {} already exists (status 409). Fetching existing Igroup.", igroupName);
                     // TODO: Currently we aren't doing anything with the returned AccessGroup object, so, haven't added code here to fetch the existing Igroup and set it in AccessGroup.
                     return createdAccessGroup;
                 }
-                s_logger.error("createAccessGroup: Exception during Feign call: {}", feignEx.getMessage(), feignEx);
+                s_logger.error("createAccessGroup: FeignException during Igroup creation: Status: {}, Exception: {}", feignEx.status(), feignEx.getMessage(), feignEx);
                 throw feignEx;
             }
 
@@ -317,14 +323,16 @@ public class UnifiedSANStrategy extends SANStrategy {
 
             // Extract SVM name from storage (already initialized in constructor via OntapStorage)
             String svmName = storage.getSvmName();
+            String storagePoolUuid = primaryDataStoreInfo.getUuid();
 
             // Determine scope and generate iGroup name
-            String igroupName;
+            String igroupName = Utility.getIgroupName(svmName, storagePoolUuid);
+            s_logger.info("deleteAccessGroup: Generated iGroup name '{}'", igroupName);
             if (primaryDataStoreInfo.getClusterId() != null) {
-                igroupName = Utility.getIgroupName(svmName, com.cloud.storage.ScopeType.CLUSTER, primaryDataStoreInfo.getClusterId());
+                igroupName = Utility.getIgroupName(svmName, storagePoolUuid);
                 s_logger.info("deleteAccessGroup: Deleting cluster-scoped iGroup '{}'", igroupName);
             } else {
-                igroupName = Utility.getIgroupName(svmName, com.cloud.storage.ScopeType.ZONE, primaryDataStoreInfo.getDataCenterId());
+                igroupName = Utility.getIgroupName(svmName, storagePoolUuid);
                 s_logger.info("deleteAccessGroup: Deleting zone-scoped iGroup '{}'", igroupName);
             }
 
@@ -355,16 +363,21 @@ public class UnifiedSANStrategy extends SANStrategy {
 
                 s_logger.info("deleteAccessGroup: Successfully deleted iGroup '{}'", igroupName);
 
-            } catch (Exception e) {
-                String errorMsg = e.getMessage();
-                // Check if iGroup doesn't exist (ONTAP error code: 5374852 - "The initiator group does not exist.")
-                if (errorMsg != null && (errorMsg.contains("5374852") || errorMsg.contains("not found"))) {
-                    s_logger.warn("deleteAccessGroup: iGroup '{}' does not exist, skipping deletion", igroupName);
+            } catch (FeignException e) {
+                if (e.status() == 404) {
+                    s_logger.warn("deleteAccessGroup: iGroup '{}' does not exist (status 404), skipping deletion", igroupName);
                 } else {
+                    s_logger.error("deleteAccessGroup: FeignException occurred: Status: {}, Exception: {}", e.status(), e.getMessage(), e);
                     throw e;
                 }
+            } catch (Exception e) {
+                s_logger.error("deleteAccessGroup: Exception occurred: {}", e.getMessage(), e);
+                throw e;
             }
 
+        } catch (FeignException e) {
+            s_logger.error("deleteAccessGroup: FeignException occurred while deleting iGroup. Status: {}, Exception: {}", e.status(), e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
         } catch (Exception e) {
             s_logger.error("deleteAccessGroup: Failed to delete iGroup. Exception: {}", e.getMessage(), e);
             throw new CloudRuntimeException("Failed to delete iGroup: " + e.getMessage(), e);
@@ -421,14 +434,16 @@ public class UnifiedSANStrategy extends SANStrategy {
             AccessGroup accessGroup = new AccessGroup();
             accessGroup.setIgroup(igroup);
             return accessGroup;
-        } catch (Exception e) {
-            String errMsg = e.getMessage();
-            if (errMsg != null && errMsg.contains("not found")) {
-                s_logger.warn("getAccessGroup: Igroup '{}' not found on SVM '{}' ({}). Returning null.", igroupName, svmName, errMsg);
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                s_logger.warn("getAccessGroup: Igroup '{}' not found on SVM '{}' (status 404). Returning null.", igroupName, svmName);
                 return null;
             }
-            s_logger.error("Exception occurred while fetching Igroup, Exception: {}", errMsg);
-            throw new CloudRuntimeException("Failed to fetch Igroup details: " + errMsg);
+            s_logger.error("FeignException occurred while fetching Igroup, Status: {}, Exception: {}", e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while fetching Igroup, Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
         }
     }
 
@@ -509,14 +524,16 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             sanFeignClient.deleteLunMap(authHeader, lunUUID, igroupUUID);
             s_logger.info("disableLogicalAccess: LunMap deleted successfully.");
-        } catch (Exception e) {
-            String errMsg = e.getMessage();
-            if (errMsg != null && errMsg.contains("not found")) {
-                s_logger.warn("disableLogicalAccess: LunMap with Lun UUID: {} and igroup UUID: {} does not exist ({}), skipping deletion", lunUUID, igroupUUID, errMsg);
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                s_logger.warn("disableLogicalAccess: LunMap with Lun UUID: {} and igroup UUID: {} does not exist, skipping deletion", lunUUID, igroupUUID);
                 return;
             }
-            s_logger.error("Exception occurred while deleting LunMap", e);
-            throw new CloudRuntimeException("Failed to delete LunMap: " + errMsg);
+            s_logger.error("FeignException occurred while deleting LunMap, Status: {}, Exception: {}", e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to delete LunMap: " + e.getMessage());
+        } catch (Exception e) {
+            s_logger.error("Exception occurred while deleting LunMap, Exception: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to delete LunMap: " + e.getMessage());
         }
     }
 

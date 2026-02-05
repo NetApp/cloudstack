@@ -69,16 +69,7 @@ import java.util.Map;
 
 /**
  * Primary datastore driver for NetApp ONTAP storage systems.
- * This driver handles volume lifecycle operations (create, delete, grant/revoke access)
- * for both iSCSI (LUN-based) and NFS protocols against ONTAP storage backends.
- *
- * For iSCSI protocol:
- * - Creates LUNs on ONTAP and maps them to initiator groups (igroups)
- * - Manages LUN mappings for host access control
- *
- * For NFS protocol:
- * - Delegates file operations to KVM host/libvirt
- * - ONTAP volume/export management handled at storage pool creation time
+ * Handles volume lifecycle operations for iSCSI and NFS protocols.
  */
 public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
@@ -111,26 +102,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Asynchronously creates a volume on the ONTAP storage system.
-     *
-     * For iSCSI protocol:
-     * - Creates a LUN on ONTAP via the SAN strategy
-     * - Stores LUN UUID and name in volume_details table for later reference
-     * - Creates a LUN mapping to the appropriate igroup (based on cluster/zone scope)
-     * - Sets the iSCSI path on the volume for host attachment
-     *
-     * For NFS protocol:
-     * - Associates the volume with the storage pool (actual file creation handled by hypervisor)
-     *
-     * @param dataStore The target data store (storage pool)
-     * @param dataObject The volume to create
-     * @param callback Callback to notify completion
+     * Creates a volume on the ONTAP storage system.
      */
     @Override
     public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
         CreateCmdResult createCmdResult = null;
         String errMsg;
 
+        if (dataObject == null) {
+            throw new InvalidParameterValueException("createAsync: dataObject should not be null");
+        }
         if (dataStore == null) {
             throw new InvalidParameterValueException("createAsync: dataStore should not be null");
         }
@@ -150,6 +131,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("createAsync: Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("createAsync: Storage Pool not found for id: " + dataStore.getId());
             }
+            String storagePoolUuid = dataStore.getUuid();
 
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
 
@@ -186,7 +168,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                         // Create LUN-to-igroup mapping and retrieve the assigned LUN ID
                         UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
-                        String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
+                        String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
                         String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
                         // Construct iSCSI path: /<iqn>/<lun_id> format for KVM/libvirt attachment
@@ -223,12 +205,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Creates a CloudStack volume on the ONTAP backend using the appropriate storage strategy.
-     *
-     * @param dataStore The target data store
-     * @param dataObject The volume to create
-     * @param details Storage pool configuration details
-     * @return CloudStackVolume containing the created backend object (LUN for iSCSI)
+     * Creates a volume on the ONTAP backend.
      */
     private CloudStackVolume createCloudStackVolume(DataStore dataStore, DataObject dataObject, Map<String, String> details) {
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
@@ -249,18 +226,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Asynchronously deletes a volume from the ONTAP storage system.
-     *
-     * For iSCSI protocol:
-     * - Retrieves LUN details from volume_details table
-     * - Deletes the LUN from ONTAP (LUN mappings are automatically removed)
-     *
-     * For NFS protocol:
-     * - No ONTAP operation needed; file deletion handled by KVM host/libvirt
-     *
-     * @param store The data store containing the volume
-     * @param data The volume to delete
-     * @param callback Callback to notify completion
+     * Deletes a volume from the ONTAP storage system.
      */
     @Override
     public void deleteAsync(DataStore store, DataObject data, AsyncCompletionCallback<CommandResult> callback) {
@@ -344,20 +310,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Grants a host access to a volume on the ONTAP storage system.
-     *
-     * For iSCSI protocol:
-     * - Validates that the host's iSCSI initiator (IQN) is present in the target igroup
-     * - Ensures the LUN is mapped to the igroup (creates mapping if not exists)
-     * - Updates the volume's iSCSI path with the assigned LUN ID
-     *
-     * For NFS protocol:
-     * - No explicit grant needed; NFS exports are configured at storage pool level
-     *
-     * @param dataObject The volume to grant access to
-     * @param host The host requesting access
-     * @param dataStore The data store containing the volume
-     * @return true if access was granted successfully
+     * Grants a host access to a volume.
      */
     @Override
     public boolean grantAccess(DataObject dataObject, Host host, DataStore dataStore) {
@@ -377,6 +330,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("grantAccess: Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("grantAccess: Storage Pool not found for id: " + dataStore.getId());
             }
+            String storagePoolUuid = dataStore.getUuid();
 
             // ONTAP managed storage only supports cluster and zone scoped pools
             if (storagePool.getScope() != ScopeType.CLUSTER && storagePool.getScope() != ScopeType.ZONE) {
@@ -398,7 +352,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                 if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                     UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
-                    String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
+                    String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
 
                     // Verify host initiator is registered in the igroup before allowing access
                     if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroupName)) {
@@ -432,18 +386,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Revokes a host's access to a volume on the ONTAP storage system.
-     *
-     * For iSCSI protocol:
-     * - Validates the volume is not attached to an active VM
-     * - Removes the LUN mapping from the igroup
-     *
-     * For NFS protocol:
-     * - No explicit revoke needed; NFS exports remain at storage pool level
-     *
-     * @param dataObject The volume to revoke access from
-     * @param host The host losing access
-     * @param dataStore The data store containing the volume
+     * Revokes a host's access to a volume.
      */
     @Override
     public void revokeAccess(DataObject dataObject, Host host, DataStore dataStore) {
@@ -467,7 +410,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                             VirtualMachine.State.Destroyed,
                             VirtualMachine.State.Expunging,
                             VirtualMachine.State.Error).contains(vm.getState())) {
-                        s_logger.debug("revokeAccess: Volume [{}] is still attached to VM [{}] in state [{}], skipping revokeAccess",
+                        s_logger.warn("revokeAccess: Volume [{}] is still attached to VM [{}] in state [{}], skipping revokeAccess",
                                 dataObject.getId(), vm.getInstanceName(), vm.getState());
                         return;
                     }
@@ -503,12 +446,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Revokes volume access by removing the LUN mapping from the igroup.
-     * This method handles the iSCSI-specific logic for access revocation.
-     *
-     * @param storagePool The storage pool containing the volume
-     * @param volumeVO The volume to revoke access from
-     * @param host The host losing access
+     * Revokes volume access for the specified host.
      */
     private void revokeAccessForVolume(StoragePoolVO storagePool, VolumeVO volumeVO, Host host) {
         s_logger.info("revokeAccessForVolume: Revoking access to volume [{}] for host [{}]", volumeVO.getName(), host.getName());
@@ -516,10 +454,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
+        String storagePoolUuid = storagePool.getUuid();
         long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-            String accessGroupName = Utility.getIgroupName(svmName, storagePool.getScope(), scopeId);
+            String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
 
             // Retrieve LUN name from volume details; if missing, volume may not have been fully created
             String lunName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME) != null ?
@@ -563,12 +502,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Retrieves a CloudStack volume (LUN) from ONTAP by name.
-     *
-     * @param storageStrategy The storage strategy to use for the lookup
-     * @param svmName The SVM name containing the LUN
-     * @param cloudStackVolumeName The LUN name to look up
-     * @return CloudStackVolume if found, null otherwise
+     * Retrieves a volume from ONTAP by name.
      */
     private CloudStackVolume getCloudStackVolumeByName(StorageStrategy storageStrategy, String svmName, String cloudStackVolumeName) {
         Map<String, String> getCloudStackVolumeMap = new HashMap<>();
@@ -584,12 +518,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Retrieves an access group (igroup) from ONTAP by name.
-     *
-     * @param storageStrategy The storage strategy to use for the lookup
-     * @param svmName The SVM name containing the igroup
-     * @param accessGroupName The igroup name to look up
-     * @return AccessGroup if found, null otherwise
+     * Retrieves an access group from ONTAP by name.
      */
     private AccessGroup getAccessGroupByName(StorageStrategy storageStrategy, String svmName, String accessGroupName) {
         Map<String, String> getAccessGroupMap = new HashMap<>();

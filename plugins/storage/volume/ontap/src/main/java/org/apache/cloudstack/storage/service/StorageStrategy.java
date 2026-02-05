@@ -125,33 +125,11 @@ public abstract class StorageStrategy {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 return false;
             }
-            // TODO: Implement logic to select appropriate aggregate based on storage requirements
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 s_logger.error("No aggregates are assigned to SVM " + svmName);
                 return false;
             }
-            // Set the aggregates which are according to the storage requirements
-            for (Aggregate aggr : aggrs) {
-                s_logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
-                Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
-                if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
-                    s_logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
-                    continue;
-                } else if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null ||
-                        aggrResp.getAvailableBlockStorageSpace() <= storage.getSize().doubleValue()) {
-                    s_logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
-                    continue;
-                }
-                s_logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
-                this.aggregates = List.of(aggr);
-                break;
-            }
-            if (this.aggregates == null || this.aggregates.isEmpty()) {
-                s_logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
-                return false;
-            }
-
             this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {

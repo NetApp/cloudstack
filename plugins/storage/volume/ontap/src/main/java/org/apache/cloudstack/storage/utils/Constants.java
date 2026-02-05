@@ -22,6 +22,10 @@ package org.apache.cloudstack.storage.utils;
 
 public class Constants {
 
+    public static final String ONTAP_PLUGIN_NAME = "ONTAP";
+    public static final int NFS3_PORT = 2049;
+    public static final int ISCSI_PORT = 3260;
+
     public static final String NFS = "nfs";
     public static final String ISCSI = "iscsi";
     public static final String SIZE = "size";

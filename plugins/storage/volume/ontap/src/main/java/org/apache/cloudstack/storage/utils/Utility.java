@@ -141,9 +141,9 @@ public class Utility {
         }
     }
 
-    public static String getIgroupName(String svmName, ScopeType scopeType, Long scopeId) {
-        //Igroup name format: cs_svmName_scope_scopeId
-        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeType.toString().toLowerCase() + Constants.UNDERSCORE + scopeId;
+    public static String getIgroupName(String svmName, String poolUuid) {
+        //Igroup name format: cs_svmName_poolUuid
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + poolUuid;
     }
 
     public static String generateExportPolicyName(String svmName, String volumeName){

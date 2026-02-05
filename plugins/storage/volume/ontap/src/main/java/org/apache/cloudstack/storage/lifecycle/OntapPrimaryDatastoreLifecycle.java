@@ -152,15 +152,20 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP primary storage must be managed");
         }
 
-        // Required ONTAP detail keys
         Set<String> requiredKeys = Set.of(
                 Constants.USERNAME,
                 Constants.PASSWORD,
                 Constants.SVM_NAME,
                 Constants.PROTOCOL,
-                Constants.MANAGEMENT_LIF,
+                Constants.MANAGEMENT_LIF
+        );
+
+        Set<String> optionalKeys = Set.of(
                 Constants.IS_DISAGGREGATED
         );
+
+        Set<String> allowedKeys = new java.util.HashSet<>(requiredKeys);
+        allowedKeys.addAll(optionalKeys);
 
         // Parse key=value pairs from URL into details (skip empty segments)
         if (url != null && !url.isEmpty()) {
@@ -249,13 +254,13 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             case NFS3:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 path = Constants.SLASH + storagePoolName;
-                port = 2049;
+                port = Constants.NFS3_PORT;
                 s_logger.info("Setting NFS path for storage pool: " + path + ", port: " + port);
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 path = storageStrategy.getStoragePath();
-                port = 3260;
+                port = Constants.ISCSI_PORT;
                 s_logger.info("Setting iSCSI path for storage pool: " + path + ", port: " + port);
                 break;
             default:
