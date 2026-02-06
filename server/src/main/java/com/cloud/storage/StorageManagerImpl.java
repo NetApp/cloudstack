@@ -3365,7 +3365,7 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
             throw new InvalidParameterValueException(String.format("host: %s is not a secondary storage", secHost));
         }
 
-        URI uri = null;
+        URI uri;
         try {
             uri = new URI(UriUtils.encodeURIComponent(newUrl));
             if (uri.getScheme() == null) {
@@ -3388,7 +3388,7 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
 
         String oldUrl = secHost.getStorageUrl();
 
-        URI oldUri = null;
+        URI oldUri;
         try {
             oldUri = new URI(UriUtils.encodeURIComponent(oldUrl));
             if (!oldUri.getScheme().equalsIgnoreCase(uri.getScheme())) {
@@ -4615,7 +4615,8 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
                 DataStoreDownloadFollowRedirects,
                 AllowVolumeReSizeBeyondAllocation,
                 StoragePoolHostConnectWorkers,
-                ObjectStorageCapacityThreshold
+                ObjectStorageCapacityThreshold,
+                COPY_TEMPLATES_FROM_OTHER_SECONDARY_STORAGES
         };
     }
 

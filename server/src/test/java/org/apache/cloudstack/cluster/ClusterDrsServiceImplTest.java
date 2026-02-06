@@ -586,9 +586,7 @@ public class ClusterDrsServiceImplTest {
         Mockito.when(balancedAlgorithm.needsDrs(Mockito.any(), Mockito.anyList(), Mockito.anyList())).thenReturn(
                 true, true, false);
         Mockito.when(serviceOfferingDao.findByIdIncludingRemoved(Mockito.anyLong(), Mockito.anyLong())).thenReturn(serviceOffering);
-        Mockito.when(hostJoinDao.searchByIds(Mockito.any())).thenReturn(List.of(hostJoin1, hostJoin2));
-
-        HostVO compatibleHost = Mockito.mock(HostVO.class);
+        Mockito.when(hostJoinDao.searchByIds(1L, 2L)).thenReturn(List.of(hostJoin1, hostJoin2));
 
         // Return migrations for first two iterations, then null
         Mockito.doReturn(new Pair<>(vm1, host2), new Pair<>(vm2, host2), new Pair<>(null, null))
@@ -628,35 +626,12 @@ public class ClusterDrsServiceImplTest {
         List<VMInstanceVO> vmList = new ArrayList<>();
         vmList.add(vm1);
 
-        HostJoinVO hostJoin1 = Mockito.mock(HostJoinVO.class);
-        Mockito.when(hostJoin1.getId()).thenReturn(1L);
-        Mockito.when(hostJoin1.getCpuUsedCapacity()).thenReturn(1000L);
-        Mockito.when(hostJoin1.getCpuReservedCapacity()).thenReturn(0L);
-        Mockito.when(hostJoin1.getCpus()).thenReturn(4);
-        Mockito.when(hostJoin1.getSpeed()).thenReturn(1000L);
-        Mockito.when(hostJoin1.getMemUsedCapacity()).thenReturn(1024L);
-        Mockito.when(hostJoin1.getMemReservedCapacity()).thenReturn(0L);
-        Mockito.when(hostJoin1.getTotalMemory()).thenReturn(8192L);
-
-        HostJoinVO hostJoin2 = Mockito.mock(HostJoinVO.class);
-        Mockito.when(hostJoin2.getId()).thenReturn(2L);
-        Mockito.when(hostJoin2.getCpuUsedCapacity()).thenReturn(1000L);
-        Mockito.when(hostJoin2.getCpuReservedCapacity()).thenReturn(0L);
-        Mockito.when(hostJoin2.getCpus()).thenReturn(4);
-        Mockito.when(hostJoin2.getSpeed()).thenReturn(1000L);
-        Mockito.when(hostJoin2.getMemUsedCapacity()).thenReturn(1024L);
-        Mockito.when(hostJoin2.getMemReservedCapacity()).thenReturn(0L);
-        Mockito.when(hostJoin2.getTotalMemory()).thenReturn(8192L);
-
         ServiceOfferingVO serviceOffering = Mockito.mock(ServiceOfferingVO.class);
 
         Mockito.when(hostDao.findByClusterId(1L)).thenReturn(hostList);
         Mockito.when(vmInstanceDao.listByClusterId(1L)).thenReturn(vmList);
         Mockito.when(balancedAlgorithm.needsDrs(Mockito.any(), Mockito.anyList(), Mockito.anyList())).thenReturn(true);
         Mockito.when(serviceOfferingDao.findByIdIncludingRemoved(Mockito.anyLong(), Mockito.anyLong())).thenReturn(serviceOffering);
-        Mockito.when(hostJoinDao.searchByIds(Mockito.any())).thenReturn(List.of(hostJoin1, hostJoin2));
-
-        HostVO compatibleHost = Mockito.mock(HostVO.class);
 
         // Return migration to original host (host1) - should break the loop
         Mockito.doReturn(new Pair<>(vm1, host1)).when(clusterDrsService).getBestMigration(
