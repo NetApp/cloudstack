@@ -552,7 +552,7 @@ export default {
         ontapIP: [{ required: true, message: this.$t('label.required') }],
         ontapUsername: [{ required: true, message: this.$t('label.required') }],
         ontapPassword: [{ required: true, message: this.$t('label.required') }],
-        ontapSvmName: [{ required: true, message: this.$t('label.required') }],
+        ontapSvmName: [{ required: true, message: this.$t('label.required') }]
       })
     },
     fetchData () {
@@ -938,7 +938,7 @@ export default {
         } else if (values.provider === 'ONTAP') {
           params['details[0].storage_ip'] = values.ontapIP
           params['details[0].username'] = values.ontapUsername
-          params['details[0].password'] = values.ontapPassword
+          params['details[0].password'] = btoa(values.ontapPassword)
           params['details[0].svmName'] = values.ontapSvmName
           params['details[0].protocol'] = values.protocol
           values.managed = true
