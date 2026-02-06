@@ -66,6 +66,9 @@ public class Constants {
     public static final String SERVICES = "services";
     public static final String RETURN_RECORDS = "return_records";
 
+    public static final int JOB_MAX_RETRIES = 100;
+    public static final int CREATE_VOLUME_CHECK_SLEEP_TIME = 2000;
+
     public static final String SLASH = "/";
     public static final String EQUALS = "=";
     public static final String SEMICOLON = ";";
