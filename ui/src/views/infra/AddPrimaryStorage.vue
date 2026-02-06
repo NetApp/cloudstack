@@ -285,15 +285,15 @@
           </a-form-item>
           <a-form-item name="ontapPassword" ref="ontapPassword">
             <template #label>
-              <tooltip-label :title="$t('label.password')" :tooltip="$t('label.ontap.password')"/>
+              <tooltip-label :title="$t('label.password')" :tooltip="$t('label.ontap.password.tooltip')"/>
             </template>
-            <a-input-password v-model:value="form.ontapPassword" :placeholder="$t('label.ontap.password')"/>
+            <a-input-password v-model:value="form.ontapPassword" :placeholder="$t('label.ontap.password.tooltip')"/>
           </a-form-item>
           <a-form-item name="ontapSvmName" ref="ontapSvmName">
             <template #label>
-              <tooltip-label :title="$t('label.ontap.svm.name')" :tooltip="$t('label.ontap.svm.name')"/>
+              <tooltip-label :title="$t('label.ontap.svm.name')" :tooltip="$t('label.ontap.svm.name.tooltip')"/>
             </template>
-            <a-input v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name')"/>
+            <a-input v-model:value="form.ontapSvmName" :placeholder="$t('label.ontap.svm.name.tooltip')"/>
           </a-form-item>
           <a-form-item name="capacityBytes" ref="capacityBytes">
             <template #label>
@@ -548,7 +548,11 @@ export default {
         primeraPassword: [{ required: true, message: this.$t('label.password') }],
         flashArrayURL: [{ required: true, message: this.$t('label.url') }],
         flashArrayUsername: [{ required: true, message: this.$t('label.username') }],
-        flashArrayPassword: [{ required: true, message: this.$t('label.password') }]
+        flashArrayPassword: [{ required: true, message: this.$t('label.password') }],
+        ontapIP: [{ required: true, message: this.$t('label.required') }],
+        ontapUsername: [{ required: true, message: this.$t('label.required') }],
+        ontapPassword: [{ required: true, message: this.$t('label.required') }],
+        ontapSvmName: [{ required: true, message: this.$t('label.required') }],
       })
     },
     fetchData () {
@@ -807,7 +811,7 @@ export default {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
       } else if (value === 'ONTAP') {
-        this.protocols = ['NFS3', 'iSCSI']
+        this.protocols = ['NFS3', 'ISCSI']
         this.form.protocol = 'NFS3'
       } else {
         this.fetchHypervisor(value)
@@ -932,11 +936,11 @@ export default {
           params['details[0].api_password'] = values.flashArrayPassword
           url = values.flashArrayURL
         } else if (values.provider === 'ONTAP') {
-          params['details[0].ontap_ip'] = values.ontapIP
-          params['details[0].ontap_username'] = values.ontapUsername
-          params['details[0].ontap_password'] = values.ontapPassword
-          params['details[0].ontap_svmName'] = values.ontapSvmName
-          params['details[0].ontap_protocol'] = values.protocol
+          params['details[0].storage_ip'] = values.ontapIP
+          params['details[0].username'] = values.ontapUsername
+          params['details[0].password'] = values.ontapPassword
+          params['details[0].svmName'] = values.ontapSvmName
+          params['details[0].protocol'] = values.protocol
           values.managed = true
           url = this.ontapURL(values.ontapIP)
         }
