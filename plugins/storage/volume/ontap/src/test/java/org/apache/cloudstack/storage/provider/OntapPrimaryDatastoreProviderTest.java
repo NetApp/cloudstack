@@ -26,7 +26,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.HypervisorHostListener
 import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.lifecycle.OntapPrimaryDatastoreLifecycle;
 import org.apache.cloudstack.storage.listener.OntapHostListener;
-import org.apache.cloudstack.storage.provider.OntapPrimaryDatastoreProvider;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
