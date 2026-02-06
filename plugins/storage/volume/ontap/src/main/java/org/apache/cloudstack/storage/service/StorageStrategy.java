@@ -232,7 +232,7 @@ public abstract class StorageStrategy {
             String jobUUID = jobResponse.getJob().getUuid();
 
             //Create URI for GET Job API
-            Boolean jobSucceeded = jobPollForSuccess(jobUUID);
+            Boolean jobSucceeded = jobPollForSuccess(jobUUID, 10, 1);
             if (!jobSucceeded) {
                 s_logger.error("Volume creation job failed for volume: " + volumeName);
                 throw new CloudRuntimeException("Volume creation job failed for volume: " + volumeName);
@@ -318,7 +318,7 @@ public abstract class StorageStrategy {
         try {
             // TODO: Implement lun and file deletion, if any, before deleting the volume
             JobResponse jobResponse = volumeFeignClient.deleteVolume(authHeader, volume.getUuid());
-            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid());
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 1);
             if (!jobSucceeded) {
                 s_logger.error("Volume deletion job failed for volume: " + volume.getName());
                 throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
@@ -569,14 +569,14 @@ public abstract class StorageStrategy {
      */
     abstract public Map<String, String> getLogicalAccess(Map<String, String> values);
 
-    private Boolean jobPollForSuccess(String jobUUID) {
+    private Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInSecs) {
         //Create URI for GET Job API
         int jobRetryCount = 0;
         Job jobResp = null;
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             while (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
-                if (jobRetryCount >= Constants.JOB_MAX_RETRIES) {
+                if (jobRetryCount >= maxRetries) {
                     s_logger.error("Job did not complete within expected time.");
                     throw new CloudRuntimeException("Job did not complete within expected time.");
                 }
@@ -593,7 +593,7 @@ public abstract class StorageStrategy {
                 }
 
                 jobRetryCount++;
-                Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
+                Thread.sleep(sleepTimeInSecs * 1000);
             }
             if (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
                 return false;

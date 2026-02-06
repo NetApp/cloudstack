@@ -132,11 +132,11 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        s_logger.debug("copyCloudStackVolume: Creating clone of the cloudstack volume: {}", cloudstackVolume.getLun().getName());
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
             s_logger.error("copyCloudStackVolume: Lun clone creation failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("copyCloudStackVolume : Failed to create Lun clone, invalid request");
         }
+        s_logger.debug("copyCloudStackVolume: Creating clone of the cloudstack volume: {}", cloudstackVolume.getLun().getName());
 
         try {
             // Get AuthHeader
@@ -451,6 +451,10 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.info("enableLogicalAccess : Create LunMap");
         s_logger.debug("enableLogicalAccess : Creating LunMap with values {} ", values);
         Map<String, String> response = null;
+        if (values == null) {
+            s_logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: null");
+            throw new CloudRuntimeException("enableLogicalAccess : Failed to create LunMap, invalid request");
+        }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
         String igroupName = values.get(Constants.IGROUP_DOT_NAME);
@@ -514,6 +518,10 @@ public class UnifiedSANStrategy extends SANStrategy {
     public void disableLogicalAccess(Map<String, String> values) {
         s_logger.info("disableLogicalAccess : Delete LunMap");
         s_logger.debug("disableLogicalAccess : Deleting LunMap with values {} ", values);
+        if (values == null) {
+            s_logger.error("disableLogicalAccess: LunMap deletion failed. Invalid request values: null");
+            throw new CloudRuntimeException("disableLogicalAccess : Failed to delete LunMap, invalid request");
+        }
         String lunUUID = values.get(Constants.LUN_DOT_UUID);
         String igroupUUID = values.get(Constants.IGROUP_DOT_UUID);
         if (lunUUID == null || igroupUUID == null || lunUUID.isEmpty() || igroupUUID.isEmpty()) {
@@ -541,6 +549,10 @@ public class UnifiedSANStrategy extends SANStrategy {
     public Map<String, String> getLogicalAccess(Map<String, String> values) {
         s_logger.info("getLogicalAccess : Fetch LunMap");
         s_logger.debug("getLogicalAccess : Fetching LunMap with values {} ", values);
+        if (values == null) {
+            s_logger.error("getLogicalAccess: Invalid request values: null");
+            throw new CloudRuntimeException("getLogicalAccess : Invalid request");
+        }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
         String igroupName = values.get(Constants.IGROUP_DOT_NAME);
