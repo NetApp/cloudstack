@@ -110,17 +110,12 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
     }
 
     @Override
-    public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
-
-    }
-
-    @Override
-    public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap) {
+    CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
         return null;
     }
@@ -193,26 +188,52 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public AccessGroup getAccessGroup(Map<String, String> values) {
-        //TODO
-        return null;
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
+        s_logger.info("getAccessGroup: Get export policy");
+
+        if (accessGroup == null) {
+            throw new CloudRuntimeException("getAccessGroup: Invalid accessGroup object - accessGroup is null");
+        }
+
+        // Get PrimaryDataStoreInfo from accessGroup
+        PrimaryDataStoreInfo primaryDataStoreInfo = accessGroup.getPrimaryDataStoreInfo();
+        if (primaryDataStoreInfo == null) {
+            throw new CloudRuntimeException("getAccessGroup: PrimaryDataStoreInfo is null in accessGroup");
+        }
+        s_logger.info("getAccessGroup: Get export policy for the storage pool {}", primaryDataStoreInfo.getName());
+        try {
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // Determine export policy attached to the storage pool
+            String exportPolicyName = primaryDataStoreInfo.getDetails().get(Constants.EXPORT_POLICY_NAME);
+            String exportPolicyId = primaryDataStoreInfo.getDetails().get(Constants.EXPORT_POLICY_ID);
+
+            try {
+               ExportPolicy exportPolicy =  nasFeignClient.getExportPolicyById(authHeader,exportPolicyId);
+               if(exportPolicy==null){
+                   s_logger.error("getAccessGroup: Failed to retrieve export policy for export policy");
+                   throw new CloudRuntimeException("getAccessGroup: Failed to retrieve export policy for export policy");
+               }
+               accessGroup.setPolicy(exportPolicy);
+                s_logger.info("getAccessGroup: Successfully fetched export policy '{}'", exportPolicyName);
+            } catch (Exception e) {
+                s_logger.error("getAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+                throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
+            }
+        } catch (Exception e) {
+            s_logger.error("getAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
+        }
+        return accessGroup;
     }
 
     @Override
-    public Map <String, String> enableLogicalAccess(Map<String, String> values) {
-        //TODO
-        return null;
-    }
-
-    @Override
-    public void disableLogicalAccess(Map<String, String> values) {
+    void enableLogicalAccess(Map<String, String> values) {
         //TODO
     }
 
     @Override
-    public Map<String, String> getLogicalAccess(Map<String, String> values) {
-        // NAS does not use LUN mapping; nothing to fetch
-        return null;
+    void disableLogicalAccess(Map<String, String> values) {
+        //TODO
     }
 
 
