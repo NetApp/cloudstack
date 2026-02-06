@@ -393,8 +393,6 @@ public abstract class StorageStrategy {
         return targetIqn;
     }
 
-
-
     /**
      * Get the network ip interface
      *
@@ -484,7 +482,19 @@ public abstract class StorageStrategy {
      * @param cloudstackVolume the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
-    abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
+    public abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     * snapshotLun       for iSCSI, FC protocols
+     * snapshotFile      for NFS3.0 and NFS4.1 protocols
+     *
+     *
+     * @param cloudstackVolume the source CloudStack volume
+     * @return the retrieved snapshot CloudStackVolume object
+     */
+    public abstract CloudStackVolume snapshotCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -547,7 +557,7 @@ public abstract class StorageStrategy {
      */
     abstract void disableLogicalAccess(Map<String, String> values);
 
-    private Boolean jobPollForSuccess(String jobUUID) {
+    public Boolean jobPollForSuccess(String jobUUID) {
         //Create URI for GET Job API
         int jobRetryCount = 0;
         Job jobResp = null;
