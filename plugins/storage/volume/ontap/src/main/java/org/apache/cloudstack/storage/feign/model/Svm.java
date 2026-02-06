@@ -143,5 +143,4 @@ public class Svm {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Links { }
-
 }

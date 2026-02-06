@@ -83,6 +83,9 @@ public class Lun {
     @JsonProperty("name")
     private String name = null;
 
+    @JsonProperty("clone")
+    private Clone clone = null;
+
     /**
      * The operating system type of the LUN.&lt;br/&gt; Required in POST when creating a LUN that is not a clone of another. Disallowed in POST when creating a LUN clone.
      */
@@ -249,6 +252,14 @@ public class Lun {
         this.uuid = uuid;
     }
 
+    public Clone getClone() {
+        return clone;
+    }
+
+    public void setClone(Clone clone) {
+        this.clone = clone;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -294,5 +305,37 @@ public class Lun {
             return "null";
         }
         return o.toString().replace("\n", "\n    ");
+    }
+
+
+    public static class Clone {
+        @JsonProperty("source")
+        private Source source = null;
+        public Source getSource() {
+            return source;
+        }
+        public void setSource(Source source) {
+            this.source = source;
+        }
+    }
+
+    public static class Source {
+        @JsonProperty("name")
+        private String name = null;
+        @JsonProperty("uuid")
+        private String uuid = null;
+
+        public String getName() {
+            return name;
+        }
+        public void setName(String name) {
+            this.name = name;
+        }
+        public String getUuid() {
+            return uuid;
+        }
+        public void setUuid(String uuid) {
+            this.uuid = uuid;
+        }
     }
 }
