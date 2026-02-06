@@ -115,9 +115,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (dataStore == null) {
             throw new InvalidParameterValueException("createAsync: dataStore should not be null");
         }
-        if (dataObject == null) {
-            throw new InvalidParameterValueException("createAsync: dataObject should not be null");
-        }
         if (callback == null) {
             throw new InvalidParameterValueException("createAsync: callback should not be null");
         }
@@ -153,11 +150,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         if (lunName == null) {
                             throw new CloudRuntimeException("createAsync: Missing LUN name for volume " + volInfo.getId());
                         }
-
-                        // Determine scope ID based on storage pool scope (cluster or zone level igroup)
-                        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER)
-                                ? storagePool.getClusterId()
-                                : storagePool.getDataCenterId();
 
                         // Persist LUN details for future operations (delete, grant/revoke access)
                         volumeDetailsDao.addDetail(volInfo.getId(), Constants.LUN_DOT_UUID, created.getLun().getUuid(), false);
@@ -348,7 +340,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
                 String svmName = details.get(Constants.SVM_NAME);
                 String cloudStackVolumeName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue();
-                long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
                 if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                     UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
@@ -455,7 +446,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
         String storagePoolUuid = storagePool.getUuid();
-        long scopeId = (storagePool.getScope() == ScopeType.CLUSTER) ? host.getClusterId() : host.getDataCenterId();
 
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);

@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package provider;
+package org.apache.cloudstack.storage.provider;
 
 import com.cloud.utils.component.ComponentContext;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreDriver;
