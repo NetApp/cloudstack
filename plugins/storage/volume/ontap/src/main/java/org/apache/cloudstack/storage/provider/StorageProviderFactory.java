@@ -38,21 +38,17 @@ public class StorageProviderFactory {
         s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
         switch (protocol) {
             case NFS3:
-                if (!ontapStorage.getIsDisaggregated()) {
-                    UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
-                    ComponentContext.inject(unifiedNASStrategy);
-                    unifiedNASStrategy.setOntapStorage(ontapStorage);
-                    return unifiedNASStrategy;
-                }
-                throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
+                UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
+                ComponentContext.inject(unifiedNASStrategy);
+                unifiedNASStrategy.setOntapStorage(ontapStorage);
+                return unifiedNASStrategy;
+                //throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
             case ISCSI:
-                if (!ontapStorage.getIsDisaggregated()) {
-                    UnifiedSANStrategy unifiedSANStrategy = new UnifiedSANStrategy(ontapStorage);
-                    ComponentContext.inject(unifiedSANStrategy);
-                    unifiedSANStrategy.setOntapStorage(ontapStorage);
-                    return unifiedSANStrategy;
-                }
-                throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
+                UnifiedSANStrategy unifiedSANStrategy = new UnifiedSANStrategy(ontapStorage);
+                ComponentContext.inject(unifiedSANStrategy);
+                unifiedSANStrategy.setOntapStorage(ontapStorage);
+                return unifiedSANStrategy;
+                //throw new CloudRuntimeException("Unsupported configuration: Disaggregated ONTAP is not supported.");
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + protocol);
         }

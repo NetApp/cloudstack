@@ -52,7 +52,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
-        String baseURL = Constants.HTTPS + ontapStorage.getManagementLIF();
+        String baseURL = Constants.HTTPS + ontapStorage.getStorageIP();
         // Initialize FeignClientFactory and create SAN client
         this.feignClientFactory = new FeignClientFactory();
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
