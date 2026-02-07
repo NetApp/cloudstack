@@ -183,15 +183,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         details.put(Constants.SIZE, capacityBytes.toString());
 
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
-        String encodedPassword = details.get(Constants.PASSWORD);
-        byte[] decodedBytes = Base64.getDecoder().decode(encodedPassword);
-        String decodedPassword = new String(decodedBytes);
 
         // Connect to ONTAP and create volume
         long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(
                 details.get(Constants.USERNAME),
-                decodedPassword,
+                details.get(Constants.PASSWORD),
                 details.get(Constants.STORAGE_IP),
                 details.get(Constants.SVM_NAME),
                 volumeSize,
