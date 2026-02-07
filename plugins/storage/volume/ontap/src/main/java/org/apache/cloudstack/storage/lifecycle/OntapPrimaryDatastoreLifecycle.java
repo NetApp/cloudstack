@@ -57,10 +57,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycleImpl implements PrimaryDataStoreLifeCycle {
     @Inject private ClusterDao _clusterDao;
@@ -182,12 +179,15 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         details.put(Constants.SIZE, capacityBytes.toString());
 
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        String encodedPassword = details.get(Constants.PASSWORD);
+        byte[] decodedBytes = Base64.getDecoder().decode(encodedPassword);
+        String decodedPassword = new String(decodedBytes);
 
         // Connect to ONTAP and create volume
         long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(
                 details.get(Constants.USERNAME),
-                details.get(Constants.PASSWORD),
+                decodedPassword,
                 details.get(Constants.STORAGE_IP),
                 details.get(Constants.SVM_NAME),
                 volumeSize,
