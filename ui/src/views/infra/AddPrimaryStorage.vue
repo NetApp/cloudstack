@@ -242,7 +242,7 @@
             </a-select>
           </a-form-item>
         </div>
-        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.provider !== 'ONTAP' && form.protocol !== 'FiberChannel'">
+        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.provider !== 'NetApp ONTAP' && form.protocol !== 'FiberChannel'">
           <a-form-item name="managed" ref="managed">
             <template #label>
               <tooltip-label :title="$t('label.ismanaged')" :tooltip="apiParams.managed.description"/>
@@ -270,7 +270,7 @@
             <a-input v-model:value="form.url" :placeholder="apiParams.url.description" />
           </a-form-item>
         </div>
-        <div v-if="form.provider === 'ONTAP'">
+        <div v-if="form.provider === 'NetApp ONTAP'">
           <a-form-item name="ontapIP" ref="ontapIP">
             <template #label>
               <tooltip-label :title="$t('label.ontap.ip')" :tooltip="$t('label.ontap.ip.tooltip')"/>
@@ -810,7 +810,7 @@ export default {
       } else if (value === 'Flash Array' || value === 'Primera') {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
-      } else if (value === 'ONTAP') {
+      } else if (value === 'NetApp ONTAP') {
         this.protocols = ['NFS3', 'ISCSI']
         this.form.protocol = 'NFS3'
       } else {
@@ -935,7 +935,7 @@ export default {
           params['details[0].api_username'] = values.flashArrayUsername
           params['details[0].api_password'] = values.flashArrayPassword
           url = values.flashArrayURL
-        } else if (values.provider === 'ONTAP') {
+        } else if (values.provider === 'NetApp ONTAP') {
           params['details[0].storage_ip'] = values.ontapIP
           params['details[0].username'] = values.ontapUsername
           params['details[0].password'] = values.ontapPassword
