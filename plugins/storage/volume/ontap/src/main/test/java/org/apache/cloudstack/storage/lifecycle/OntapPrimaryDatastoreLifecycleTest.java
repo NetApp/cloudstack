@@ -18,6 +18,7 @@
  */
 package org.apache.cloudstack.storage.lifecycle;
 
+import org.apache.cloudstack.storage.utils.Constants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,8 +41,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
-import org.apache.cloudstack.storage.service.model.AccessGroup;
-import com.cloud.hypervisor.Hypervisor;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
@@ -59,7 +58,7 @@ import java.util.HashMap;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
-import org.apache.cloudstack.storage.utils.Utility;
+
 
 
 @ExtendWith(MockitoExtension.class)
@@ -135,17 +134,18 @@ public class OntapPrimaryDatastoreLifecycleTest {
         poolDetails.put("password", "password");
         poolDetails.put("svmName", "svm1");
         poolDetails.put("protocol", "NFS3");
-        poolDetails.put("managementLIF", "192.168.1.100");
-        poolDetails.put("isDisaggregated", "false");
+        poolDetails.put("storage_ip", "192.168.1.100");
     }
 
     @Test
     public void testInitialize_positive() {
-
+        HashMap<String, String> detailsMap = new HashMap<String, String>();
+        detailsMap.put(Constants.USERNAME, "testUser");
+        detailsMap.put(Constants.PASSWORD, "testPassword");
+        detailsMap.put(Constants.STORAGE_IP, "10.10.10.10");
+        detailsMap.put(Constants.SVM_NAME, "vs0");
+        detailsMap.put(Constants.PROTOCOL, "NFS3");
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("username", "testUser");
-        dsInfos.put("password", "testPassword");
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -155,7 +155,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("managed",true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
-        dsInfos.put("details", new HashMap<String, String>());
+        dsInfos.put("details", detailsMap);
 
         try(MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -172,8 +172,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_missingRequiredDetailKey() {
+        HashMap<String, String> detailsMap = new HashMap<String, String>();
+        detailsMap.put(Constants.USERNAME, "testUser");
+        detailsMap.put(Constants.PASSWORD, "testPassword");
+        detailsMap.put(Constants.STORAGE_IP, "10.10.10.10");
+        detailsMap.put(Constants.SVM_NAME, "vs0");
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -183,7 +187,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("managed",true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
-        dsInfos.put("details", new HashMap<String, String>());
+        dsInfos.put("details", detailsMap);
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -194,8 +198,14 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_invalidCapacityBytes() {
+        HashMap<String, String> detailsMap = new HashMap<String, String>();
+        detailsMap.put(Constants.USERNAME, "testUser");
+        detailsMap.put(Constants.PASSWORD, "testPassword");
+        detailsMap.put(Constants.STORAGE_IP, "10.10.10.10");
+        detailsMap.put(Constants.SVM_NAME, "vs0");
+        detailsMap.put(Constants.PROTOCOL, "NFS3");
+
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -205,7 +215,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("managed",true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
-        dsInfos.put("details", new HashMap<String, String>());
+        dsInfos.put("details", detailsMap);
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -216,7 +226,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testInitialize_unmanagedStorage() {
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -240,7 +249,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testInitialize_nullStoragePoolName() {
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -264,7 +272,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testInitialize_nullProviderName() {
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -288,7 +295,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testInitialize_nullPodAndClusterAndZone() {
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",null);
         dsInfos.put("podId",null);
         dsInfos.put("clusterId", null);
@@ -316,7 +322,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_clusterDao.findById(2L)).thenReturn(clusterVO);
 
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false");
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 2L);
@@ -338,10 +343,16 @@ public class OntapPrimaryDatastoreLifecycleTest {
     }
 
     @Test
-    @Ig
     public void testInitialize_unexpectedDetailKey() {
+        HashMap<String, String> detailsMap = new HashMap<String, String>();
+        detailsMap.put(Constants.USERNAME, "testUser");
+        detailsMap.put(Constants.PASSWORD, "testPassword");
+        detailsMap.put(Constants.STORAGE_IP, "10.10.10.10");
+        detailsMap.put(Constants.SVM_NAME, "vs0");
+        detailsMap.put(Constants.PROTOCOL, "NFS3");
+        detailsMap.put("unexpectedKey", "unexpectedValue");
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("url", "username=testUser;password=testPassword;svmName=testSVM;protocol=NFS3;managementLIF=192.168.1.1;isDisaggregated=false;unexpectedKey=unexpectedValue");
+
         dsInfos.put("zoneId",1L);
         dsInfos.put("podId",1L);
         dsInfos.put("clusterId", 1L);
@@ -359,7 +370,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
                 ontapPrimaryDatastoreLifecycle.initialize(dsInfos);
             }
         });
-        assertTrue(ex.getMessage().contains("Unexpected ONTAP detail key in URL"));
+        assertTrue(ex.getMessage().contains("Unexpected ONTAP detail key"));
     }
 
 }
