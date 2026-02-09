@@ -362,7 +362,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("managed",true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
-        dsInfos.put("details", new HashMap<String, String>());
+        dsInfos.put("details", detailsMap);
 
         Exception ex = assertThrows(CloudRuntimeException.class, () -> {
             try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
