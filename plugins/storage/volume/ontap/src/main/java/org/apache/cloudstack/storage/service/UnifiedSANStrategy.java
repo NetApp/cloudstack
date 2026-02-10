@@ -99,7 +99,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         //TODO
     }
 

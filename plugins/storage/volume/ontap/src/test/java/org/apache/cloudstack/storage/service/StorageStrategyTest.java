@@ -134,7 +134,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        void deleteCloudStackVolume(org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
+        public void deleteCloudStackVolume(org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
         }
 
         @Override

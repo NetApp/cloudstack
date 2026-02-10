@@ -472,7 +472,7 @@ public abstract class StorageStrategy {
      *
      * @param cloudstackVolume the CloudStack volume to delete
      */
-    abstract void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.

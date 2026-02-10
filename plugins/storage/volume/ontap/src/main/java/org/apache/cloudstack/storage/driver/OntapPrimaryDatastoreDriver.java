@@ -158,10 +158,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     throw new CloudRuntimeException("deleteAsync : Storage Pool not found for id: " + store.getId());
                 }
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
-                if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                    // ManagedNFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
-                    s_logger.info("deleteAsync: ManagedNFS volume {} no-op ONTAP deletion", data.getId());
-                }
+                StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+                s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
+                VolumeInfo volumeInfo = (VolumeInfo) data;
+                CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool,details,volumeInfo);
+                storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
+                s_logger.error("deleteAsync : Volume deleted: " + volumeInfo.getId());
             }
         } catch (Exception e) {
             commandResult.setResult(e.getMessage());
@@ -291,6 +293,24 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void detachVolumeFromAllStorageNodes(Volume volume) {
+    }
+
+    private CloudStackVolume createDeleteCloudStackVolumeRequest(StoragePool storagePool, Map<String, String> details, VolumeInfo volumeInfo) {
+        CloudStackVolume cloudStackVolumeRequest = null;
+
+        String protocol = details.get(Constants.PROTOCOL);
+        ProtocolType protocolType = ProtocolType.valueOf(protocol);
+        switch (protocolType) {
+            case NFS3:
+                cloudStackVolumeRequest = new CloudStackVolume();
+                cloudStackVolumeRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                cloudStackVolumeRequest.setVolumeInfo(volumeInfo);
+                break;
+            default:
+                throw new CloudRuntimeException("createDeleteCloudStackVolumeRequest: Unsupported protocol " + protocol);
+
+        }
+        return cloudStackVolumeRequest;
 
     }
 }
