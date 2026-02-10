@@ -122,8 +122,7 @@ public class UnifiedNASStrategyTest {
             "192.168.1.100",
             "svm1",
             100L,
-            ProtocolType.NFS3,
-            false
+            ProtocolType.NFS3
         );
         strategy = new TestableUnifiedNASStrategy(ontapStorage, nasFeignClient, volumeFeignClient, jobFeignClient, aggregateFeignClient, svmFeignClient, networkFeignClient, sanFeignClient);
         injectField("volumeDao", volumeDao);

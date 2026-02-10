@@ -88,7 +88,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
-        String url = (String) dsInfos.get("url");
         Long zoneId = (Long) dsInfos.get("zoneId");
         Long podId = (Long) dsInfos.get("podId");
         Long clusterId = (Long) dsInfos.get("clusterId");
@@ -152,39 +151,20 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP primary storage must be managed");
         }
 
+        // Required ONTAP detail keys
         Set<String> requiredKeys = Set.of(
                 Constants.USERNAME,
                 Constants.PASSWORD,
                 Constants.SVM_NAME,
                 Constants.PROTOCOL,
-                Constants.MANAGEMENT_LIF
+                Constants.STORAGE_IP
         );
-
-        Set<String> optionalKeys = Set.of(
-                Constants.IS_DISAGGREGATED
-        );
-
-        Set<String> allowedKeys = new java.util.HashSet<>(requiredKeys);
-        allowedKeys.addAll(optionalKeys);
-
-        // Parse key=value pairs from URL into details (skip empty segments)
-        if (url != null && !url.isEmpty()) {
-            for (String segment : url.split(Constants.SEMICOLON)) {
-                if (segment.isEmpty()) {
-                    continue;
-                }
-                String[] kv = segment.split(Constants.EQUALS, 2);
-                if (kv.length == 2) {
-                    details.put(kv[0].trim(), kv[1].trim());
-                }
-            }
-        }
 
         // Validate existing entries (reject unexpected keys, empty values)
         for (Map.Entry<String, String> e : details.entrySet()) {
             String key = e.getKey();
             String val = e.getValue();
-            if (!allowedKeys.contains(key)) {
+            if (!requiredKeys.contains(key)) {
                 throw new CloudRuntimeException("Unexpected ONTAP detail key in URL: " + key);
             }
             if (val == null || val.isEmpty()) {
@@ -202,9 +182,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         details.put(Constants.SIZE, capacityBytes.toString());
 
-        // Default for IS_DISAGGREGATED if needed
-        details.putIfAbsent(Constants.IS_DISAGGREGATED, "false");
-
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
 
         // Connect to ONTAP and create volume
@@ -212,11 +189,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         OntapStorage ontapStorage = new OntapStorage(
                 details.get(Constants.USERNAME),
                 details.get(Constants.PASSWORD),
-                details.get(Constants.MANAGEMENT_LIF),
+                details.get(Constants.STORAGE_IP),
                 details.get(Constants.SVM_NAME),
                 volumeSize,
-                protocol,
-                Boolean.parseBoolean(details.get(Constants.IS_DISAGGREGATED).toLowerCase()));
+                protocol);
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
