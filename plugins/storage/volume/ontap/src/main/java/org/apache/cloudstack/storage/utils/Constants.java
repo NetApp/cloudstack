@@ -22,7 +22,7 @@ package org.apache.cloudstack.storage.utils;
 
 public class Constants {
 
-    public static final String ONTAP_PLUGIN_NAME = "ONTAP";
+    public static final String ONTAP_PLUGIN_NAME = "NetApp ONTAP";
     public static final int NFS3_PORT = 2049;
     public static final int ISCSI_PORT = 3260;
 
@@ -34,7 +34,7 @@ public class Constants {
     public static final String USERNAME = "username";
     public static final String PASSWORD = "password";
     public static final String DATA_LIF = "dataLIF";
-    public static final String MANAGEMENT_LIF = "managementLIF";
+    public static final String STORAGE_IP = "storageIP";
     public static final String VOLUME_NAME = "volumeName";
     public static final String VOLUME_UUID = "volumeUUID";
     public static final String EXPORT_POLICY_ID = "exportPolicyId";
