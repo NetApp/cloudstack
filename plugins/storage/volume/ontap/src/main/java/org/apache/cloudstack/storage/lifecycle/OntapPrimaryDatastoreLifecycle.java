@@ -151,7 +151,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("ONTAP primary storage must be managed");
         }
 
-        // Required ONTAP detail keys
+        //Required ONTAP detail keys
         Set<String> requiredKeys = Set.of(
                 Constants.USERNAME,
                 Constants.PASSWORD,
