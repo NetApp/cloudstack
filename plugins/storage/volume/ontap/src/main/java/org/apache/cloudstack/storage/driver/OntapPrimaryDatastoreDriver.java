@@ -162,6 +162,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(Constants.SVM_NAME));
                 VolumeInfo volumeInfo = (VolumeInfo) data;
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool,details,volumeInfo);
+                // NFS qcow2 backing file deletion handled by KVM host/libvirt; nothing to do via ONTAP REST.
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 s_logger.error("deleteAsync : Volume deleted: " + volumeInfo.getId());
             }
