@@ -60,6 +60,8 @@ import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.cloudstack.storage.utils.Utility;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 
 
 @ExtendWith(MockitoExtension.class)
@@ -85,6 +87,9 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Mock
     private StoragePoolDetailsDao storagePoolDetailsDao;
+
+    @Mock
+    private PrimaryDataStoreDao storagePoolDao;
 
     // Mock object that implements both DataStore and PrimaryDataStoreInfo
     // This is needed because attachCluster(DataStore) casts DataStore to PrimaryDataStoreInfo internally
@@ -121,12 +126,23 @@ public class OntapPrimaryDatastoreLifecycleTest {
         // Configure dataStore mock with necessary methods (works for both DataStore and PrimaryDataStoreInfo)
         when(dataStore.getId()).thenReturn(1L);
         when(((PrimaryDataStoreInfo) dataStore).getClusterId()).thenReturn(1L);
+
+        // Mock the setDetails method to prevent NullPointerException
+        Mockito.doNothing().when(((PrimaryDataStoreInfo) dataStore)).setDetails(any());
+
+        // Mock storagePoolDao to return a valid StoragePoolVO
+        StoragePoolVO mockStoragePoolVO = new StoragePoolVO();
+        mockStoragePoolVO.setId(1L);
+        when(storagePoolDao.findById(1L)).thenReturn(mockStoragePoolVO);
+
         mockHosts = new ArrayList<>();
         HostVO host1 = new HostVO("host1-guid");
         host1.setPrivateIpAddress("192.168.1.10");
+        host1.setStorageIpAddress("192.168.1.10");
         host1.setClusterId(1L);
         HostVO host2 = new HostVO("host2-guid");
         host2.setPrivateIpAddress("192.168.1.11");
+        host2.setStorageIpAddress("192.168.1.11");
         host2.setClusterId(1L);
         mockHosts.add(host1);
         mockHosts.add(host2);
@@ -451,6 +467,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         // Setup - add more hosts
         HostVO host3 = new HostVO("host3-guid");
         host3.setPrivateIpAddress("192.168.1.12");
+        host3.setStorageIpAddress("192.168.1.12");
         host3.setClusterId(1L);
         mockHosts.add(host3);
 
@@ -651,6 +668,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         // Setup - add more hosts
         HostVO host3 = new HostVO("host3-guid");
         host3.setPrivateIpAddress("192.168.1.12");
+        host3.setStorageIpAddress("192.168.1.12");
         host3.setClusterId(1L);
         mockHosts.add(host3);
 

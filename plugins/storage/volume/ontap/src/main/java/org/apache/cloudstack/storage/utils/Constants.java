@@ -22,6 +22,10 @@ package org.apache.cloudstack.storage.utils;
 
 public class Constants {
 
+    public static final String ONTAP_PLUGIN_NAME = "ONTAP";
+    public static final int NFS3_PORT = 2049;
+    public static final int ISCSI_PORT = 3260;
+
     public static final String NFS = "nfs";
     public static final String ISCSI = "iscsi";
     public static final String SIZE = "size";
@@ -53,6 +57,7 @@ public class Constants {
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
+    public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
     public static final String DATA_NFS = "data_nfs";
@@ -80,6 +85,7 @@ public class Constants {
     public static final String LUN_DOT_NAME = "lun.name";
     public static final String IQN = "iqn";
     public static final String LUN_DOT_UUID = "lun.uuid";
+    public static final String LOGICAL_UNIT_NUMBER = "logical_unit_number";
     public static final String IGROUP_DOT_NAME = "igroup.name";
     public static final String IGROUP_DOT_UUID = "igroup.uuid";
     public static final String UNDERSCORE = "_";
