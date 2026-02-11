@@ -19,7 +19,7 @@
 
 package org.apache.cloudstack.storage.utils;
 
-import com.cloud.storage.ScopeType;
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
@@ -69,31 +69,27 @@ public class Utility {
                 cloudStackVolumeRequest.setVolumeInfo(volumeObject);
                 break;
             case ISCSI:
-                cloudStackVolumeRequest = new CloudStackVolume();
-                Lun lunRequest = new Lun();
                 Svm svm = new Svm();
                 svm.setName(details.get(Constants.SVM_NAME));
+                cloudStackVolumeRequest = new CloudStackVolume();
+                Lun lunRequest = new Lun();
                 lunRequest.setSvm(svm);
 
                 LunSpace lunSpace = new LunSpace();
                 lunSpace.setSize(volumeObject.getSize());
                 lunRequest.setSpace(lunSpace);
                 //Lun name is full path like in unified "/vol/VolumeName/LunName"
-                String lunFullName = Constants.VOLUME_PATH_PREFIX + storagePool.getName() + Constants.SLASH + volumeObject.getName();
+                String lunName = volumeObject.getName().replace(Constants.HYPHEN, Constants.UNDERSCORE);
+                if(!isValidName(lunName)) {
+                    String errMsg = "createAsync: Invalid dataObject name [" + lunName + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.";
+                    throw new InvalidParameterValueException(errMsg);
+                }
+                String lunFullName = getLunName(storagePool.getName(), lunName);
                 lunRequest.setName(lunFullName);
 
-                String hypervisorType = storagePool.getHypervisor().name();
-                String osType = null;
-                switch (hypervisorType) {
-                    case Constants.KVM:
-                        osType = Lun.OsTypeEnum.LINUX.getValue();
-                        break;
-                    default:
-                        String errMsg = "createCloudStackVolume : Unsupported hypervisor type " + hypervisorType + " for ONTAP storage";
-                        s_logger.error(errMsg);
-                        throw new CloudRuntimeException(errMsg);
-                }
+                String osType = getOSTypeFromHypervisor(storagePool.getHypervisor().name());
                 lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+
                 cloudStackVolumeRequest.setLun(lunRequest);
                 break;
             default:
@@ -101,6 +97,15 @@ public class Utility {
 
         }
         return cloudStackVolumeRequest;
+    }
+
+    public static boolean isValidName(String name) {
+        // Check for null and length constraint first
+        if (name == null || name.length() > 200) {
+            return false;
+        }
+        // Regex: Starts with a letter, followed by letters, digits, or underscores
+        return name.matches(Constants.ONTAP_NAME_REGEX);
     }
 
     public static String getOSTypeFromHypervisor(String hypervisorType){
@@ -135,12 +140,17 @@ public class Utility {
         }
     }
 
-    public static String getIgroupName(String svmName, ScopeType scopeType, Long scopeId) {
-        //Igroup name format: cs_svmName_scopeId
-        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + scopeType.toString().toLowerCase() + Constants.UNDERSCORE + scopeId;
+    public static String getIgroupName(String svmName, String poolUuid) {
+        //Igroup name format: cs_svmName_poolUuid
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + poolUuid;
     }
 
     public static String generateExportPolicyName(String svmName, String volumeName){
         return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
+    }
+
+    public static String getLunName(String volName, String lunName) {
+        //LUN name in ONTAP unified format: "/vol/VolumeName/LunName"
+        return Constants.VOLUME_PATH_PREFIX + volName + Constants.SLASH + lunName;
     }
 }

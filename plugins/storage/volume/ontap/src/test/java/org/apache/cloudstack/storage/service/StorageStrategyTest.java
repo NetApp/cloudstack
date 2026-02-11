@@ -1,4 +1,4 @@
-    /*
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +20,6 @@ package org.apache.cloudstack.storage.service;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
-import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
@@ -36,6 +35,8 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.Constants;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -68,9 +70,6 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 public class StorageStrategyTest {
-
-    @Mock
-    private FeignClientFactory feignClientFactory;
 
     @Mock
     private AggregateFeignClient aggregateFeignClient;
@@ -138,13 +137,17 @@ public class StorageStrategyTest {
         }
 
         @Override
-        org.apache.cloudstack.storage.service.model.CloudStackVolume getCloudStackVolume(
-                org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
+        public void copyCloudStackVolume(org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
+        }
+
+        @Override
+        public CloudStackVolume getCloudStackVolume(
+                Map<String, String> cloudStackVolumeMap) {
             return null;
         }
 
         @Override
-        public org.apache.cloudstack.storage.service.model.AccessGroup createAccessGroup(
+        public AccessGroup createAccessGroup(
                 org.apache.cloudstack.storage.service.model.AccessGroup accessGroup) {
             return null;
         }
@@ -154,23 +157,29 @@ public class StorageStrategyTest {
         }
 
         @Override
-        org.apache.cloudstack.storage.service.model.AccessGroup updateAccessGroup(
+        AccessGroup updateAccessGroup(
                 org.apache.cloudstack.storage.service.model.AccessGroup accessGroup) {
             return null;
         }
 
         @Override
-        org.apache.cloudstack.storage.service.model.AccessGroup getAccessGroup(
-                org.apache.cloudstack.storage.service.model.AccessGroup accessGroup) {
+        public AccessGroup getAccessGroup(
+                Map<String, String> values) {
             return null;
         }
 
         @Override
-        void enableLogicalAccess(Map<String, String> values) {
+        public Map<String, String> enableLogicalAccess(Map<String, String> values) {
+            return null;
         }
 
         @Override
-        void disableLogicalAccess(Map<String, String> values) {
+        public void disableLogicalAccess(Map<String, String> values) {
+        }
+
+        @Override
+        public Map<String, String> getLogicalAccess(Map<String, String> values) {
+            return null;
         }
     }
 
@@ -223,9 +232,11 @@ public class StorageStrategyTest {
 
         when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
 
-        // Execute & Verify
-        Exception ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
-        assertTrue(ex.getMessage().contains("No SVM found"));
+        // Execute
+        boolean result = storageStrategy.connect();
+
+        // Verify
+        assertFalse(result, "connect() should return false when SVM is not found");
     }
 
     @Test
@@ -241,9 +252,11 @@ public class StorageStrategyTest {
 
         when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
 
-        // Execute & Verify
-        Exception ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
-        assertTrue(ex.getMessage().contains("not in running state"));
+        // Execute
+        boolean result = storageStrategy.connect();
+
+        // Verify
+        assertFalse(result, "connect() should return false when SVM is not running");
     }
 
     @Test
@@ -316,9 +329,11 @@ public class StorageStrategyTest {
 
         when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
 
-        // Execute & Verify
-        Exception ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
-        assertTrue(ex.getMessage().contains("No aggregates are assigned"));
+        // Execute
+        boolean result = storageStrategy.connect();
+
+        // Verify
+        assertFalse(result, "connect() should return false when no aggregates are assigned");
     }
 
     @Test
@@ -326,15 +341,17 @@ public class StorageStrategyTest {
         // Setup
         when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(null);
 
-        // Execute & Verify
-        Exception ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
-        assertTrue(ex.getMessage().contains("No SVM found"));
+        // Execute
+        boolean result = storageStrategy.connect();
+
+        // Verify
+        assertFalse(result, "connect() should return false when SVM response is null");
     }
 
     // ========== createStorageVolume() Tests ==========
 
     @Test
-    public void testCreateStorageVolume_positive() throws Exception {
+    public void testCreateStorageVolume_positive() {
         // Setup - First connect to populate aggregates
         setupSuccessfulConnect();
         storageStrategy.connect();
@@ -422,7 +439,7 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testCreateStorageVolume_aggregateNotOnline() throws Exception {
+    public void testCreateStorageVolume_aggregateNotOnline() {
         // Setup
         setupSuccessfulConnect();
         storageStrategy.connect();
@@ -442,7 +459,7 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testCreateStorageVolume_insufficientSpace() throws Exception {
+    public void testCreateStorageVolume_insufficientSpace() {
         // Setup
         setupSuccessfulConnect();
         storageStrategy.connect();
@@ -463,7 +480,7 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testCreateStorageVolume_jobFailed() throws Exception {
+    public void testCreateStorageVolume_jobFailed() {
         // Setup
         setupSuccessfulConnect();
         storageStrategy.connect();
@@ -493,7 +510,7 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testCreateStorageVolume_volumeNotFoundAfterCreation() throws Exception {
+    public void testCreateStorageVolume_volumeNotFoundAfterCreation() {
         // Setup
         setupSuccessfulConnect();
         storageStrategy.connect();
@@ -516,7 +533,7 @@ public class StorageStrategyTest {
     // ========== deleteStorageVolume() Tests ==========
 
     @Test
-    public void testDeleteStorageVolume_positive() throws Exception {
+    public void testDeleteStorageVolume_positive() {
         // Setup
         Volume volume = new Volume();
         volume.setName("test-volume");
@@ -545,7 +562,7 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testDeleteStorageVolume_jobFailed() throws Exception {
+    public void testDeleteStorageVolume_jobFailed() {
         // Setup
         Volume volume = new Volume();
         volume.setName("test-volume");
@@ -778,7 +795,7 @@ public class StorageStrategyTest {
                 .thenReturn(aggregateDetail);
     }
 
-    private void setupSuccessfulJobCreation() throws InterruptedException {
+    private void setupSuccessfulJobCreation() {
         Job job = new Job();
         job.setUuid("job-uuid-1");
         JobResponse jobResponse = new JobResponse();

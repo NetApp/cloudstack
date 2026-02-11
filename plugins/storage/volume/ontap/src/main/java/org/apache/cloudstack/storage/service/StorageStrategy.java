@@ -108,33 +108,33 @@ public abstract class StorageStrategy {
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
             } else {
-                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                s_logger.error("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                return false;
             }
 
             // Validations
             s_logger.info("Validating SVM state and protocol settings...");
             if (!Objects.equals(svm.getState(), Constants.RUNNING)) {
                 s_logger.error("SVM " + svmName + " is not in running state.");
-                throw new CloudRuntimeException("SVM " + svmName + " is not in running state.");
+                return false;
             }
             if (Objects.equals(storage.getProtocol(), Constants.NFS) && !svm.getNfsEnabled()) {
                 s_logger.error("NFS protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+                return false;
             } else if (Objects.equals(storage.getProtocol(), Constants.ISCSI) && !svm.getIscsiEnabled()) {
                 s_logger.error("iSCSI protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
+                return false;
             }
-
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 s_logger.error("No aggregates are assigned to SVM " + svmName);
-                throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
+                return false;
             }
-
             this.aggregates = aggrs;
             s_logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
-            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
+           s_logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
+           return false;
         }
         return true;
     }
@@ -147,7 +147,7 @@ public abstract class StorageStrategy {
      * throw exception in case of disaggregated ONTAP storage
      *
      * @param volumeName the name of the volume to create
-     * @param size       the size of the volume in bytes
+     * @param size the size of the volume in bytes
      * @return the created Volume object
      */
     public Volume createStorageVolume(String volumeName, Long size) {
@@ -232,7 +232,7 @@ public abstract class StorageStrategy {
             String jobUUID = jobResponse.getJob().getUuid();
 
             //Create URI for GET Job API
-            Boolean jobSucceeded = jobPollForSuccess(jobUUID);
+            Boolean jobSucceeded = jobPollForSuccess(jobUUID, 10, 1);
             if (!jobSucceeded) {
                 s_logger.error("Volume creation job failed for volume: " + volumeName);
                 throw new CloudRuntimeException("Volume creation job failed for volume: " + volumeName);
@@ -318,7 +318,7 @@ public abstract class StorageStrategy {
         try {
             // TODO: Implement lun and file deletion, if any, before deleting the volume
             JobResponse jobResponse = volumeFeignClient.deleteVolume(authHeader, volume.getUuid());
-            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid());
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 1);
             if (!jobSucceeded) {
                 s_logger.error("Volume deletion job failed for volume: " + volume.getName());
                 throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
@@ -425,8 +425,19 @@ public abstract class StorageStrategy {
             OntapResponse<IpInterface> response =
                     networkFeignClient.getNetworkIpInterfaces(authHeader, queryParams);
             if (response != null && response.getRecords() != null && !response.getRecords().isEmpty()) {
-                // For simplicity, return the first interface's name
-                IpInterface ipInterface = response.getRecords().get(0);
+                IpInterface ipInterface = null;
+                // For simplicity, return the first interface's name (Of IPv4 type for NFS3)
+                if (storage.getProtocol() == ProtocolType.ISCSI) {
+                    ipInterface = response.getRecords().get(0);
+                } else if (storage.getProtocol() == ProtocolType.NFS3) {
+                    for (IpInterface iface : response.getRecords()) {
+                        if (iface.getIp().getAddress().contains(".")) {
+                            ipInterface = iface;
+                            break;
+                        }
+                    }
+                }
+
                 s_logger.info("Retrieved network interface: " + ipInterface.getIp().getAddress());
                 return ipInterface.getIp().getAddress();
             } else {
@@ -477,21 +488,29 @@ public abstract class StorageStrategy {
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
-     * getLun       for iSCSI, FC protocols
-     * getFile      for NFS3.0 and NFS4.1 protocols
-     * getNameSpace for Nvme/TCP and Nvme/FC protocol
-     *
-     * @param cloudstackVolume the CloudStack volume to retrieve
+     *     cloneLun       for iSCSI, FC protocols
+     *     cloneFile      for NFS3.0 and NFS4.1 protocols
+     *     cloneNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param cloudstackVolume the CloudStack volume to copy
+     */
+    abstract public void copyCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     *     getLun       for iSCSI, FC protocols
+     *     getFile      for NFS3.0 and NFS4.1 protocols
+     *     getNameSpace for Nvme/TCP and Nvme/FC protocol
+     * @param cloudStackVolumeMap the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
-    abstract CloudStackVolume getCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * createiGroup       for iSCSI and FC protocols
-     * createExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * createSubsystem    for Nvme/TCP and Nvme/FC protocols
-     *
+     *     createiGroup       for iSCSI and FC protocols
+     *     createExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     createSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to create
      * @return the created AccessGroup object
      */
@@ -499,20 +518,18 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * deleteiGroup       for iSCSI and FC protocols
-     * deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
-     *
+     *     deleteiGroup       for iSCSI and FC protocols
+     *     deleteExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     deleteSubsystem    for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to delete
      */
     abstract public void deleteAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
-     * updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
+     *     updateiGroup       example add/remove-Iqn   for iSCSI and FC protocols
+     *     updateExportPolicy example add/remove-Rule for NFS 3.0 and NFS 4.1 protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param accessGroup the access group to update
      * @return the updated AccessGroup object
      */
@@ -520,41 +537,46 @@ public abstract class StorageStrategy {
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * getiGroup       for iSCSI and FC protocols
-     * getExportPolicy for NFS 3.0 and NFS 4.1 protocols
-     * getNameSpace    for Nvme/TCP and Nvme/FC protocols
-     *
-     * @param accessGroup the access group to retrieve
-     * @return the retrieved AccessGroup object
+     *     e.g., getIGroup for iSCSI and FC protocols
+     *     e.g., getExportPolicy for NFS 3.0 and NFS 4.1 protocols
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+      * @param values map to get access group values like name, svm name etc.
      */
-    abstract AccessGroup getAccessGroup(AccessGroup accessGroup);
+    abstract public AccessGroup getAccessGroup(Map<String, String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * lunMap  for iSCSI and FC protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
-     * @param values
+     *     lunMap  for iSCSI and FC protocols
+     *     //TODO  for NFS 3.0 and NFS 4.1 protocols (e.g., export rule management)
+     *     //TODO  for Nvme/TCP and Nvme/FC protocols
+     * @param values map including SVM name, LUN name, and igroup name (for SAN) or equivalent for NAS
+     * @return map containing logical unit number for the new/existing mapping (SAN) or relevant info for NAS
      */
-    abstract void enableLogicalAccess(Map<String, String> values);
+    abstract public Map<String,String> enableLogicalAccess(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
-     * lunUnmap  for iSCSI and FC protocols
-     * //TODO  for Nvme/TCP and Nvme/FC protocols
-     *
-     * @param values
+     *     lunUnmap  for iSCSI and FC protocols
+     * @param values map including LUN UUID and iGroup UUID (for SAN) or equivalent for NAS
      */
-    abstract void disableLogicalAccess(Map<String, String> values);
+    abstract public void disableLogicalAccess(Map<String, String> values);
 
-    private Boolean jobPollForSuccess(String jobUUID) {
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses
+     *     lunMap lookup for iSCSI/FC protocols (GET-only, no side-effects)
+     * @param values map with SVM name, LUN name, and igroup name (for SAN) or equivalent for NAS
+     * @return map containing logical unit number if mapping exists; otherwise null
+     */
+    abstract public Map<String, String> getLogicalAccess(Map<String, String> values);
+
+    private Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInSecs) {
         //Create URI for GET Job API
         int jobRetryCount = 0;
         Job jobResp = null;
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             while (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
-                if (jobRetryCount >= Constants.JOB_MAX_RETRIES) {
+                if (jobRetryCount >= maxRetries) {
                     s_logger.error("Job did not complete within expected time.");
                     throw new CloudRuntimeException("Job did not complete within expected time.");
                 }
@@ -571,7 +593,7 @@ public abstract class StorageStrategy {
                 }
 
                 jobRetryCount++;
-                Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
+                Thread.sleep(sleepTimeInSecs * 1000);
             }
             if (jobResp == null || !jobResp.getState().equals(Constants.JOB_SUCCESS)) {
                 return false;
