@@ -96,7 +96,8 @@ public abstract class StorageStrategy {
         s_logger.info("Attempting to connect to ONTAP cluster at " + storage.getStorageIP() + " and validate SVM " +
                 storage.getSvmName() + ", protocol " + storage.getProtocol());
         //Get AuthHeader
-        String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        String decodedPassword = new String(java.util.Base64.getDecoder().decode(storage.getPassword()), java.nio.charset.StandardCharsets.UTF_8);
+        String authHeader = Utility.generateAuthHeader(storage.getUsername(), decodedPassword);
         String svmName = storage.getSvmName();
         try {
             // Call the SVM API to check if the SVM exists
