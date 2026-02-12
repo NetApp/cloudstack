@@ -57,4 +57,14 @@ public class OntapStorage {
     public ProtocolType getProtocol() {
         return protocolType;
     }
+
+    @Override
+    public String toString() {
+        return "OntapStorage{" +
+            "username='" + username + '\'' +
+            ", storageIP='" + storageIP + '\'' +
+            ", svmName='" + svmName + '\'' +
+            ", protocol=" + protocolType +
+            '}';
+    }
 }

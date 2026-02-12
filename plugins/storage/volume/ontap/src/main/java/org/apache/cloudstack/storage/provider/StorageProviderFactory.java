@@ -21,6 +21,9 @@ package org.apache.cloudstack.storage.provider;
 
 import com.cloud.utils.component.ComponentContext;
 import com.cloud.utils.exception.CloudRuntimeException;
+
+import java.nio.charset.StandardCharsets;
+
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
@@ -34,8 +37,20 @@ public class StorageProviderFactory {
     private static final Logger s_logger = LogManager.getLogger(StorageProviderFactory.class);
 
     public static StorageStrategy getStrategy(OntapStorage ontapStorage) {
+        s_logger.info("Initializing ontapStorage:::::::::::: " + ontapStorage.toString());
         ProtocolType protocol = ontapStorage.getProtocol();
         s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
+        String decodedPassword = new String(java.util.Base64.getDecoder().decode(ontapStorage.getPassword()), StandardCharsets.UTF_8);
+        s_logger.info("Initializing StorageProviderFactory with decoded password: " + decodedPassword);
+        ontapStorage = new OntapStorage(
+            ontapStorage.getUsername(),
+            decodedPassword,
+            ontapStorage.getStorageIP(),
+            ontapStorage.getSvmName(),
+            ontapStorage.getSize(),
+            protocol);
+        s_logger.info("Initializing ontapStorage1:::::::::::: " + ontapStorage.toString());
+    
         switch (protocol) {
             case NFS3:
                 UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
