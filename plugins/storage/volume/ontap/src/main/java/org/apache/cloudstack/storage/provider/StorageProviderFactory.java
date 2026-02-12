@@ -50,7 +50,6 @@ public class StorageProviderFactory {
             ontapStorage.getSize(),
             protocol);
         s_logger.info("Initializing ontapStorage1:::::::::::: " + ontapStorage.toString());
-    
         switch (protocol) {
             case NFS3:
                 UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
