@@ -183,7 +183,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         details.put(Constants.SIZE, capacityBytes.toString());
 
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
-
         // Connect to ONTAP and create volume
         long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(

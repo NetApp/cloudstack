@@ -75,7 +75,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         String baseURL = Constants.HTTPS + ontapStorage.getStorageIP();
         this.feignClientFactory = new FeignClientFactory();
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
-        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class,baseURL );
+        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL );
     }
 
