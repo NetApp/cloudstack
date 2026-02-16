@@ -128,7 +128,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("createAsync: Storage Pool not found for id: " + dataStore.getId());
                 throw new CloudRuntimeException("createAsync: Storage Pool not found for id: " + dataStore.getId());
             }
-            String storagePoolUuid = dataStore.getUuid();
 
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
 
@@ -145,7 +144,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     volumeVO.setPoolId(storagePool.getId());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                        String svmName = details.get(Constants.SVM_NAME);
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
                         if (lunName == null) {
                             throw new CloudRuntimeException("createAsync: Missing LUN name for volume " + volInfo.getId());
@@ -158,17 +156,17 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                             volumeVO.setFolder(created.getLun().getUuid());
                         }
 
-                        // Create LUN-to-igroup mapping and retrieve the assigned LUN ID
-                        UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
-                        String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
-                        String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+                        // DO NOT map LUN to igroup here - mapping will be done in grantAccess() to per-host igroup
+                        // This ensures each host only sees LUNs mapped to its specific igroup during discovery
+                        // For per-host igroups, LUN mapping happens when VM is actually attached to a host
+                        s_logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
+                                     lunName, volumeVO.getId());
 
-                        // Construct iSCSI path: /<iqn>/<lun_id> format for KVM/libvirt attachment
-                        String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
-                        volumeVO.set_iScsiName(iscsiPath);
-                        volumeVO.setPath(iscsiPath);
-                        s_logger.info("createAsync: Volume [{}] iSCSI path set to {}", volumeVO.getId(), iscsiPath);
-                        createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
+                        // Path will be set during grantAccess when LUN is mapped and we get the LUN ID
+                        // Return LUN name as identifier for CloudStack tracking
+                        volumeVO.set_iScsiName(null);
+                        volumeVO.setPath(null);
+                        createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
 
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
@@ -319,16 +317,23 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     // Only retrieve LUN name for iSCSI volumes
                     String cloudStackVolumeName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue();
                     UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
-                    String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
+                    // Use per-host igroup for this host
+                    // Each host sees only LUNs mapped to its per-host igroup, reducing discovery time
+                    String perHostIgroupName = Utility.getPerHostIgroupName(svmName, storagePoolUuid, host.getName());
+                    s_logger.info("grantAccess: Mapping LUN to per-host igroup [{}] for host [{}]", perHostIgroupName, host.getName());
 
-                    // Verify host initiator is registered in the igroup before allowing access
-                    if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroupName)) {
-                        throw new CloudRuntimeException("grantAccess: Host initiator [" + host.getStorageUrl() +
-                                "] is not present in iGroup [" + accessGroupName + "]");
+                    // Validate per-host igroup exists with the host's initiator
+                    if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, perHostIgroupName)) {
+                        String errMsg = String.format("grantAccess: Per-host igroup [%s] does not exist or does not contain host initiator [%s]. " +
+                                                     "Per-host igroup must be created during host-pool attachment.",
+                                                     perHostIgroupName, host.getStorageUrl());
+                        s_logger.error(errMsg);
+                        throw new CloudRuntimeException(errMsg);
                     }
 
-                    // Create or retrieve existing LUN mapping
-                    String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
+                    // Map LUN to the per-host igroup
+                    String lunNumber = sanStrategy.ensureLunMapped(svmName,cloudStackVolumeName, perHostIgroupName);
+                    s_logger.info("grantAccess: LUN [{}] mapped to per-host igroup [{}] with LUN ID [{}]", cloudStackVolumeName, perHostIgroupName, lunNumber);
 
                     // Update volume path if changed (e.g., after migration or re-mapping)
                     String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
@@ -427,7 +432,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String storagePoolUuid = storagePool.getUuid();
 
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-            String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
+            // Use per-host igroup for unmapping
+            String perHostIgroupName = Utility.getPerHostIgroupName(svmName, storagePoolUuid, host.getName());
+            s_logger.info("revokeAccessForVolume: Using per-host igroup [{}] for host [{}]", perHostIgroupName, host.getName());
 
             // Retrieve LUN name from volume details; if missing, volume may not have been fully created
             String lunName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME) != null ?
@@ -444,29 +451,29 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 return;
             }
 
-            // Verify igroup still exists on ONTAP
-            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, accessGroupName);
+            // Verify per-host igroup still exists on ONTAP
+            AccessGroup accessGroup = getAccessGroupByName(storageStrategy, svmName, perHostIgroupName);
             if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getUuid() == null) {
-                s_logger.warn("revokeAccessForVolume: iGroup [{}] not found on ONTAP, skipping revoke", accessGroupName);
+                s_logger.warn("revokeAccessForVolume: Per-host iGroup [{}] not found on ONTAP, skipping revoke", perHostIgroupName);
                 return;
             }
 
-            // Verify host initiator is in the igroup before attempting to remove mapping
+            // Verify host initiator is in the per-host igroup before attempting to remove mapping
             SANStrategy sanStrategy = (UnifiedSANStrategy) storageStrategy;
             if (!sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroup.getIgroup().getName())) {
-                s_logger.warn("revokeAccessForVolume: Initiator [{}] is not in iGroup [{}], skipping revoke",
-                        host.getStorageUrl(), accessGroupName);
+                s_logger.warn("revokeAccessForVolume: Initiator [{}] is not in per-host iGroup [{}], skipping revoke",
+                        host.getStorageUrl(), perHostIgroupName);
                 return;
             }
 
-            // Remove the LUN mapping from the igroup
+            // Remove the LUN mapping from the per-host igroup
             Map<String, String> disableLogicalAccessMap = new HashMap<>();
             disableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid());
             disableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
             storageStrategy.disableLogicalAccess(disableLogicalAccessMap);
 
-            s_logger.info("revokeAccessForVolume: Successfully revoked access to LUN [{}] for host [{}]",
-                    lunName, host.getName());
+            s_logger.info("revokeAccessForVolume: Successfully revoked access to LUN [{}] from per-host igroup [{}] for host [{}]",
+                    lunName, perHostIgroupName, host.getName());
         }
     }
 

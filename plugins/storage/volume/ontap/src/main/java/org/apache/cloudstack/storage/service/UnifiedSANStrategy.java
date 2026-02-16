@@ -585,18 +585,18 @@ public class UnifiedSANStrategy extends SANStrategy {
     public String ensureLunMapped(String svmName, String lunName, String accessGroupName) {
         s_logger.info("ensureLunMapped: Ensuring LUN [{}] is mapped to igroup [{}] on SVM [{}]", lunName, accessGroupName, svmName);
 
-        // Check existing map first
-        Map<String, String> getMap = Map.of(
-                Constants.LUN_DOT_NAME, lunName,
-                Constants.SVM_DOT_NAME, svmName,
-                Constants.IGROUP_DOT_NAME, accessGroupName
-        );
-        Map<String, String> mapResp = getLogicalAccess(getMap);
-        if (mapResp != null && mapResp.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
-            String lunNumber = mapResp.get(Constants.LOGICAL_UNIT_NUMBER);
-            s_logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
-            return lunNumber;
-        }
+//        // Check existing map first
+//        Map<String, String> getMap = Map.of(
+//                Constants.LUN_DOT_NAME, lunName,
+//                Constants.SVM_DOT_NAME, svmName,
+//                Constants.IGROUP_DOT_NAME, accessGroupName
+//        );
+//        Map<String, String> mapResp = getLogicalAccess(getMap);
+//        if (mapResp != null && mapResp.containsKey(Constants.LOGICAL_UNIT_NUMBER)) {
+//            String lunNumber = mapResp.get(Constants.LOGICAL_UNIT_NUMBER);
+//            s_logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
+//            return lunNumber;
+//        }
 
         // Create if not exists
         Map<String, String> enableMap = Map.of(

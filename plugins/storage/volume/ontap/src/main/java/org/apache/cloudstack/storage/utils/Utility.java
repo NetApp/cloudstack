@@ -144,6 +144,17 @@ public class Utility {
         return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + poolUuid;
     }
 
+    /**
+     * Generate per-host igroup name for improved iSCSI performance.
+     * Each host gets its own igroup, so it only sees LUNs mapped to it.
+     * Format: cs_svmName_poolUuid_hostName
+     */
+    public static String getPerHostIgroupName(String svmName, String poolUuid, String hostName) {
+        // Sanitize host name: remove domain, spaces, special chars
+        String sanitizedHostName = hostName.split("\\.")[0].replaceAll("[^a-zA-Z0-9_-]", "_");
+        return Constants.CS + Constants.UNDERSCORE + svmName + Constants.UNDERSCORE + poolUuid + Constants.UNDERSCORE + sanitizedHostName;
+    }
+
     public static String generateExportPolicyName(String svmName, String volumeName){
         return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
     }

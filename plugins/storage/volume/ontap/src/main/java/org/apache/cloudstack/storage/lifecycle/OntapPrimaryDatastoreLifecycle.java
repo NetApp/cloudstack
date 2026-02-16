@@ -304,7 +304,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 accessGroupRequest.setScope(scope);
                 primaryStore.setDetails(details);// setting details as it does not come from cloudstack
                 accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-                strategy.createAccessGroup(accessGroupRequest);
+                // TODO for now skipping igroup creation for iscsi for testing igroup per host
+                if(ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))){
+                    strategy.createAccessGroup(accessGroupRequest);
+                }
+
             } catch (Exception e) {
                 s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
                 throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
