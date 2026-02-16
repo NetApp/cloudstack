@@ -168,16 +168,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         volumeVO.set_iScsiName(iscsiPath);
                         volumeVO.setPath(iscsiPath);
                         s_logger.info("createAsync: Volume [{}] iSCSI path set to {}", volumeVO.getId(), iscsiPath);
+                        createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
 
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                        // For NFS, the hypervisor handles file creation; we only track pool association
+                        createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
                         s_logger.info("createAsync: Managed NFS volume [{}] associated with pool {}",
                                 volumeVO.getId(), storagePool.getId());
                     }
-
                     volumeDao.update(volumeVO.getId(), volumeVO);
                 }
-                createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
                 s_logger.error(errMsg);
@@ -315,9 +314,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                 Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
                 String svmName = details.get(Constants.SVM_NAME);
-                String cloudStackVolumeName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue();
 
                 if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                    // Only retrieve LUN name for iSCSI volumes
+                    String cloudStackVolumeName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME).getValue();
                     UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
                     String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
 
@@ -336,8 +336,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         volumeVO.set_iScsiName(iscsiPath);
                         volumeVO.setPath(iscsiPath);
                     }
+                } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                    // For NFS, no access grant needed - file is accessible via mount
+                    s_logger.debug("grantAccess: NFS volume [{}], no igroup mapping required", volumeVO.getUuid());
+                    return true;
                 }
-
                 volumeVO.setPoolType(storagePool.getPoolType());
                 volumeVO.setPoolId(storagePool.getId());
                 volumeDao.update(volumeVO.getId(), volumeVO);

@@ -458,7 +458,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             exportClients.add(exportClient);
         }
         exportRule.setClients(exportClients);
-        exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.any));
+        exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.nfs3));
         exportRule.setRoRule(List.of("sys"));
         exportRule.setRwRule(List.of("sys"));
         exportRule.setSuperuser(List.of("sys"));
