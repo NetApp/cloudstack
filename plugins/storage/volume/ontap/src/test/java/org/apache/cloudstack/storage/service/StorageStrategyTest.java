@@ -187,7 +187,7 @@ public class StorageStrategyTest {
     void setUp() {
         // Create OntapStorage using constructor (immutable object)
         OntapStorage ontapStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.NFS3, false);
+                "svm1", null, ProtocolType.NFS3);
 
         // Note: In real implementation, StorageStrategy constructor creates Feign clients
         // For testing, we'll need to mock the FeignClientFactory behavior
@@ -290,7 +290,7 @@ public class StorageStrategyTest {
         // Note: Protocol validation is currently broken in StorageStrategy (enum vs string comparison)
         // so this test verifies connection succeeds even when iSCSI is disabled
         OntapStorage iscsiStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.ISCSI, false);
+                "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient);
@@ -611,7 +611,7 @@ public class StorageStrategyTest {
     public void testGetStoragePath_iscsi() {
         // Setup - recreate with iSCSI protocol
         OntapStorage iscsiStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.ISCSI, false);
+                "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient);
@@ -641,7 +641,7 @@ public class StorageStrategyTest {
     public void testGetStoragePath_iscsi_noService() {
         // Setup - recreate with iSCSI protocol
         OntapStorage iscsiStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.ISCSI, false);
+                "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient);
@@ -662,7 +662,7 @@ public class StorageStrategyTest {
     public void testGetStoragePath_iscsi_noTargetIqn() {
         // Setup - recreate with iSCSI protocol
         OntapStorage iscsiStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.ISCSI, false);
+                "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient);
@@ -712,7 +712,7 @@ public class StorageStrategyTest {
     public void testGetNetworkInterface_iscsi() {
         // Setup - recreate with iSCSI protocol
         OntapStorage iscsiStorage = new OntapStorage("admin", "password", "192.168.1.100",
-                "svm1", null, ProtocolType.ISCSI, false);
+                "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient);

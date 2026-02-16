@@ -89,7 +89,7 @@ class UnifiedSANStrategyTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(ontapStorage.getManagementLIF()).thenReturn("192.168.1.100");
+        lenient().when(ontapStorage.getStorageIP()).thenReturn("192.168.1.100");
         lenient().when(ontapStorage.getUsername()).thenReturn("admin");
         lenient().when(ontapStorage.getPassword()).thenReturn("password");
         lenient().when(ontapStorage.getSvmName()).thenReturn("svm1");

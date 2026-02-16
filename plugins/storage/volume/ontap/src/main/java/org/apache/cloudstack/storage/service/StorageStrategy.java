@@ -79,7 +79,7 @@ public abstract class StorageStrategy {
 
     public StorageStrategy(OntapStorage ontapStorage) {
         storage = ontapStorage;
-        String baseURL = Constants.HTTPS + storage.getManagementLIF();
+        String baseURL = Constants.HTTPS + storage.getStorageIP();
         s_logger.info("Initializing StorageStrategy with base URL: " + baseURL);
         // Initialize FeignClientFactory and create clients
         this.feignClientFactory = new FeignClientFactory();
@@ -93,7 +93,7 @@ public abstract class StorageStrategy {
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
     public boolean connect() {
-        s_logger.info("Attempting to connect to ONTAP cluster at " + storage.getManagementLIF() + " and validate SVM " +
+        s_logger.info("Attempting to connect to ONTAP cluster at " + storage.getStorageIP() + " and validate SVM " +
                 storage.getSvmName() + ", protocol " + storage.getProtocol());
         //Get AuthHeader
         String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
