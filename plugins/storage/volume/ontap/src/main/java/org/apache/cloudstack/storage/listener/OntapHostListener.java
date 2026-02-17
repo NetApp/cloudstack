@@ -33,6 +33,7 @@ import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.DeleteStoragePoolCommand;
 import com.cloud.host.Host;
+import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.StoragePool;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
@@ -82,7 +83,17 @@ public class OntapHostListener implements HypervisorHostListener {
             // Create the ModifyStoragePoolCommand to send to the agent
             // Note: Always send command even if database entry exists, because agent may have restarted
             // and lost in-memory pool registration. The command handler is idempotent.
-            ModifyStoragePoolCommand cmd = new ModifyStoragePoolCommand(true, pool, detailsMap);
+            // For managed iSCSI pools, no local mount path is needed (null), only NFS pools need mount points
+            ModifyStoragePoolCommand cmd;
+            if (pool.getPoolType() == StoragePoolType.Iscsi) {
+                // iSCSI managed storage: no mount point, pass null for localPath
+                cmd = new ModifyStoragePoolCommand(true, pool, null, detailsMap);
+                logger.debug("Creating ModifyStoragePoolCommand for iSCSI pool {} without localPath", pool.getName());
+            } else {
+                // NFS/Other storage: use default mount path generation
+                cmd = new ModifyStoragePoolCommand(true, pool, detailsMap);
+                logger.debug("Creating ModifyStoragePoolCommand for {} pool {} with auto-generated localPath", pool.getPoolType(), pool.getName());
+            }
 
             Answer answer = _agentMgr.easySend(hostId, cmd);
 
@@ -107,19 +118,25 @@ public class OntapHostListener implements HypervisorHostListener {
             }
 
             String localPath = poolInfo.getLocalPath();
-            logger.info("Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
+            if (pool.getPoolType() == StoragePoolType.Iscsi) {
+                // iSCSI pools don't have mount points
+                logger.info("Storage pool {} successfully registered (iSCSI managed storage, no mount point)", pool.getName());
+            } else {
+                logger.info("Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
+            }
 
-            // Update or create the storage_pool_host_ref entry with the correct local_path
+            // Update or create the storage_pool_host_ref entry
+            // For iSCSI pools, localPath may be null (no mount point)
             StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(poolId, hostId);
 
             if (storagePoolHost == null) {
                 storagePoolHost = new StoragePoolHostVO(poolId, hostId, localPath);
                 storagePoolHostDao.persist(storagePoolHost);
-                logger.info("Created storage_pool_host_ref entry for pool {} and host {}", pool.getName(), host.getName());
+                logger.info("Created storage_pool_host_ref entry for pool {} and host {} with localPath: {}", pool.getName(), host.getName(), localPath);
             } else {
                 storagePoolHost.setLocalPath(localPath);
                 storagePoolHostDao.update(storagePoolHost.getId(), storagePoolHost);
-                logger.info("Updated storage_pool_host_ref entry with local_path: {}", localPath);
+                logger.info("Updated storage_pool_host_ref entry for pool {} with localPath: {}", pool.getName(), localPath);
             }
 
             // Update pool capacity/usage information

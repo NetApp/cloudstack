@@ -87,21 +87,31 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     @Override
     public boolean connectPhysicalDisk(String volumeUuid, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
+        logger.info("connectPhysicalDisk called: volumeUuid={}, pool.host={}, pool.port={}, pool.uuid={}", 
+                    volumeUuid, pool.getSourceHost(), pool.getSourcePort(), pool.getUuid());
+        
         // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 -o new
+        String iqnTarget = getIqn(volumeUuid);
+        logger.info("Parsed IQN from volumeUuid: {}", iqnTarget);
+        
         Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
 
         iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", getIqn(volumeUuid));
+        iScsiAdmCmd.add("-T", iqnTarget);
         iScsiAdmCmd.add("-p", pool.getSourceHost() + ":" + pool.getSourcePort());
         iScsiAdmCmd.add("-o", "new");
 
+        logger.info("Executing: iscsiadm -m node -T {} -p {}:{} -o new", iqnTarget, pool.getSourceHost(), pool.getSourcePort());
         String result = iScsiAdmCmd.execute();
+        logger.info("iscsiadm -o new result: {}", result == null ? "SUCCESS (null)" : result);
 
         if (result != null) {
             // Node record may already exist from a previous run; accept and proceed
             if (isNonFatalNodeCreate(result)) {
                 logger.debug("iSCSI node already exists for {}@{}:{}, proceeding", getIqn(volumeUuid), pool.getSourceHost(), pool.getSourcePort());
+                logger.info("iSCSI node already exists (non-fatal), proceeding");
             } else {
+                logger.info("Failed to add iSCSI target {}: {}", volumeUuid, result);
                 logger.debug("Failed to add iSCSI target " + volumeUuid);
                 System.out.println("Failed to add iSCSI target " + volumeUuid);
 
@@ -126,6 +136,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
                 // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --op update -n node.session.auth.password -v password
                 executeChapCommand(volumeUuid, pool, "node.session.auth.password", chapInitiatorSecret, "password");
             } catch (Exception ex) {
+                logger.info("CHAP configuration failed for volumeUuid={}: {}", volumeUuid, ex.getMessage());
                 return false;
             }
         }
@@ -141,12 +152,16 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         iScsiAdmCmd.add("-p", host + ":" + port);
         iScsiAdmCmd.add("--login");
 
+        logger.info("Executing: iscsiadm -m node -T {} -p {}:{} --login", iqn, host, port);
         result = iScsiAdmCmd.execute();
+        logger.info("iscsiadm --login result: {}", result == null ? "SUCCESS (null)" : result);
 
         if (result != null) {
             if (isNonFatalLogin(result)) {
                 logger.debug("iSCSI login returned benign message for {}@{}:{}: {}", iqn, host, port, result);
+                logger.info("iSCSI login returned benign message (non-fatal), proceeding");
             } else {
+                logger.info("Failed to log in to iSCSI target {}: {}", volumeUuid, result);
                 logger.debug("Failed to log in to iSCSI target " + volumeUuid + ": " + result);
                 System.out.println("Failed to log in to iSCSI target " + volumeUuid);
 
@@ -167,8 +182,10 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         // After a certain number of tries and a certain waiting period in between tries,
         // this method could still return (it should not block indefinitely) (the race condition
         // isn't solved here, but made highly unlikely to be a problem).
+        logger.info("Waiting for disk to become available: volumeUuid={}", volumeUuid);
         waitForDiskToBecomeAvailable(volumeUuid, pool);
 
+        logger.info("connectPhysicalDisk completed successfully for volumeUuid={}", volumeUuid);
         return true;
     }
 
