@@ -25,11 +25,7 @@ import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
-import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Initiator;
-import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.LunMap;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.*;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -229,13 +225,14 @@ class UnifiedSANStrategyTest {
     @Test
     void testGetCloudStackVolume_Success() {
         // Setup
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "/vol/vol1/lun1");
-
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
         Lun lun = new Lun();
         lun.setName("/vol/vol1/lun1");
         lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        lun.setSvm(svm);
+        cloudStackVolumeRequest.setLun(lun);
 
         OntapResponse<Lun> response = new OntapResponse<>();
         response.setRecords(List.of(lun));
@@ -247,7 +244,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(response);
 
             // Execute
-            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(values);
+            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest);
 
             // Verify
             assertNotNull(result);
@@ -260,9 +257,14 @@ class UnifiedSANStrategyTest {
     @Test
     void testGetCloudStackVolume_NotFound_ReturnsNull() {
         // Setup
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "/vol/vol1/lun1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        lun.setSvm(svm);
+        cloudStackVolumeRequest.setLun(lun);
 
         OntapResponse<Lun> response = new OntapResponse<>();
         response.setRecords(new ArrayList<>());
@@ -274,7 +276,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(response);
 
             // Execute
-            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(values);
+            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest);
 
             // Verify
             assertNull(result);
@@ -443,12 +445,13 @@ class UnifiedSANStrategyTest {
     @Test
     void testGetAccessGroup_Success() {
         // Setup
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "igroup1");
-
+        AccessGroup accessGroupRequest = new AccessGroup();
         Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
         igroup.setName("igroup1");
+        accessGroupRequest.setIgroup(igroup);
 
         OntapResponse<Igroup> response = new OntapResponse<>();
         response.setRecords(List.of(igroup));
@@ -460,7 +463,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(response);
 
             // Execute
-            AccessGroup result = unifiedSANStrategy.getAccessGroup(values);
+            AccessGroup result = unifiedSANStrategy.getAccessGroup(accessGroupRequest);
 
             // Verify
             assertNotNull(result);
@@ -697,70 +700,72 @@ class UnifiedSANStrategyTest {
     void testValidateInitiatorInAccessGroup_InitiatorFound_ReturnsTrue() {
         // Setup
         String hostInitiator = "iqn.1993-08.org.debian:01:host1";
-        String svmName = "svm1";
         String accessGroupName = "igroup1";
 
+        AccessGroup accessGroupRequest = new AccessGroup();
         Initiator initiator = new Initiator();
         initiator.setName(hostInitiator);
 
         Igroup igroup = new Igroup();
         igroup.setName(accessGroupName);
         igroup.setInitiators(List.of(initiator));
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
 
-        OntapResponse<Igroup> response = new OntapResponse<>();
-        response.setRecords(List.of(igroup));
+        // Execute
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, accessGroupRequest);
 
-        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
-            utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
-
-            when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(response);
-
-            // Execute
-            boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, svmName, accessGroupName);
-
-            // Verify
-            assertTrue(result);
-        }
+        // Verify
+        assertTrue(result);
     }
 
     @Test
     void testValidateInitiatorInAccessGroup_InitiatorNotFound_ReturnsFalse() {
         // Setup
         String hostInitiator = "iqn.1993-08.org.debian:01:host1";
-        String svmName = "svm1";
         String accessGroupName = "igroup1";
 
         Initiator differentInitiator = new Initiator();
         differentInitiator.setName("iqn.1993-08.org.debian:01:host2");
 
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Initiator initiator = new Initiator();
+        initiator.setName(hostInitiator);
+
         Igroup igroup = new Igroup();
         igroup.setName(accessGroupName);
         igroup.setInitiators(List.of(differentInitiator));
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
 
-        OntapResponse<Igroup> response = new OntapResponse<>();
-        response.setRecords(List.of(igroup));
+        // Execute
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, accessGroupRequest);
 
-        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
-            utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
-
-            when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(response);
-
-            // Execute
-            boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, svmName, accessGroupName);
-
-            // Verify
-            assertFalse(result);
-        }
+        // Verify
+        assertFalse(result);
     }
 
     @Test
     void testValidateInitiatorInAccessGroup_EmptyInitiator_ReturnsFalse() {
-        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup("", "svm1", "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Initiator initiator = new Initiator();
+        initiator.setName("hostInitiator");
+
+        Igroup igroup = new Igroup();
+        igroup.setName("accessGroupName");
+        igroup.setInitiators(List.of(initiator));
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup("", accessGroupRequest);
         assertFalse(result);
 
-        result = unifiedSANStrategy.validateInitiatorInAccessGroup(null, "svm1", "igroup1");
+        result = unifiedSANStrategy.validateInitiatorInAccessGroup(null, accessGroupRequest);
         assertFalse(result);
     }
 
@@ -769,33 +774,44 @@ class UnifiedSANStrategyTest {
         // Setup
         String hostInitiator = "iqn.1993-08.org.debian:01:host1";
 
-        OntapResponse<Igroup> response = new OntapResponse<>();
-        response.setRecords(new ArrayList<>());
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Initiator initiator = new Initiator();
+        initiator.setName(hostInitiator);
 
-        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
-            utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
+        Igroup igroup = new Igroup();
+        igroup.setName("accessGroupName");
+        igroup.setInitiators(List.of(initiator));
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
 
-            when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(response);
+        // Execute - validateInitiatorInAccessGroup checks the AccessGroup directly, no feign calls needed
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, accessGroupRequest);
 
-            // Execute
-            boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, "svm1", "igroup1");
-
-            // Verify
-            assertFalse(result);
-        }
+        // Verify - initiator IS present in the igroup, so this returns true
+        assertTrue(result);
     }
 
     @Test
     void testCopyCloudStackVolume_Success() {
-        // Setup
+        // Setup - prepare LUN with clone structure as the caller would
+        Lun.Source source = new Lun.Source();
+        source.setName("/vol/vol1/lun1");
+        Lun.Clone clone = new Lun.Clone();
+        clone.setSource(source);
+
         Lun lun = new Lun();
-        lun.setName("/vol/vol1/lun1");
+        lun.setName("/vol/vol1/lun1_clone");
+        lun.setClone(clone);
+
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
 
+        Lun clonedLun = new Lun();
+        clonedLun.setName("/vol/vol1/lun1_clone");
         OntapResponse<Lun> response = new OntapResponse<>();
-        response.setRecords(List.of(new Lun()));
+        response.setRecords(List.of(clonedLun));
 
         try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
             utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
@@ -805,9 +821,12 @@ class UnifiedSANStrategyTest {
                     .thenReturn(response);
 
             // Execute
-            assertDoesNotThrow(() -> unifiedSANStrategy.copyCloudStackVolume(request));
+            CloudStackVolume result = unifiedSANStrategy.copyCloudStackVolume(request);
 
             // Verify
+            assertNotNull(result);
+            assertNotNull(result.getLun());
+
             ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
             verify(sanFeignClient).createLun(eq(authHeader), eq(true), lunCaptor.capture());
 
@@ -1172,30 +1191,44 @@ class UnifiedSANStrategyTest {
     @Test
     void testGetAccessGroup_EmptyValues_ThrowsException() {
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getAccessGroup(new HashMap<>()));
+            () -> unifiedSANStrategy.getAccessGroup(new AccessGroup()));
     }
 
     @Test
     void testGetAccessGroup_NullSvmName_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.NAME, "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName(null);
+        igroup.setSvm(svm);
+        igroup.setName("igroup1");
+        accessGroupRequest.setIgroup(igroup);
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getAccessGroup(values));
+            () -> unifiedSANStrategy.getAccessGroup(accessGroupRequest));
     }
 
     @Test
     void testGetAccessGroup_NullIgroupName_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        igroup.setName(null);
+        accessGroupRequest.setIgroup(igroup);
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getAccessGroup(values));
+            () -> unifiedSANStrategy.getAccessGroup(accessGroupRequest));
     }
 
     @Test
     void testGetAccessGroup_FeignExceptionNon404_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        igroup.setName("igroup1");
+        accessGroupRequest.setIgroup(igroup);
 
         FeignException feignException = mock(FeignException.class);
         when(feignException.status()).thenReturn(500);
@@ -1208,7 +1241,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenThrow(feignException);
 
             assertThrows(CloudRuntimeException.class,
-                () -> unifiedSANStrategy.getAccessGroup(values));
+                () -> unifiedSANStrategy.getAccessGroup(accessGroupRequest));
         }
     }
 
@@ -1221,30 +1254,45 @@ class UnifiedSANStrategyTest {
     @Test
     void testGetCloudStackVolume_EmptyValues_ThrowsException() {
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getCloudStackVolume(new HashMap<>()));
+            () -> unifiedSANStrategy.getCloudStackVolume(new CloudStackVolume()));
     }
 
     @Test
     void testGetCloudStackVolume_NullSvmName_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.NAME, "/vol/vol1/lun1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName(null);
+        cloudStackVolumeRequest.setLun(lun);
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getCloudStackVolume(values));
+            () -> unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest));
     }
 
     @Test
     void testGetCloudStackVolume_NullLunName_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName(null);
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        cloudStackVolumeRequest.setLun(lun);
         assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.getCloudStackVolume(values));
+            () -> unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest));
     }
 
     @Test
     void testGetCloudStackVolume_FeignExceptionNon404_ThrowsException() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "/vol/vol1/lun1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        lun.setSvm(svm);
+        cloudStackVolumeRequest.setLun(lun);
 
         FeignException feignException = mock(FeignException.class);
         when(feignException.status()).thenReturn(500);
@@ -1257,7 +1305,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenThrow(feignException);
 
             assertThrows(CloudRuntimeException.class,
-                () -> unifiedSANStrategy.getCloudStackVolume(values));
+                () -> unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest));
         }
     }
 
@@ -1435,28 +1483,25 @@ class UnifiedSANStrategyTest {
     @Test
     void testValidateInitiatorInAccessGroup_NullIgroupInitiators_ReturnsFalse() {
         String hostInitiator = "iqn.1993-08.org.debian:01:host1";
-        String svmName = "svm1";
         String accessGroupName = "igroup1";
+
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Initiator initiator = new Initiator();
+        initiator.setName(hostInitiator);
 
         Igroup igroup = new Igroup();
         igroup.setName(accessGroupName);
         igroup.setInitiators(null);
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
 
-        OntapResponse<Igroup> response = new OntapResponse<>();
-        response.setRecords(List.of(igroup));
+        // Execute - validateInitiatorInAccessGroup checks the AccessGroup directly, no feign calls needed
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, accessGroupRequest);
 
-        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
-            utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
-
-            when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(response);
-
-            // Execute
-            boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, svmName, accessGroupName);
-
-            // Verify
-            assertFalse(result);
-        }
+        // Verify - initiators list is null, so returns false
+        assertFalse(result);
     }
 
     // ============= Additional Test Cases for Complete Coverage =============
@@ -1551,9 +1596,14 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testGetCloudStackVolume_FeignException404_ReturnsNull() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "/vol/vol1/lun1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        lun.setSvm(svm);
+        cloudStackVolumeRequest.setLun(lun);
 
         FeignException feignException = mock(FeignException.class);
         when(feignException.status()).thenReturn(404);
@@ -1564,7 +1614,7 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenThrow(feignException);
 
-            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(values);
+            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest);
 
             assertNull(result);
         }
@@ -1572,9 +1622,14 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testGetCloudStackVolume_EmptyResponse_ReturnsNull() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "/vol/vol1/lun1");
+        CloudStackVolume cloudStackVolumeRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        lun.setUuid("lun-uuid-123");
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        lun.setSvm(svm);
+        cloudStackVolumeRequest.setLun(lun);
 
         OntapResponse<Lun> emptyResponse = new OntapResponse<>();
         emptyResponse.setRecords(new ArrayList<>());
@@ -1585,7 +1640,7 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
 
-            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(values);
+            CloudStackVolume result = unifiedSANStrategy.getCloudStackVolume(cloudStackVolumeRequest);
 
             assertNull(result);
         }
@@ -1593,9 +1648,13 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testGetAccessGroup_FeignException404_ReturnsNull() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        igroup.setName("igroup1");
+        accessGroupRequest.setIgroup(igroup);
 
         FeignException feignException = mock(FeignException.class);
         when(feignException.status()).thenReturn(404);
@@ -1606,7 +1665,7 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenThrow(feignException);
 
-            AccessGroup result = unifiedSANStrategy.getAccessGroup(values);
+            AccessGroup result = unifiedSANStrategy.getAccessGroup(accessGroupRequest);
 
             assertNull(result);
         }
@@ -1614,9 +1673,13 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testGetAccessGroup_EmptyResponse_ReturnsNull() {
-        Map<String, String> values = new HashMap<>();
-        values.put(Constants.SVM_DOT_NAME, "svm1");
-        values.put(Constants.NAME, "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Igroup igroup = new Igroup();
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        igroup.setName("igroup1");
+        accessGroupRequest.setIgroup(igroup);
 
         OntapResponse<Igroup> emptyResponse = new OntapResponse<>();
         emptyResponse.setRecords(new ArrayList<>());
@@ -1627,7 +1690,7 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
 
-            AccessGroup result = unifiedSANStrategy.getAccessGroup(values);
+            AccessGroup result = unifiedSANStrategy.getAccessGroup(accessGroupRequest);
 
             assertNull(result);
         }
@@ -1770,29 +1833,19 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testValidateInitiatorInAccessGroup_NullInitiator_ReturnsFalse() {
-        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(null, "svm1", "igroup1");
+        AccessGroup accessGroupRequest = new AccessGroup();
+        Initiator initiator = new Initiator();
+        initiator.setName("hostInitiator");
+
+        Igroup igroup = new Igroup();
+        igroup.setName("accessGroupName");
+        igroup.setInitiators(null);
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        igroup.setSvm(svm);
+        accessGroupRequest.setIgroup(igroup);
+        boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(null, accessGroupRequest);
         assertFalse(result);
-    }
-
-    @Test
-    void testValidateInitiatorInAccessGroup_AccessGroupNotFound_ReturnsFalse() {
-        String hostInitiator = "iqn.1993-08.org.debian:01:host1";
-        String svmName = "svm1";
-        String accessGroupName = "igroup1";
-
-        OntapResponse<Igroup> emptyResponse = new OntapResponse<>();
-        emptyResponse.setRecords(new ArrayList<>());
-
-        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
-            utilityMock.when(() -> Utility.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
-
-            when(sanFeignClient.getIgroupResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
-
-            boolean result = unifiedSANStrategy.validateInitiatorInAccessGroup(hostInitiator, svmName, accessGroupName);
-
-            assertFalse(result);
-        }
     }
 
     @Test
