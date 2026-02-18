@@ -525,6 +525,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 s_logger.error("takeSnapshot : Storage Pool not found for id: " + volumeVO.getPoolId());
                 throw new CloudRuntimeException("takeSnapshot : Storage Pool not found for id: " + volumeVO.getPoolId());
             }
+            s_logger.info("takeSnapshot: storagePool: {}", storagePool.toString());
 
             Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(volumeVO.getPoolId());
             StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(poolDetails);
@@ -636,7 +637,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ProtocolType protocolType = null;
         String protocol = null;
         long size = 0L;
-        String snapshotName = snapshotInfo.getName();
+        String snapshotName = null;
         String lunName = null;
 
         try {
@@ -645,15 +646,17 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                 size = cloudStackVolume.getLun().getSpace().getSize();
                 lunName = cloudStackVolume.getLun().getName();
-                if(snapshotName == null || snapshotName.isEmpty()) {
-                    snapshotName = lunName + "-snapshot-" + snapshotInfo.getUuid();
+                if(snapshotInfo.getName() == null || snapshotInfo.getName().isEmpty()) {
+                    snapshotName = Constants.VOL + storagePool.getName() + Constants.SLASH + lunName + "-snapshot-" + snapshotInfo.getUuid();
                     s_logger.info("snapshotCloudStackVolumeRequestByProtocol: size: {} ", size);
                     s_logger.info("snapshotCloudStackVolumeRequestByProtocol: lunName: {} ", lunName);
                     s_logger.info("snapshotCloudStackVolumeRequestByProtocol: snapshotName: {} ", snapshotName);
-                    int trimRequired = snapshotName.length() - Constants.MAX_SNAPSHOT_NAME_LENGTH;
-                    if (trimRequired > 0) {
-                        snapshotName = StringUtils.left(lunName, (lunName.length() - trimRequired)) + "-" + snapshotInfo.getUuid();
-                    }
+                } else {
+                    snapshotName = Constants.VOL + storagePool.getName() + Constants.SLASH + snapshotInfo.getName();
+                }
+                int trimRequired = snapshotName.length() - Constants.MAX_SNAPSHOT_NAME_LENGTH;
+                if (trimRequired > 0) {
+                    snapshotName = StringUtils.left(lunName, (lunName.length() - trimRequired)) + "-" + snapshotInfo.getUuid();
                 }
             }
             s_logger.info("snapshotCloudStackVolumeRequestByProtocol: snapshotName after trim: {} ", snapshotName);
