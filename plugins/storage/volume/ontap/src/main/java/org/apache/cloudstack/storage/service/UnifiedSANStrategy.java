@@ -177,7 +177,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         String lunName = cloudStackVolumeRequest.getLun().getName();
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            Map<String, Object> queryParams = Map.of(Constants.SVM_DOT_NAME, svmName, Constants.NAME, lunName);
+            Map<String, Object> queryParams = Map.of(Constants.SVM_DOT_NAME, svmName, Constants.NAME, lunName, Constants.FIELDS, "space");
             OntapResponse<Lun> lunResponse = sanFeignClient.getLunResponse(authHeader, queryParams);
             if (lunResponse == null || lunResponse.getRecords() == null || lunResponse.getRecords().isEmpty()) {
                 s_logger.warn("getCloudStackVolume: Lun '{}' on SVM '{}' not found. Returning null.", lunName, svmName);

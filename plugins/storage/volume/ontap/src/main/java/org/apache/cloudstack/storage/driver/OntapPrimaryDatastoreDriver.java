@@ -504,7 +504,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void takeSnapshot(SnapshotInfo snapshot, AsyncCompletionCallback<CreateCmdResult> callback) {
-        s_logger.info("takeSnapshot: snapshot info ", snapshot.toString());
+        s_logger.info("takeSnapshot: snapshot info {}", snapshot.toString());
         CreateCmdResult result;
         String snapshotId = null;
         long snapshotSize = 0L;
@@ -513,12 +513,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         try {
             VolumeInfo volumeInfo = snapshot.getBaseVolume();
-            s_logger.info("takeSnapshot: volumeInfo: ", volumeInfo.toString());
+            s_logger.info("takeSnapshot: volumeInfo: {}", volumeInfo.toString());
             VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
             if (volumeVO == null) {
                 throw new CloudRuntimeException("takeSnapshot: VolumeVO not found for id: " + volumeInfo.getId());
             }
-            s_logger.info("takeSnapshot: volumeVO: ", volumeVO.toString());
+            s_logger.info("takeSnapshot: volumeVO: {}", volumeVO.toString());
 
             StoragePoolVO storagePool = storagePoolDao.findById(volumeVO.getPoolId());
             if(storagePool == null) {
