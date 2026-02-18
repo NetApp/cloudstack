@@ -493,7 +493,7 @@ public abstract class StorageStrategy {
      *     cloneNameSpace for Nvme/TCP and Nvme/FC protocol
      * @param cloudstackVolume the CloudStack volume to copy
      */
-    abstract public void copyCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public CloudStackVolume copyCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -501,10 +501,10 @@ public abstract class StorageStrategy {
      *     getLun       for iSCSI, FC protocols
      *     getFile      for NFS3.0 and NFS4.1 protocols
      *     getNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param cloudStackVolumeMap the CloudStack volume to retrieve
+     * @param cloudStackVolume the CloudStack volume to retrieve
      * @return the retrieved CloudStackVolume object
      */
-    abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
+    abstract public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudStackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -540,9 +540,9 @@ public abstract class StorageStrategy {
      *     e.g., getIGroup for iSCSI and FC protocols
      *     e.g., getExportPolicy for NFS 3.0 and NFS 4.1 protocols
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
-      * @param values map to get access group values like name, svm name etc.
+      * @param accessGroup map to get access group values like name, svm name etc.
      */
-    abstract public AccessGroup getAccessGroup(Map<String, String> values);
+    abstract public AccessGroup getAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses

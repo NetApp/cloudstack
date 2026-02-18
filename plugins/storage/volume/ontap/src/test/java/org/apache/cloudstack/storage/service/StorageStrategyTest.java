@@ -137,12 +137,12 @@ public class StorageStrategyTest {
         }
 
         @Override
-        public void copyCloudStackVolume(org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
+        public CloudStackVolume copyCloudStackVolume(org.apache.cloudstack.storage.service.model.CloudStackVolume cloudstackVolume) {
+            return null;
         }
 
         @Override
-        public CloudStackVolume getCloudStackVolume(
-                Map<String, String> cloudStackVolumeMap) {
+        public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudStackVolume) {
             return null;
         }
 
@@ -163,8 +163,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        public AccessGroup getAccessGroup(
-                Map<String, String> values) {
+        public AccessGroup getAccessGroup(AccessGroup accessGroup) {
             return null;
         }
 

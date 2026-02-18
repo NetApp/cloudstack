@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.service;
 
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.service.model.AccessGroup;
 
 public abstract class SANStrategy extends StorageStrategy {
     public SANStrategy(OntapStorage ontapStorage) {
@@ -46,5 +47,5 @@ public abstract class SANStrategy extends StorageStrategy {
      * @param accessGroupName the igroup name
      * @return true if the initiator is found in the igroup, false otherwise
      */
-    public abstract boolean validateInitiatorInAccessGroup(String hostInitiator, String svmName, String accessGroupName);
+    public abstract boolean validateInitiatorInAccessGroup(String hostInitiator, AccessGroup accessGroup);
 }

@@ -131,7 +131,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public CloudStackVolume copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
             s_logger.error("copyCloudStackVolume: Lun clone creation failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("copyCloudStackVolume : Failed to create Lun clone, invalid request");
@@ -142,15 +142,18 @@ public class UnifiedSANStrategy extends SANStrategy {
             // Get AuthHeader
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             // Create URI for lun clone creation
-            Lun lunCloneRequest = cloudstackVolume.getLun();
-            Lun.Clone clone = new Lun.Clone();
-            Lun.Source source = new Lun.Source();
-            source.setName(cloudstackVolume.getLun().getName());
-            clone.setSource(source);
-            lunCloneRequest.setClone(clone);
-            String lunCloneName = cloudstackVolume.getLun().getName() + "_clone";
-            lunCloneRequest.setName(lunCloneName);
-            sanFeignClient.createLun(authHeader, true, lunCloneRequest);
+            OntapResponse<Lun> clonedLun = sanFeignClient.createLun(authHeader, true, cloudstackVolume.getLun());
+            if (clonedLun == null || clonedLun.getRecords() == null || clonedLun.getRecords().size() == 0) {
+                s_logger.error("copyCloudStackVolume: LUN cloned failed for Lun {}", cloudstackVolume.getLun().getName());
+                throw new CloudRuntimeException("Failed to create Lun clone: " + cloudstackVolume.getLun().getName());
+            }
+            Lun lun = clonedLun.getRecords().get(0);
+            s_logger.debug("copyCloudStackVolume: LUN cloned created successfully. Lun: {}", lun);
+            s_logger.info("copyCloudStackVolume: LUN cloned created successfully. LunName: {}", lun.getName());
+
+            CloudStackVolume createdCloudStackVolume = new CloudStackVolume();
+            createdCloudStackVolume.setLun(lun);
+            return createdCloudStackVolume;
         } catch (FeignException e) {
             s_logger.error("FeignException occurred while creating Lun clone: {}, Status: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun clone: " + e.getMessage());
@@ -161,19 +164,17 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public CloudStackVolume getCloudStackVolume(Map<String, String> values) {
+    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudStackVolumeRequest) {
         s_logger.info("getCloudStackVolume : fetching Lun");
-        s_logger.debug("getCloudStackVolume : fetching Lun with params {} ", values);
-        if (values == null || values.isEmpty()) {
-            s_logger.error("getCloudStackVolume: get Lun failed. Invalid request: {}", values);
+        s_logger.debug("getCloudStackVolume : CloudStackVolumeRequest {} ", cloudStackVolumeRequest);
+        if (cloudStackVolumeRequest == null || cloudStackVolumeRequest.getLun() == null || cloudStackVolumeRequest.getLun().getSvm() == null
+                || cloudStackVolumeRequest.getLun().getSvm().getName() == null || cloudStackVolumeRequest.getLun().getSvm().getName().isEmpty()
+                || cloudStackVolumeRequest.getLun().getName() == null || cloudStackVolumeRequest.getLun().getName().isEmpty()) {
+            s_logger.error("getCloudStackVolume: get Lun failed. Invalid request: {}", cloudStackVolumeRequest);
             throw new CloudRuntimeException("getCloudStackVolume : get Lun Failed, invalid request");
         }
-        String svmName = values.get(Constants.SVM_DOT_NAME);
-        String lunName = values.get(Constants.NAME);
-        if (svmName == null || lunName == null || svmName.isEmpty() || lunName.isEmpty()) {
-            s_logger.error("getCloudStackVolume: get Lun failed. Invalid svm:{} or Lun name: {}", svmName, lunName);
-            throw new CloudRuntimeException("getCloudStackVolume : Failed to get Lun, invalid request");
-        }
+        String svmName = cloudStackVolumeRequest.getLun().getSvm().getName();
+        String lunName = cloudStackVolumeRequest.getLun().getName();
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             Map<String, Object> queryParams = Map.of(Constants.SVM_DOT_NAME, svmName, Constants.NAME, lunName);
@@ -410,19 +411,17 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public AccessGroup getAccessGroup(Map<String, String> values) {
+    public AccessGroup getAccessGroup(AccessGroup accessGroupRequest) {
         s_logger.info("getAccessGroup : fetch Igroup");
-        s_logger.debug("getAccessGroup : fetching Igroup with params {} ", values);
-        if (values == null || values.isEmpty()) {
-            s_logger.error("getAccessGroup: get Igroup failed. Invalid request: {}", values);
+        s_logger.debug("getAccessGroup : accessGroupRequest params {} ", accessGroupRequest);
+        if (accessGroupRequest == null || accessGroupRequest.getIgroup() == null
+                || accessGroupRequest.getIgroup().getName() == null || accessGroupRequest.getIgroup().getName().isEmpty() || accessGroupRequest.getIgroup().getSvm() == null
+                || accessGroupRequest.getIgroup().getSvm().getName() == null || accessGroupRequest.getIgroup().getSvm().getName().isEmpty()) {
+            s_logger.error("getAccessGroup: get Igroup failed. Invalid request: {}", accessGroupRequest);
             throw new CloudRuntimeException("getAccessGroup : get Igroup Failed, invalid request");
         }
-        String svmName = values.get(Constants.SVM_DOT_NAME);
-        String igroupName = values.get(Constants.NAME);
-        if (svmName == null || igroupName == null || svmName.isEmpty() || igroupName.isEmpty()) {
-            s_logger.error("getAccessGroup: get Igroup failed. Invalid svm:{} or igroup name: {}", svmName, igroupName);
-            throw new CloudRuntimeException("getAccessGroup : Failed to get Igroup, invalid request");
-        }
+        String svmName = accessGroupRequest.getIgroup().getSvm().getName();
+        String igroupName = accessGroupRequest.getIgroup().getName();
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             Map<String, Object> queryParams = Map.of(Constants.SVM_DOT_NAME, svmName, Constants.NAME, igroupName, Constants.FIELDS, Constants.INITIATORS);
@@ -613,21 +612,16 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public boolean validateInitiatorInAccessGroup(String hostInitiator, String svmName, String accessGroupName) {
-        s_logger.info("validateInitiatorInAccessGroup: Validating initiator [{}] is in igroup [{}] on SVM [{}]", hostInitiator, accessGroupName, svmName);
+    public boolean validateInitiatorInAccessGroup(String hostInitiator, AccessGroup accessGroup) {
+        s_logger.info("validateInitiatorInAccessGroup: Validating initiator [{}] is in igroup", hostInitiator);
 
         if (hostInitiator == null || hostInitiator.isEmpty()) {
             s_logger.warn("validateInitiatorInAccessGroup: host initiator is null or empty");
             return false;
         }
 
-        Map<String, String> getAccessGroupMap = Map.of(
-                Constants.NAME, accessGroupName,
-                Constants.SVM_DOT_NAME, svmName
-        );
-        AccessGroup accessGroup = getAccessGroup(getAccessGroupMap);
-        if (accessGroup == null || accessGroup.getIgroup() == null) {
-            s_logger.warn("validateInitiatorInAccessGroup: iGroup [{}] not found on SVM [{}]", accessGroupName, svmName);
+        if (accessGroup == null || accessGroup.getIgroup() == null || accessGroup.getIgroup().getName() == null || accessGroup.getIgroup().getName().isEmpty()) {
+            s_logger.warn("validateInitiatorInAccessGroup: Invalid access group provided for validation");
             return false;
         }
 
@@ -635,12 +629,12 @@ public class UnifiedSANStrategy extends SANStrategy {
         if (igroup.getInitiators() != null) {
             for (Initiator initiator : igroup.getInitiators()) {
                 if (initiator.getName().equalsIgnoreCase(hostInitiator)) {
-                    s_logger.info("validateInitiatorInAccessGroup: Initiator [{}] validated successfully in igroup [{}]", hostInitiator, accessGroupName);
+                    s_logger.info("validateInitiatorInAccessGroup: Initiator [{}] validated successfully in igroup [{}]", hostInitiator, igroup.getName());
                     return true;
                 }
             }
         }
-        s_logger.warn("validateInitiatorInAccessGroup: Initiator [{}] NOT found in igroup [{}]", hostInitiator, accessGroupName);
+        s_logger.warn("validateInitiatorInAccessGroup: Initiator [{}] NOT found in igroup [{}]", hostInitiator, igroup.getName());
         return false;
     }
 }

@@ -128,12 +128,12 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
-
+    public CloudStackVolume copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        return null;
     }
 
     @Override
-    public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap) {
+    public CloudStackVolume getCloudStackVolume(CloudStackVolume cloudStackVolume) {
         return null;
     }
 
@@ -205,7 +205,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public AccessGroup getAccessGroup(Map<String, String> values) {
+    public AccessGroup getAccessGroup(AccessGroup accessGroup) {
         return null; //TODO: This method need to be rewritten according to the signature in StorageStrategy interface
     }
 
