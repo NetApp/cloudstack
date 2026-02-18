@@ -636,7 +636,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ProtocolType protocolType = null;
         String protocol = null;
         long size = 0L;
-        String snapshotName = null;
+        String snapshotName = snapshotInfo.getName();
         String lunName = null;
 
         try {
@@ -645,13 +645,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                 size = cloudStackVolume.getLun().getSpace().getSize();
                 lunName = cloudStackVolume.getLun().getName();
-                snapshotName = lunName + "-snapshot-" + snapshotInfo.getUuid();
-                s_logger.info("snapshotCloudStackVolumeRequestByProtocol: size: {} ", size);
-                s_logger.info("snapshotCloudStackVolumeRequestByProtocol: lunName: {} ", lunName);
-                s_logger.info("snapshotCloudStackVolumeRequestByProtocol: snapshotName: {} ", snapshotName);
-                int trimRequired = snapshotName.length() - Constants.MAX_SNAPSHOT_NAME_LENGTH;
-                if (trimRequired > 0) {
-                    snapshotName = StringUtils.left(lunName, (lunName.length() - trimRequired)) + "-" + snapshotInfo.getUuid();
+                if(snapshotName == null || snapshotName.isEmpty()) {
+                    snapshotName = lunName + "-snapshot-" + snapshotInfo.getUuid();
+                    s_logger.info("snapshotCloudStackVolumeRequestByProtocol: size: {} ", size);
+                    s_logger.info("snapshotCloudStackVolumeRequestByProtocol: lunName: {} ", lunName);
+                    s_logger.info("snapshotCloudStackVolumeRequestByProtocol: snapshotName: {} ", snapshotName);
+                    int trimRequired = snapshotName.length() - Constants.MAX_SNAPSHOT_NAME_LENGTH;
+                    if (trimRequired > 0) {
+                        snapshotName = StringUtils.left(lunName, (lunName.length() - trimRequired)) + "-" + snapshotInfo.getUuid();
+                    }
                 }
             }
             s_logger.info("snapshotCloudStackVolumeRequestByProtocol: snapshotName after trim: {} ", snapshotName);
@@ -674,6 +676,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 svm.setName(details.get(Constants.SVM_NAME));
                 Lun.Source lunCloneSource = new Lun.Source();
                 lunCloneSource.setName(cloudStackVolume.getLun().getName());
+                lunCloneSource.setUuid(cloudStackVolume.getLun().getUuid());
                 Lun.Clone lunClone = new Lun.Clone();
                 lunClone.setSource(lunCloneSource);
                 lun.setName(snapshotName);
