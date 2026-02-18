@@ -585,6 +585,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 igroup.setName(accessGroupName);
                 Svm svm = new Svm();
                 svm.setName(svmName);
+                igroup.setSvm(svm);
+                accessGroupRequest.setIgroup(igroup);
                 break;
             default:
                 throw new CloudRuntimeException("createCloudStackVolumeRequestByProtocol: Unsupported protocol " + protocol);
