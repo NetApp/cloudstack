@@ -22,6 +22,7 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import com.cloud.agent.api.to.DiskTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.storage.Storage;
@@ -186,7 +187,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     volumeDao.update(volumeVO.getId(), volumeVO);
                 }
             } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
-                createTempVolume((SnapshotInfo)dataObject, dataStore.getId());
+                //createTempVolume((SnapshotInfo)dataObject, dataStore.getId());
+                // No-op: ONTAP's takeSnapshot() already creates a LUN clone that is directly accessible.
+                // The framework calls createAsync(SNAPSHOT) via createVolumeFromSnapshot/deleteVolumeFromSnapshot,
+                // but ONTAP doesn't need a separate temp volume — the cloned LUN is used as-is.
+                s_logger.info("createAsync: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
             } else {
                 errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
                 s_logger.error(errMsg);
@@ -266,6 +272,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool,details,volumeInfo);
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 s_logger.error("deleteAsync : Volume deleted: " + volumeInfo.getId());
+                commandResult.setResult(null);
+                commandResult.setSuccess(true);
+            } else if (data.getType() == DataObjectType.SNAPSHOT) {
+                s_logger.info("deleteAsync: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                //deleteSnapshotClone((SnapshotInfo) data, store);
                 commandResult.setResult(null);
                 commandResult.setSuccess(true);
             }
@@ -373,6 +384,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 volumeVO.setPoolType(storagePool.getPoolType());
                 volumeVO.setPoolId(storagePool.getId());
                 volumeDao.update(volumeVO.getId(), volumeVO);
+            } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
+                s_logger.info("grantAccess: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                //grantAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
             } else {
                 s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
@@ -434,6 +448,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     throw new CloudRuntimeException("revokeAccess: CloudStack Volume not found for id: " + dataObject.getId());
                 }
                 revokeAccessForVolume(storagePool, volumeVO, host);
+            } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
+                s_logger.info("revokeAccess: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                //revokeAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
             } else {
                 s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
@@ -480,6 +497,134 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.info("revokeAccessForVolume: Successfully revoked access to LUN [{}] for host [{}]",
                     cloudStackVolumeRequest.getLun().getName(), host.getName());
         }
+    }
+
+    /**
+     * Grants host access to a snapshot's cloned LUN for copy-to-secondary-storage.
+     * Maps the snapshot LUN to the host's igroup and stores the IQN in snapshot_details
+     * so that the KVM agent can connect via iSCSI to copy the data.
+     */
+    private void grantAccessForSnapshot(SnapshotInfo snapshotInfo, Host host, StoragePoolVO storagePool) {
+        s_logger.info("grantAccessForSnapshot: Granting access to snapshot [{}] for host [{}]", snapshotInfo.getId(), host.getName());
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            String svmName = details.get(Constants.SVM_NAME);
+            String storagePoolUuid = storagePool.getUuid();
+
+            // snapshotInfo.getPath() contains the cloned LUN name set during takeSnapshot()
+            String snapshotLunName = snapshotInfo.getPath();
+            if (snapshotLunName == null) {
+                throw new CloudRuntimeException("grantAccessForSnapshot: Snapshot path (LUN name) is null for snapshot id: " + snapshotInfo.getId());
+            }
+
+            UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
+            String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
+
+            // Map the snapshot's cloned LUN to the igroup
+            String lunNumber = sanStrategy.ensureLunMapped(svmName, snapshotLunName, accessGroupName);
+
+            // Store DiskTO.IQN in snapshot_details so StorageSystemDataMotionStrategy.getSnapshotDetails()
+            // can build the iSCSI source details for the CopyCommand sent to the KVM agent
+            String iqnPath = storagePool.getPath() + Constants.SLASH + lunNumber;
+            snapshotDetailsDao.addDetail(snapshotInfo.getId(), DiskTO.IQN, iqnPath, false);
+
+            s_logger.info("grantAccessForSnapshot: Snapshot LUN [{}] mapped as LUN number [{}], IQN path [{}]",
+                    snapshotLunName, lunNumber, iqnPath);
+        }
+    }
+
+    /**
+     * Revokes host access to a snapshot's cloned LUN after copy-to-secondary-storage completes.
+     * Unmaps the snapshot LUN from the igroup and removes the IQN from snapshot_details.
+     */
+    private void revokeAccessForSnapshot(SnapshotInfo snapshotInfo, Host host, StoragePoolVO storagePool) {
+        s_logger.info("revokeAccessForSnapshot: Revoking access to snapshot [{}] for host [{}]", snapshotInfo.getId(), host.getName());
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+            String storagePoolUuid = storagePool.getUuid();
+
+            // Build a CloudStackVolume request using the snapshot's cloned LUN name
+            String snapshotLunName = snapshotInfo.getPath();
+            if (snapshotLunName == null) {
+                s_logger.warn("revokeAccessForSnapshot: Snapshot path is null for snapshot id: {}, skipping", snapshotInfo.getId());
+                return;
+            }
+
+            CloudStackVolume snapshotVolumeRequest = new CloudStackVolume();
+            Lun snapshotLun = new Lun();
+            snapshotLun.setName(snapshotLunName);
+            Svm svm = new Svm();
+            svm.setName(details.get(Constants.SVM_NAME));
+            snapshotLun.setSvm(svm);
+            snapshotVolumeRequest.setLun(snapshotLun);
+
+            // Retrieve the LUN from ONTAP to get its UUID
+            CloudStackVolume cloudStackVolume = storageStrategy.getCloudStackVolume(snapshotVolumeRequest);
+
+            // Get the igroup to get its UUID
+            AccessGroup accessGroupRequest = getAccessGroupRequestByProtocol(details, storagePoolUuid);
+            AccessGroup accessGroup = storageStrategy.getAccessGroup(accessGroupRequest);
+
+            // Remove the LUN mapping from the igroup
+            Map<String, String> disableLogicalAccessMap = new HashMap<>();
+            disableLogicalAccessMap.put(Constants.LUN_DOT_UUID, cloudStackVolume.getLun().getUuid());
+            disableLogicalAccessMap.put(Constants.IGROUP_DOT_UUID, accessGroup.getIgroup().getUuid());
+            storageStrategy.disableLogicalAccess(disableLogicalAccessMap);
+
+            // Remove the IQN detail from snapshot_details
+            snapshotDetailsDao.removeDetail(snapshotInfo.getId(), DiskTO.IQN);
+
+            s_logger.info("revokeAccessForSnapshot: Successfully revoked access to snapshot LUN [{}] for host [{}]",
+                    snapshotLunName, host.getName());
+        }
+    }
+
+    /**
+     * Deletes the cloned LUN that was created during takeSnapshot().
+     * Called by the framework after the snapshot data has been copied to secondary storage.
+     */
+    private void deleteSnapshotClone(SnapshotInfo snapshotInfo, DataStore store) {
+        s_logger.info("deleteSnapshotClone: Deleting snapshot clone for snapshot [{}]", snapshotInfo.getId());
+
+        StoragePoolVO storagePool = storagePoolDao.findById(store.getId());
+        if (storagePool == null) {
+            throw new CloudRuntimeException("deleteSnapshotClone: Storage Pool not found for id: " + store.getId());
+        }
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
+        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
+
+        // Get the cloned LUN name from snapshotInfo.getPath() (set during takeSnapshot)
+        String snapshotLunName = snapshotInfo.getPath();
+        if (snapshotLunName == null) {
+            s_logger.warn("deleteSnapshotClone: Snapshot path is null for snapshot id: {}, nothing to delete", snapshotInfo.getId());
+            return;
+        }
+
+        // Get the cloned LUN UUID from snapshot_details
+        SnapshotDetailsVO snapDetail = snapshotDetailsDao.findDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_ID);
+        String lunUuid = (snapDetail != null) ? snapDetail.getValue() : null;
+
+        // Build delete request for the cloned LUN
+        CloudStackVolume deleteRequest = new CloudStackVolume();
+        Lun lun = new Lun();
+        lun.setName(snapshotLunName);
+        if (lunUuid != null) {
+            lun.setUuid(lunUuid);
+        }
+        deleteRequest.setLun(lun);
+
+        storageStrategy.deleteCloudStackVolume(deleteRequest);
+        s_logger.info("deleteSnapshotClone: Successfully deleted cloned LUN [{}] for snapshot [{}]", snapshotLunName, snapshotInfo.getId());
+
+        // Clean up snapshot details
+        snapshotDetailsDao.removeDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_ID);
+        snapshotDetailsDao.removeDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_SIZE);
     }
 
     @Override
