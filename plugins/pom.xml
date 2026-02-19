@@ -124,9 +124,11 @@
         <module>storage/image/s3</module>
         <module>storage/image/sample</module>
         <module>storage/image/swift</module>
+        <module>storage/image/netapp</module>
         <module>storage/volume/cloudbyte</module>
         <module>storage/volume/datera</module>
         <module>storage/volume/default</module>
+        <module>storage/volume/netapp</module>
         <module>storage/volume/nexenta</module>
         <module>storage/volume/sample</module>
         <module>storage/volume/ontap</module>

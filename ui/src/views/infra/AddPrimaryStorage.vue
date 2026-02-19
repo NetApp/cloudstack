@@ -242,7 +242,7 @@
             </a-select>
           </a-form-item>
         </div>
-        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.provider !== 'NetApp ONTAP' && form.protocol !== 'FiberChannel'">
+        <div v-if="form.provider !== 'DefaultPrimary' && form.provider !== 'PowerFlex' && form.provider !== 'Linstor' && form.provider !== 'NetAppStorage' && form.protocol !== 'FiberChannel'">
           <a-form-item name="managed" ref="managed">
             <template #label>
               <tooltip-label :title="$t('label.ismanaged')" :tooltip="apiParams.managed.description"/>
@@ -378,6 +378,38 @@
               <tooltip-label :title="$t('label.password')" :tooltip="$t('label.flashArray.password')"/>
             </template>
             <a-input-password v-model:value="form.flashArrayPassword" :placeholder="$t('label.flashArray.password')"/>
+          </a-form-item>
+          <a-form-item name="capacityBytes" ref="capacityBytes">
+            <template #label>
+              <tooltip-label :title="$t('label.capacitybytes')" :tooltip="apiParams.capacitybytes.description"/>
+            </template>
+            <a-input v-model:value="form.capacityBytes" :placeholder="apiParams.capacitybytes.description" />
+          </a-form-item>
+          <a-form-item name="capacityIops" ref="capacityIops">
+            <template #label>
+              <tooltip-label :title="$t('label.capacityiops')" :tooltip="apiParams.capacityiops.description"/>
+            </template>
+            <a-input v-model:value="form.capacityIops" :placeholder="apiParams.capacityiops.description" />
+          </a-form-item>
+        </div>
+        <div v-if="form.provider === 'NetAppStorage'">
+          <a-form-item name="netappURL" ref="netappURL">
+            <template #label>
+              <tooltip-label :title="$t('label.url')" :tooltip="$t('label.netapp.url.tooltip')"/>
+            </template>
+            <a-input v-model:value="form.netappURL" :placeholder="$t('label.netapp.url.tooltip')"/>
+          </a-form-item>
+          <a-form-item name="netappUsername" ref="netappUsername">
+            <template #label>
+              <tooltip-label :title="$t('label.username')" :tooltip="$t('label.netapp.username.tooltip')"/>
+            </template>
+            <a-input v-model:value="form.netappUsername" :placeholder="$t('label.netapp.username.tooltip')"/>
+          </a-form-item>
+          <a-form-item name="netappPassword" ref="netappPassword">
+            <template #label>
+              <tooltip-label :title="$t('label.password')" :tooltip="$t('label.netapp.password')"/>
+            </template>
+            <a-input-password v-model:value="form.netappPassword" :placeholder="$t('label.netapp.password')"/>
           </a-form-item>
           <a-form-item name="capacityBytes" ref="capacityBytes">
             <template #label>
@@ -549,10 +581,9 @@ export default {
         flashArrayURL: [{ required: true, message: this.$t('label.url') }],
         flashArrayUsername: [{ required: true, message: this.$t('label.username') }],
         flashArrayPassword: [{ required: true, message: this.$t('label.password') }],
-        ontapIP: [{ required: true, message: this.$t('label.required') }],
-        ontapUsername: [{ required: true, message: this.$t('label.required') }],
-        ontapPassword: [{ required: true, message: this.$t('label.required') }],
-        ontapSvmName: [{ required: true, message: this.$t('label.required') }]
+        netappURL: [{ required: true, message: this.$t('label.url') }],
+        netappUsername: [{ required: true, message: this.$t('label.username') }],
+        netappPassword: [{ required: true, message: this.$t('label.password') }]
       })
     },
     fetchData () {
