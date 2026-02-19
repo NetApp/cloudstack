@@ -87,15 +87,11 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     @Override
     public boolean connectPhysicalDisk(String volumeUuid, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
-        logger.info("connectPhysicalDisk called: volumeUuid={}, pool.host={}, pool.port={}, pool.uuid={}", 
-                    volumeUuid, pool.getSourceHost(), pool.getSourcePort(), pool.getUuid());
-        
+        logger.info("connectPhysicalDisk called: volumeUuid={}, pool.host={}, pool.port={}, pool.uuid={}", volumeUuid, pool.getSourceHost(), pool.getSourcePort(), pool.getUuid());
         // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 -o new
         String iqnTarget = getIqn(volumeUuid);
         logger.info("Parsed IQN from volumeUuid: {}", iqnTarget);
-        
         Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-
         iScsiAdmCmd.add("-m", "node");
         iScsiAdmCmd.add("-T", iqnTarget);
         iScsiAdmCmd.add("-p", pool.getSourceHost() + ":" + pool.getSourcePort());
