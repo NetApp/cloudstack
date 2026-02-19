@@ -93,7 +93,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                     cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
         } catch (Exception e) {
-            s_logger.error("Exception occurred while creating LUN: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
+            s_logger.error("Exception occurred while creating LUN: {}. Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
         }
     }
@@ -200,6 +200,11 @@ public class UnifiedSANStrategy extends SANStrategy {
             s_logger.error("Exception occurred while fetching Lun, Exception: {}", e.getMessage());
             throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
         }
+    }
+
+    @Override
+    public CloudStackVolume snapshotCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        return null;
     }
 
     @Override

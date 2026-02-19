@@ -318,7 +318,7 @@ public abstract class StorageStrategy {
         try {
             // TODO: Implement lun and file deletion, if any, before deleting the volume
             JobResponse jobResponse = volumeFeignClient.deleteVolume(authHeader, volume.getUuid());
-            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 1);
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(),5, 1);
             if (!jobSucceeded) {
                 s_logger.error("Volume deletion job failed for volume: " + volume.getName());
                 throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
@@ -506,6 +506,19 @@ public abstract class StorageStrategy {
      */
     abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
+
+    /**
+     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * it is going to mimic
+     * snapshotLun       for iSCSI, FC protocols
+     * snapshotFile      for NFS3.0 and NFS4.1 protocols
+     *
+     *
+     * @param cloudstackVolume the source CloudStack volume
+     * @return the retrieved snapshot CloudStackVolume object
+     */
+    public abstract CloudStackVolume snapshotCloudStackVolume(CloudStackVolume cloudstackVolume);
+
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
      *     createiGroup       for iSCSI and FC protocols
@@ -569,7 +582,7 @@ public abstract class StorageStrategy {
      */
     abstract public Map<String, String> getLogicalAccess(Map<String, String> values);
 
-    private Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInSecs) {
+    protected Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInSecs) {
         //Create URI for GET Job API
         int jobRetryCount = 0;
         Job jobResp = null;
