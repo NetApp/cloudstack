@@ -111,6 +111,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
     @Override
     public SnapshotInfo backupSnapshot(SnapshotInfo snapshotInfo) {
+        logger.info("backupSnapshot snapshotInfo: {} ", snapshotInfo.toString());
         Preconditions.checkArgument(snapshotInfo != null, "'snapshotInfo' cannot be 'null'.");
 
         if (snapshotInfo.getLocationType() != Snapshot.LocationType.SECONDARY) {
