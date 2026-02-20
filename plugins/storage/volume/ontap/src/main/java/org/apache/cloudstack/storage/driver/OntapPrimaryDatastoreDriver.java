@@ -96,7 +96,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         // RAW managed initial implementation: snapshot features not yet supported
         // TODO Set it to false once we start supporting snapshot feature
         mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.TRUE.toString());
-        //mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
         return mapCapabilities;
     }
 
