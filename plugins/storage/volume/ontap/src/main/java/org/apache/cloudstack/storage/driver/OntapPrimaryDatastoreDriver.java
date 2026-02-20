@@ -96,7 +96,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         // RAW managed initial implementation: snapshot features not yet supported
         // TODO Set it to false once we start supporting snapshot feature
         mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.TRUE.toString());
-        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        //mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
         return mapCapabilities;
     }
 
@@ -681,7 +681,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO)snapshot.getTO();
             CloudStackVolume snapshotCloudStackVolumeRequest = snapshotCloudStackVolumeRequestByProtocol(poolDetails, storagePool, cloudStackVolume, snapshot);
             CloudStackVolume clonedCloudStackVolume = storageStrategy.copyCloudStackVolume(snapshotCloudStackVolumeRequest);
+            UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(poolDetails);
+            String accessGroupName = Utility.getIgroupName(poolDetails.get(Constants.SVM_NAME), storagePool.getUuid());
 
+            // Map the snapshot's cloned LUN to the igroup
+            sanStrategy.ensureLunMapped(poolDetails.get(Constants.SVM_NAME), clonedCloudStackVolume.getLun().getName(), accessGroupName);
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(poolDetails.get(Constants.PROTOCOL))) {
                 snapshotObjectTo.setPath(clonedCloudStackVolume.getLun().getName());
                 snapshotId = clonedCloudStackVolume.getLun().getUuid();
