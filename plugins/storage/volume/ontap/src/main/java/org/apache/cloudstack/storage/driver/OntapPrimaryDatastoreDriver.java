@@ -291,16 +291,19 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, AsyncCompletionCallback<CopyCommandResult> callback) {
+        s_logger.info("copyAsync: srcData: {}", srcData);
+        s_logger.info("copyAsync: destData: {}", destData);
     }
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, Host destHost, AsyncCompletionCallback<CopyCommandResult> callback) {
-
+        s_logger.info("copyAsync1: srcData: {}", srcData);
+        s_logger.info("copyAsync1: destData: {}", destData);
     }
 
     @Override
     public boolean canCopy(DataObject srcData, DataObject destData) {
-        return false;
+        return true;
     }
 
     @Override
