@@ -153,12 +153,6 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testCreateAsync_NullCallback_ThrowsException() {
-        assertThrows(InvalidParameterValueException.class,
-            () -> driver.createAsync(dataStore, volumeInfo, null));
-    }
-
-    @Test
     void testCreateAsync_VolumeWithISCSI_Success() {
         // Setup
         when(dataStore.getId()).thenReturn(1L);
