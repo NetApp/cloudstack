@@ -29,6 +29,7 @@ public class Constants {
     public static final int MAX_SNAPSHOT_NAME_LENGTH = 256;
 
     public static final String CREATE = "create";
+    public static final String DELETE = "delete";
     public static final String VOL = "/vol/";
     public static final String SRC_CS_VOLUME_ID = "src_cs_volume_id";
     public static final String BASE_ONTAP_FV_ID = "base_ontap_fv_id";

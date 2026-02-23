@@ -183,7 +183,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     volumeDao.update(volumeVO.getId(), volumeVO);
                 }
             } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
-                //createTempVolume((SnapshotInfo)dataObject, dataStore.getId());
+                createTempVolume((SnapshotInfo)dataObject, dataStore.getId());
                 // No-op: ONTAP's takeSnapshot() already creates a LUN clone that is directly accessible.
                 // The framework calls createAsync(SNAPSHOT) via createVolumeFromSnapshot/deleteVolumeFromSnapshot,
                 // but ONTAP doesn't need a separate temp volume — the cloned LUN is used as-is.
@@ -208,18 +208,48 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     private void createTempVolume(SnapshotInfo snapshotInfo, long storagePoolId) {
-        s_logger.info("createTempVolume: Creating temporary volume for snapshot [{}] in storage pool [{}]", snapshotInfo.toString(), storagePoolId);
-        SnapshotDetailsVO snapshotDetails = snapshotDetailsDao.findDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_ID);
-        if (snapshotDetails == null || snapshotDetails.getValue() == null) {
-            throw new CloudRuntimeException("createTempVolume: invalid snapshot details for snapshot id: " + snapshotInfo.getSnapshotId());
-        }
-        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePoolId);
-        StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
-        VolumeInfo volumeInfo = snapshotInfo.getBaseVolume();
-        VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
+        s_logger.info("createTempVolume: Called for snapshot [{}] in storage pool [{}]", snapshotInfo.getSnapshotId(), storagePoolId);
 
-        if (snapshotDetails != null && snapshotDetails.getValue() != null && snapshotDetails.getValue().equalsIgnoreCase(Constants.CREATE)) {
-            CloudStackVolume clonedCloudStackVolume = storageStrategy.getCloudStackVolume(getCloudStackVolumeRequestByProtocol(details, volumeVO));
+        // The framework (StorageSystemDataMotionStrategy.handleSnapshotDetails) sets key "tempVolume"
+        // with value "create" or "delete" — NOT Constants.ONTAP_SNAP_ID which holds the LUN UUID.
+        String tempVolumeKey = "tempVolume";
+        SnapshotDetailsVO snapshotDetails = snapshotDetailsDao.findDetail(snapshotInfo.getSnapshotId(), tempVolumeKey);
+
+        if (snapshotDetails == null || snapshotDetails.getValue() == null) {
+            s_logger.info("createTempVolume: No '{}' detail found for snapshot [{}], nothing to do", tempVolumeKey, snapshotInfo.getSnapshotId());
+            return;
+        }
+
+        String action = snapshotDetails.getValue();
+
+        if (Constants.CREATE.equalsIgnoreCase(action)) {
+            // ONTAP's takeSnapshot() already created a LUN clone that is directly accessible.
+            // No additional temp volume creation is needed — the clone is used as-is.
+            s_logger.info("createTempVolume: 'create' signal — no-op for ONTAP (LUN clone already exists from takeSnapshot) for snapshot [{}]",
+                    snapshotInfo.getSnapshotId());
+        } else if (Constants.DELETE.equalsIgnoreCase(action)) {
+            // Clean up: delete the cloned LUN and remove ONTAP-specific snapshot_details entries
+            s_logger.info("createTempVolume: 'delete' signal — cleaning up cloned LUN and snapshot details for snapshot [{}]",
+                    snapshotInfo.getSnapshotId());
+
+            deleteSnapshotClone(snapshotInfo, snapshotInfo.getDataStore());
+
+            // Remove ONTAP-specific details that were stored during takeSnapshot()
+            removeSnapshotDetailIfPresent(snapshotInfo.getSnapshotId(), Constants.SRC_CS_VOLUME_ID);
+            removeSnapshotDetailIfPresent(snapshotInfo.getSnapshotId(), Constants.BASE_ONTAP_FV_ID);
+            removeSnapshotDetailIfPresent(snapshotInfo.getSnapshotId(), Constants.PRIMARY_POOL_ID);
+        } else {
+            s_logger.warn("createTempVolume: Unexpected tempVolume value '{}' for snapshot [{}], ignoring", action, snapshotInfo.getSnapshotId());
+        }
+    }
+
+    /**
+     * Safely removes a snapshot detail if it exists, avoiding NPE.
+     */
+    private void removeSnapshotDetailIfPresent(long snapshotId, String detailKey) {
+        SnapshotDetailsVO detail = snapshotDetailsDao.findDetail(snapshotId, detailKey);
+        if (detail != null) {
+            snapshotDetailsDao.remove(detail.getId());
         }
     }
 
