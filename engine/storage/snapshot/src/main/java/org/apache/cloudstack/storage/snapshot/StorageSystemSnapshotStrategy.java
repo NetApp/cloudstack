@@ -276,7 +276,8 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
     private void verifyLocationType(SnapshotInfo snapshotInfo) {
         VolumeInfo volumeInfo = snapshotInfo.getBaseVolume();
-
+        logger.info("verifyLocationType: {}", snapshotInfo.getLocationType());
+        logger.info("verifyLocationType: {}", volumeInfo.getFormat());
         Set<ImageFormat> supportedFormats = Set.of(ImageFormat.VHD, ImageFormat.QCOW2, ImageFormat.RAW);
 
         if (snapshotInfo.getLocationType() == Snapshot.LocationType.SECONDARY && !supportedFormats.contains(volumeInfo.getFormat())) {
