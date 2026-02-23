@@ -203,7 +203,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
                 s_logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
             }
-            callback.complete(createCmdResult);
+            if(callback != null) {
+                callback.complete(createCmdResult);
+            }
         }
     }
 
