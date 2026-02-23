@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 import javax.inject.Inject;
@@ -142,7 +143,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
         if (!computeClusterSupportsResign) {
             String msg = "Cannot archive snapshot: 'computeClusterSupportsResign' was false.";
-
+            logger.info("backupSnapshot: {}", msg);
             logger.warn(msg);
 
             throw new CloudRuntimeException(msg);
@@ -276,8 +277,10 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
     private void verifyLocationType(SnapshotInfo snapshotInfo) {
         VolumeInfo volumeInfo = snapshotInfo.getBaseVolume();
 
-        if (snapshotInfo.getLocationType() == Snapshot.LocationType.SECONDARY && volumeInfo.getFormat() != ImageFormat.VHD) {
-            throw new CloudRuntimeException("Only the '" + ImageFormat.VHD + "' image type can be used when 'LocationType' is set to 'SECONDARY'.");
+        Set<ImageFormat> supportedFormats = Set.of(ImageFormat.VHD, ImageFormat.QCOW2, ImageFormat.RAW);
+
+        if (snapshotInfo.getLocationType() == Snapshot.LocationType.SECONDARY && !supportedFormats.contains(volumeInfo.getFormat())) {
+            throw new CloudRuntimeException("Only the '" + supportedFormats + "' image types can be used when 'LocationType' is set to 'SECONDARY'.");
         }
     }
 
