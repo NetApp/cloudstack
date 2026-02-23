@@ -116,6 +116,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
         Preconditions.checkArgument(snapshotInfo != null, "'snapshotInfo' cannot be 'null'.");
 
         if (snapshotInfo.getLocationType() != Snapshot.LocationType.SECONDARY) {
+            logger.info("backupSnapshot markAsBackedUp");
             markAsBackedUp((SnapshotObject)snapshotInfo);
             return snapshotInfo;
         }
@@ -124,7 +125,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
         // snapshot on the storage or exists as a volume on the storage (clone).
         // If archive flag is passed in, we should copy this snapshot to secondary
         // storage and delete it from primary storage.
-
+        logger.info("backupSnapshot copy to secondary storage");
         HostVO host = getHost(snapshotInfo.getVolumeId());
 
         boolean canStorageSystemCreateVolumeFromSnapshot = canStorageSystemCreateVolumeFromSnapshot(snapshotInfo.getBaseVolume().getPoolId());
