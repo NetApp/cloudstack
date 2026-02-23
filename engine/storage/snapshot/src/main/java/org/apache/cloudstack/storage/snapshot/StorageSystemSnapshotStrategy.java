@@ -141,7 +141,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
         boolean computeClusterSupportsResign = clusterDao.getSupportsResigning(host.getClusterId());
 
-        if (!computeClusterSupportsResign) {
+        if (!computeClusterSupportsResign && host.getHypervisorType() != HypervisorType.KVM) {
             String msg = "Cannot archive snapshot: 'computeClusterSupportsResign' was false.";
             logger.info("backupSnapshot: {}", msg);
             logger.warn(msg);
