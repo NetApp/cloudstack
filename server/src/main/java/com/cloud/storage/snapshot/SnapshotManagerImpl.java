@@ -1856,7 +1856,15 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
             Snapshot.LocationType locationType = payload.getLocationType();
 
             if (locationType == null) {
-                payload.setLocationType(Snapshot.LocationType.PRIMARY);
+                if (!isKvmAndFileBasedStorage) {
+                    // For managed, non-file-based storage (e.g., iSCSI), default to SECONDARY
+                    // so that the snapshot gets copied to secondary storage.
+                    // File-based storage (e.g., NFS) uses a shortcut path that bypasses
+                    // the locationType check, so PRIMARY is fine for them.
+                    payload.setLocationType(Snapshot.LocationType.SECONDARY);
+                } else {
+                    payload.setLocationType(Snapshot.LocationType.PRIMARY);
+                }
             }
         } else {
             payload.setLocationType(null);

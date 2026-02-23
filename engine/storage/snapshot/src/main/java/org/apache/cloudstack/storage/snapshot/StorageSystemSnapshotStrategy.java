@@ -115,7 +115,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
         logger.info("backupSnapshot snapshotInfo.getLocationType(): {} ", snapshotInfo.getLocationType());
         Preconditions.checkArgument(snapshotInfo != null, "'snapshotInfo' cannot be 'null'.");
 
-        if (snapshotInfo.getLocationType() != null && snapshotInfo.getLocationType() != Snapshot.LocationType.SECONDARY) {
+        if (snapshotInfo.getLocationType() != Snapshot.LocationType.SECONDARY) {
             markAsBackedUp((SnapshotObject)snapshotInfo);
             return snapshotInfo;
         }
