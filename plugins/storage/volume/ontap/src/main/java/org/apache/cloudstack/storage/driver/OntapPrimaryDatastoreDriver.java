@@ -303,6 +303,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public boolean canCopy(DataObject srcData, DataObject destData) {
+        s_logger.info("canCopy: srcData: {}", srcData);
+        s_logger.info("canCopy: destData: {}", destData);
         return true;
     }
 
@@ -707,12 +709,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         } catch (Exception ex) {
             s_logger.error("takeSnapshot: Failed due to ", ex);
             result = new CreateCmdResult(null, new CreateObjectAnswer(ex.toString()));
-
             result.setResult(ex.toString());
         }
-
         callback.complete(result);
-
     }
 
     private AccessGroup getAccessGroupRequestByProtocol(Map<String, String> poolDetails, String storagePoolUuid) {
