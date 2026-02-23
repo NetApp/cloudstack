@@ -124,10 +124,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (dataStore == null) {
             throw new InvalidParameterValueException("createAsync: dataStore should not be null");
         }
-        if (callback == null) {
-            throw new InvalidParameterValueException("createAsync: callback should not be null");
-        }
-
         try {
             s_logger.info("createAsync: Started for data store name [{}] and data object name [{}] of type [{}]",
                     dataStore.getName(), dataObject.getName(), dataObject.getType());
@@ -387,6 +383,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 volumeDao.update(volumeVO.getId(), volumeVO);
             } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
                 s_logger.info("grantAccess: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                return true;
                 //grantAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
             } else {
                 s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
