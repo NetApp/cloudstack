@@ -414,9 +414,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 volumeVO.setPoolId(storagePool.getId());
                 volumeDao.update(volumeVO.getId(), volumeVO);
             } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
-                s_logger.info("grantAccess: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
+                grantAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
                 return true;
-                //grantAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
             } else {
                 s_logger.error("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to grantAccess");
@@ -479,8 +478,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 }
                 revokeAccessForVolume(storagePool, volumeVO, host);
             } else if (dataObject.getType() == DataObjectType.SNAPSHOT) {
-                s_logger.info("revokeAccess: SNAPSHOT type — no-op for ONTAP (LUN clone already exists from takeSnapshot)");
-                //revokeAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
+                revokeAccessForSnapshot((SnapshotInfo) dataObject, host, storagePool);
             } else {
                 s_logger.error("revokeAccess: Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
                 throw new CloudRuntimeException("Invalid DataObjectType (" + dataObject.getType() + ") passed to revokeAccess");
