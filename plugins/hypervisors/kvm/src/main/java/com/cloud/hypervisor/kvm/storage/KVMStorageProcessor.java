@@ -1026,6 +1026,82 @@ public class KVMStorageProcessor implements StorageProcessor {
         return copyToObjectStore(newCpyCmd);
     }
 
+    /**
+     * Backs up a snapshot from managed storage (e.g., ONTAP iSCSI) to secondary storage.
+     * Connects to the iSCSI LUN using the IQN/path from the CopyCommand options, copies
+     * the raw disk data to the NFS secondary storage.
+     *
+     * This mirrors the approach used by {@link #createTemplateFromVolumeOrSnapshot(CopyCommand)}.
+     */
+    private Answer backupSnapshotFromManagedStorage(final CopyCommand cmd) {
+        final DataTO srcData = cmd.getSrcTO();
+        final DataTO destData = cmd.getDestTO();
+        final SnapshotObjectTO snapshot = (SnapshotObjectTO) srcData;
+        final PrimaryDataStoreTO primaryStore = (PrimaryDataStoreTO) snapshot.getDataStore();
+        final SnapshotObjectTO destSnapshot = (SnapshotObjectTO) destData;
+        final DataStoreTO imageStore = destData.getDataStore();
+
+        if (!(imageStore instanceof NfsTO)) {
+            return new CopyCmdAnswer("backupSnapshotFromManagedStorage: unsupported secondary storage protocol");
+        }
+
+        final NfsTO nfsImageStore = (NfsTO) imageStore;
+        KVMStoragePool secondaryStorage = null;
+        String path = null;
+
+        try {
+            final Map<String, String> details = cmd.getOptions();
+            path = details != null ? details.get(DiskTO.PATH) : null;
+            if (path == null) {
+                path = details != null ? details.get(DiskTO.IQN) : null;
+                if (path == null) {
+                    return new CopyCmdAnswer("backupSnapshotFromManagedStorage: IQN or PATH is required in options");
+                }
+            }
+
+            logger.info("backupSnapshotFromManagedStorage: Connecting to managed storage, poolType={}, poolUuid={}, path={}",
+                    primaryStore.getPoolType(), primaryStore.getUuid(), path);
+
+            storagePoolMgr.connectPhysicalDisk(primaryStore.getPoolType(), primaryStore.getUuid(), path, details);
+
+            final KVMPhysicalDisk srcDisk = storagePoolMgr.getPhysicalDisk(primaryStore.getPoolType(), primaryStore.getUuid(), path);
+
+            secondaryStorage = storagePoolMgr.getStoragePoolByURI(nfsImageStore.getUrl());
+
+            final String snapshotRelPath = destSnapshot.getPath();
+            final String snapshotDestPath = secondaryStorage.getLocalPath() + File.separator + snapshotRelPath;
+
+            storageLayer.mkdirs(snapshotDestPath);
+
+            final String snapshotName = UUID.randomUUID().toString();
+            final String destName = snapshotRelPath + "/" + snapshotName;
+
+            logger.info("backupSnapshotFromManagedStorage: Copying {} disk {} to {}",
+                    srcDisk.getFormat(), srcDisk.getPath(), destName);
+
+            storagePoolMgr.copyPhysicalDisk(srcDisk, destName, secondaryStorage, cmd.getWaitInMillSeconds());
+
+            final File snapFile = new File(snapshotDestPath + "/" + snapshotName);
+            final long size = snapFile.exists() ? snapFile.length() : 0;
+
+            final SnapshotObjectTO newSnapshot = new SnapshotObjectTO();
+            newSnapshot.setPath(snapshotRelPath + File.separator + snapshotName);
+            newSnapshot.setPhysicalSize(size);
+
+            return new CopyCmdAnswer(newSnapshot);
+        } catch (final Exception ex) {
+            logger.error("backupSnapshotFromManagedStorage: Failed to backup snapshot", ex);
+            return new CopyCmdAnswer("backupSnapshotFromManagedStorage: " + ex.getMessage());
+        } finally {
+            if (path != null) {
+                storagePoolMgr.disconnectPhysicalDisk(primaryStore.getPoolType(), primaryStore.getUuid(), path);
+            }
+            if (secondaryStorage != null) {
+                secondaryStorage.delete();
+            }
+        }
+    }
+
     @Override
     public Answer backupSnapshot(final CopyCommand cmd) {
         final DataTO srcData = cmd.getSrcTO();
@@ -1034,6 +1110,16 @@ public class KVMStorageProcessor implements StorageProcessor {
         final PrimaryDataStoreTO primaryStore = (PrimaryDataStoreTO)snapshot.getDataStore();
         final SnapshotObjectTO destSnapshot = (SnapshotObjectTO)destData;
         final DataStoreTO imageStore = destData.getDataStore();
+
+        // For managed storage (e.g., ONTAP iSCSI), the IQN/path is passed in options
+        // by grantAccessForSnapshot(). Route to the managed-storage handler which connects
+        // to the iSCSI device and copies the raw data to secondary storage.
+        final Map<String, String> srcDetails = cmd.getOptions();
+        logger.info("backupSnapshot: Received request to backup snapshot with srcDetails: {}", srcDetails);
+        if (srcDetails != null && (srcDetails.get(DiskTO.IQN) != null || srcDetails.get(DiskTO.PATH) != null)) {
+            logger.info("backupSnapshot: backupSnapshotFromManagedStorage: {}", cmd.toString());
+            return backupSnapshotFromManagedStorage(cmd);
+        }
 
         if (!(imageStore instanceof NfsTO)) {
             return backupSnapshotForObjectStore(cmd);
