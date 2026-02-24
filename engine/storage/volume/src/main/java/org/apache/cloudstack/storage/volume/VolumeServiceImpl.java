@@ -1213,6 +1213,9 @@ public class VolumeServiceImpl implements VolumeService {
 
             grantAccess(volumeInfo, destHost, destPrimaryDataStore);
 
+            // Refresh volume info to get the updated path set by grantAccess() for managed storage
+            logger.info("running refresh of volumeinfo");
+            volumeInfo = volFactory.getVolume(volumeInfo.getId(), destPrimaryDataStore);
             volumeInfo.processEvent(Event.CreateRequested);
 
             CreateVolumeFromBaseImageContext<VolumeApiResult> context = new CreateVolumeFromBaseImageContext<>(null, volumeInfo, destPrimaryDataStore, srcTemplateOnPrimary, future, null, null);
@@ -1336,7 +1339,30 @@ public class VolumeServiceImpl implements VolumeService {
 
             primaryDataStore.setDetails(details);
 
+            // DEBUG: Log volumeInfo and details BEFORE grantAccess
+            logger.info("ONTAP_DEBUG: BEFORE grantAccess - volumeInfo.getId(): " + volumeInfo.getId());
+            logger.info("ONTAP_DEBUG: BEFORE grantAccess - volumeInfo.getName(): " + volumeInfo.getName());
+            logger.info("ONTAP_DEBUG: BEFORE grantAccess - volumeInfo.getPath(): " + volumeInfo.getPath());
+            logger.info("ONTAP_DEBUG: BEFORE grantAccess - volumeInfo.get_iScsiName(): " + volumeInfo.get_iScsiName());
+            logger.info("ONTAP_DEBUG: BEFORE grantAccess - details map: " + details);
+
             grantAccess(volumeInfo, destHost, primaryDataStore);
+
+            // Refresh volume info to get the updated path set by grantAccess() for managed storage
+            logger.info("ONTAP_FIX: Refreshing volumeInfo after grantAccess for volume: " + volumeInfo.getName());
+            volumeInfo = volFactory.getVolume(volumeInfo.getId(), primaryDataStore);
+            logger.info("ONTAP_FIX: After refresh, volumeInfo path: " + volumeInfo.getPath());
+
+            // Update details with the correct iSCSI path after grantAccess
+            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, volumeInfo.getPath());
+            primaryDataStore.setDetails(details);
+            logger.info("ONTAP_FIX: Updated MANAGED_STORE_TARGET to: " + volumeInfo.getPath());
+            logger.info("ONTAP_DEBUG: AFTER grantAccess - details map: " + details);
+            // Update destTemplateInfo with the iSCSI path from volumeInfo
+            if (destTemplateInfo instanceof TemplateObject) {
+                ((TemplateObject)destTemplateInfo).setInstallPath(volumeInfo.getPath());
+                logger.info("ONTAP_FIX: Set destTemplateInfo installPath to: " + volumeInfo.getPath());
+            }
 
             try {
                 motionSrv.copyAsync(srcTemplateInfo, destTemplateInfo, destHost, caller);
