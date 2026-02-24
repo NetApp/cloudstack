@@ -3880,11 +3880,8 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
 
         if (storagePoolVO.isManaged() && locationType == null) {
             logger.info("takeSnapshotInternal: locationType : {}", locationType);
-            if (isFileBasedStoragePool(storagePoolVO)) {
-                locationType = Snapshot.LocationType.PRIMARY;
-            } else {
-                // For managed, non-file-based storage (e.g., iSCSI), default to SECONDARY
-                // so that the snapshot gets copied to secondary storage via the backup pipeline.
+            locationType = Snapshot.LocationType.PRIMARY;
+            if (!isFileBasedStoragePool(storagePoolVO)) {
                 locationType = Snapshot.LocationType.SECONDARY;
             }
             logger.info("takeSnapshotInternal: locationType after : {}", locationType);

@@ -515,7 +515,6 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
             }
 
             snapshotOnPrimary = result.getSnapshot();
-            snapshotOnPrimary.addPayload(snapshotInfo.getPayload());
         }
         finally {
             if (result != null && result.isSuccess()) {

@@ -555,11 +555,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             // Store DiskTO.IQN in snapshot_details so StorageSystemDataMotionStrategy.getSnapshotDetails()
             // can build the iSCSI source details for the CopyCommand sent to the KVM agent
-            String iqnPath = storagePool.getPath() + Constants.SLASH + lunNumber;
-            snapshotDetailsDao.addDetail(snapshotInfo.getId(), DiskTO.IQN, iqnPath, false);
+
+            // Update volume path if changed (e.g., after migration or re-mapping)
+            String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
+            snapshotDetailsDao.addDetail(snapshotInfo.getId(), DiskTO.IQN, iscsiPath, false);
 
             s_logger.info("grantAccessForSnapshot: Snapshot LUN [{}] mapped as LUN number [{}], IQN path [{}]",
-                    snapshotLunName, lunNumber, iqnPath);
+                    snapshotLunName, lunNumber, iscsiPath);
         }
     }
 
