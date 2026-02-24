@@ -578,7 +578,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String storagePoolUuid = storagePool.getUuid();
 
             // Build a CloudStackVolume request using the snapshot's cloned LUN name
-            String snapshotLunName = snapshotInfo.getPath();
+            String snapshotLunName = Constants.VOL + storagePool.getName() + Constants.SLASH + snapshotInfo.getName();
+            s_logger.info("revokeAccessForSnapshot: snapshotLunName : {}", snapshotLunName);
             if (snapshotLunName == null) {
                 s_logger.warn("revokeAccessForSnapshot: Snapshot path is null for snapshot id: {}, skipping", snapshotInfo.getId());
                 return;
