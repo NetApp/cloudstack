@@ -234,7 +234,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.info("createTempVolume: 'delete' signal — cleaning up cloned LUN and snapshot details for snapshot [{}]",
                     snapshotInfo.getSnapshotId());
 
-            deleteSnapshotClone(snapshotInfo, snapshotInfo.getDataStore());
+            //deleteSnapshotClone(snapshotInfo, snapshotInfo.getDataStore());
 
             // Remove ONTAP-specific details that were stored during takeSnapshot()
             removeSnapshotDetailIfPresent(snapshotInfo.getSnapshotId(), Constants.SRC_CS_VOLUME_ID);
@@ -629,12 +629,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
 
-        // Get the cloned LUN name from snapshotInfo.getPath() (set during takeSnapshot)
-        String snapshotLunName = snapshotInfo.getPath();
-        if (snapshotLunName == null) {
-            s_logger.warn("deleteSnapshotClone: Snapshot path is null for snapshot id: {}, nothing to delete", snapshotInfo.getId());
+        // Build the ONTAP LUN name using the snapshot name (consistent with grantAccessForSnapshot/revokeAccessForSnapshot)
+        // Do NOT use snapshotInfo.getPath() — that holds the iSCSI path (/<IQN>/<LUN>), not the ONTAP LUN name.
+        if (snapshotInfo.getName() == null || snapshotInfo.getName().isEmpty()) {
+            s_logger.warn("deleteSnapshotClone: Snapshot name is null/empty for snapshot id: {}, nothing to delete", snapshotInfo.getId());
             return;
         }
+        String snapshotLunName = Constants.VOL + storagePool.getName() + Constants.SLASH + snapshotInfo.getName();
 
         // Get the cloned LUN UUID from snapshot_details
         SnapshotDetailsVO snapDetail = snapshotDetailsDao.findDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_ID);
