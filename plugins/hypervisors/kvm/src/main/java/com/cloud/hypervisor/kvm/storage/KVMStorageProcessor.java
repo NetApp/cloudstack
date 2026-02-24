@@ -1131,11 +1131,14 @@ public class KVMStorageProcessor implements StorageProcessor {
     }
 
     /**
-     * Rescans an existing iSCSI session to discover newly mapped LUNs.
-     * If no session exists yet, performs a login first.
+     * Ensures an iSCSI session is active and rescanned so that the target LUN is visible.
+     * Handles three scenarios:
+     *   1. Session already exists → rescan to discover newly mapped LUNs
+     *   2. Node record exists but no session → login, then rescan
+     *   3. No node record at all → discover target, create node record, login
      */
     private void rescanIscsiSession(String iqn, String host, String port) {
-        // First try to rescan the existing session
+        // Step 1: Try rescan — works if session already exists
         Script rescanCmd = new Script(true, "iscsiadm", 0, logger);
         rescanCmd.add("-m", "node");
         rescanCmd.add("-T", iqn);
@@ -1143,26 +1146,53 @@ public class KVMStorageProcessor implements StorageProcessor {
         rescanCmd.add("--rescan");
 
         String result = rescanCmd.execute();
+        if (result == null) {
+            logger.info("rescanIscsiSession: Successfully rescanned existing session for {}@{}:{}", iqn, host, port);
+            return;
+        }
+
+        logger.info("rescanIscsiSession: Rescan failed ({}), attempting full connect for {}@{}:{}", result, iqn, host, port);
+
+        // Step 2: Create node record (iscsiadm -m node -T <iqn> -p <host>:<port> -o new)
+        // This is required before login can succeed.
+        Script nodeCreateCmd = new Script(true, "iscsiadm", 0, logger);
+        nodeCreateCmd.add("-m", "node");
+        nodeCreateCmd.add("-T", iqn);
+        nodeCreateCmd.add("-p", host + ":" + port);
+        nodeCreateCmd.add("-o", "new");
+        result = nodeCreateCmd.execute();
         if (result != null) {
-            // Rescan failed — session may not exist. Try login first, then rescan.
-            logger.info("rescanIscsiSession: Rescan failed ({}), attempting login + rescan for {}@{}:{}", result, iqn, host, port);
-
-            Script loginCmd = new Script(true, "iscsiadm", 0, logger);
-            loginCmd.add("-m", "node");
-            loginCmd.add("-T", iqn);
-            loginCmd.add("-p", host + ":" + port);
-            loginCmd.add("--login");
-            loginCmd.execute(); // ignore result — may say "already present"
-
-            // Retry rescan after login
-            rescanCmd = new Script(true, "iscsiadm", 0, logger);
-            rescanCmd.add("-m", "node");
-            rescanCmd.add("-T", iqn);
-            rescanCmd.add("-p", host + ":" + port);
-            rescanCmd.add("--rescan");
-            rescanCmd.execute(); // best effort
+            // "already exists" is fine
+            logger.info("rescanIscsiSession: Node create result for {}@{}:{}: {}", iqn, host, port, result);
         } else {
-            logger.info("rescanIscsiSession: Successfully rescanned session for {}@{}:{}", iqn, host, port);
+            logger.info("rescanIscsiSession: Node record created for {}@{}:{}", iqn, host, port);
+        }
+
+        // Step 3: Login
+        Script loginCmd = new Script(true, "iscsiadm", 0, logger);
+        loginCmd.add("-m", "node");
+        loginCmd.add("-T", iqn);
+        loginCmd.add("-p", host + ":" + port);
+        loginCmd.add("--login");
+        result = loginCmd.execute();
+        if (result != null) {
+            // "already present" is fine
+            logger.info("rescanIscsiSession: Login result for {}@{}:{}: {}", iqn, host, port, result);
+        } else {
+            logger.info("rescanIscsiSession: Successfully logged in to {}@{}:{}", iqn, host, port);
+        }
+
+        // Step 4: Rescan again to discover newly mapped LUNs
+        rescanCmd = new Script(true, "iscsiadm", 0, logger);
+        rescanCmd.add("-m", "node");
+        rescanCmd.add("-T", iqn);
+        rescanCmd.add("-p", host + ":" + port);
+        rescanCmd.add("--rescan");
+        result = rescanCmd.execute();
+        if (result != null) {
+            logger.warn("rescanIscsiSession: Post-login rescan failed for {}@{}:{}: {}", iqn, host, port, result);
+        } else {
+            logger.info("rescanIscsiSession: Post-login rescan succeeded for {}@{}:{}", iqn, host, port);
         }
     }
 

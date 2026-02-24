@@ -234,7 +234,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             s_logger.info("createTempVolume: 'delete' signal — cleaning up cloned LUN and snapshot details for snapshot [{}]",
                     snapshotInfo.getSnapshotId());
 
-            //deleteSnapshotClone(snapshotInfo, snapshotInfo.getDataStore());
+            deleteSnapshotClone(snapshotInfo, snapshotInfo.getDataStore());
 
             // Remove ONTAP-specific details that were stored during takeSnapshot()
             removeSnapshotDetailIfPresent(snapshotInfo.getSnapshotId(), Constants.SRC_CS_VOLUME_ID);
