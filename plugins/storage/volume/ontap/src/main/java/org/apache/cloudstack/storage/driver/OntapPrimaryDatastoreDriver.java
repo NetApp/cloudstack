@@ -540,9 +540,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
             String svmName = details.get(Constants.SVM_NAME);
             String storagePoolUuid = storagePool.getUuid();
-
-            // snapshotInfo.getPath() contains the cloned LUN name set during takeSnapshot()
-            String snapshotLunName = snapshotInfo.getPath();
+            String snapshotLunName = snapshotInfo.getName();
             if (snapshotLunName == null) {
                 throw new CloudRuntimeException("grantAccessForSnapshot: Snapshot path (LUN name) is null for snapshot id: " + snapshotInfo.getId());
             }
