@@ -715,9 +715,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String accessGroupName = Utility.getIgroupName(poolDetails.get(Constants.SVM_NAME), storagePool.getUuid());
 
             // Map the snapshot's cloned LUN to the igroup
-            sanStrategy.ensureLunMapped(poolDetails.get(Constants.SVM_NAME), clonedCloudStackVolume.getLun().getName(), accessGroupName);
+            String lunNumber = sanStrategy.ensureLunMapped(poolDetails.get(Constants.SVM_NAME), clonedCloudStackVolume.getLun().getName(), accessGroupName);
+            // Store DiskTO.IQN in snapshot_details so StorageSystemDataMotionStrategy.getSnapshotDetails()
+            // can build the iSCSI source details for the CopyCommand sent to the KVM agent
+
+            // Update volume path if changed (e.g., after migration or re-mapping)
+            String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(poolDetails.get(Constants.PROTOCOL))) {
-                snapshotObjectTo.setPath(clonedCloudStackVolume.getLun().getName());
+                snapshotObjectTo.setPath(iscsiPath);
                 snapshotId = clonedCloudStackVolume.getLun().getUuid();
                 snapshotSize = clonedCloudStackVolume.getLun().getSpace().getSize();
             }
