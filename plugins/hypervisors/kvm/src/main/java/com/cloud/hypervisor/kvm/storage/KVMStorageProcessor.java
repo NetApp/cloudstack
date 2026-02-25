@@ -1088,6 +1088,8 @@ public class KVMStorageProcessor implements StorageProcessor {
 
             logger.info("backupSnapshotFromManagedStorage: Device available at {}", deviceByPath);
 
+            verifyDeviceReadable(deviceByPath, 30);
+
             secondaryStorage = storagePoolMgr.getStoragePoolByURI(nfsImageStore.getUrl());
 
             final String snapshotRelPath = destSnapshot.getPath();
@@ -1127,6 +1129,37 @@ public class KVMStorageProcessor implements StorageProcessor {
             if (secondaryStorage != null) {
                 secondaryStorage.delete();
             }
+        }
+    }
+
+     private void verifyDeviceReadable(String devicePath, int timeoutSeconds) {
+        logger.info("verifyDeviceReadable: Testing read access to device {}", devicePath);
+
+        Script script = new Script("/bin/dd", timeoutSeconds * 1000L, logger);
+        script.add("if=" + devicePath);
+        script.add("bs=64k");
+        script.add("count=16");  // Read 1MB
+        script.add("iflag=direct");
+        script.add("of=/dev/null");
+
+        long startTime = System.currentTimeMillis();
+        String result = script.execute();
+        long elapsed = System.currentTimeMillis() - startTime;
+
+        if (result != null) {
+            throw new CloudRuntimeException("verifyDeviceReadable: Device " + devicePath +
+                    " is not readable (error: " + result + "). The iSCSI LUN may be offline, " +
+                    "unmapped, or experiencing I/O errors.");
+        }
+
+        // If 1MB read took more than 10 seconds, warn about slow throughput
+        if (elapsed > 10000) {
+            long throughputKBps = (1024 * 1000) / elapsed;
+            logger.warn("verifyDeviceReadable: Device {} has very slow throughput: {} kB/s " +
+                    "(1MB read took {}ms). The qemu-img convert will be extremely slow.",
+                    devicePath, throughputKBps, elapsed);
+        } else {
+            logger.info("verifyDeviceReadable: Device {} is readable (1MB read completed in {}ms)", devicePath, elapsed);
         }
     }
 
