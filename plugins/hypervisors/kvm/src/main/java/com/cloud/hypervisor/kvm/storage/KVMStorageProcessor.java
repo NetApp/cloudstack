@@ -1026,228 +1026,6 @@ public class KVMStorageProcessor implements StorageProcessor {
         return copyToObjectStore(newCpyCmd);
     }
 
-    /**
-     * Backs up a snapshot from managed storage (e.g., ONTAP iSCSI) to secondary storage.
-     * Connects to the iSCSI LUN using the IQN/path from the CopyCommand options, copies
-     * the raw disk data to the NFS secondary storage.
-     *
-     * This mirrors the approach used by {@link #createTemplateFromVolumeOrSnapshot(CopyCommand)}.
-     */
-    private Answer backupSnapshotFromManagedStorage(final CopyCommand cmd) {
-        final DataTO destData = cmd.getDestTO();
-        final SnapshotObjectTO destSnapshot = (SnapshotObjectTO) destData;
-        final DataStoreTO imageStore = destData.getDataStore();
-
-        if (!(imageStore instanceof NfsTO)) {
-            return new CopyCmdAnswer("backupSnapshotFromManagedStorage: unsupported secondary storage protocol");
-        }
-
-        final NfsTO nfsImageStore = (NfsTO) imageStore;
-        KVMStoragePool secondaryStorage = null;
-
-        try {
-            final Map<String, String> details = cmd.getOptions();
-            String path = details != null ? details.get(DiskTO.IQN) : null;
-            if (path == null) {
-                path = details != null ? details.get(DiskTO.PATH) : null;
-                if (path == null) {
-                    return new CopyCmdAnswer("backupSnapshotFromManagedStorage: IQN or PATH is required in options");
-                }
-            }
-
-            final String storageHost = details.get(DiskTO.STORAGE_HOST);
-            final String storagePort = details.get(DiskTO.STORAGE_PORT);
-            if (storageHost == null || storagePort == null) {
-                return new CopyCmdAnswer("backupSnapshotFromManagedStorage: STORAGE_HOST and STORAGE_PORT are required in options");
-            }
-
-            // Parse IQN and LUN from path format "/<iqn>/<lun>"
-            final String[] pathParts = path.split("/");
-            if (pathParts.length != 3) {
-                return new CopyCmdAnswer("backupSnapshotFromManagedStorage: Invalid iSCSI path format: " + path + " (expected /<IQN>/<LUN>)");
-            }
-            final String iqn = pathParts[1].trim();
-            final String lun = pathParts[2].trim();
-
-            logger.info("backupSnapshotFromManagedStorage: storageHost={}, storagePort={}, iqn={}, lun={}",
-                    storageHost, storagePort, iqn, lun);
-
-            // The iSCSI session to this target likely already exists (the VM's volume uses the
-            // same IQN). Instead of login (which will say "already present"), rescan the session
-            // so the newly mapped snapshot LUN becomes visible to the OS.
-            rescanIscsiSession(iqn, storageHost, storagePort);
-
-            // Build the /dev/disk/by-path device path for the snapshot LUN
-            final String deviceByPath = "/dev/disk/by-path/ip-" + storageHost + ":" + storagePort +
-                    "-iscsi-" + iqn + "-lun-" + lun;
-
-            // Wait for the device to appear after rescan
-            if (!waitForDeviceToAppear(deviceByPath, 30, 1000)) {
-                return new CopyCmdAnswer("backupSnapshotFromManagedStorage: Device did not appear after rescan: " + deviceByPath);
-            }
-
-            logger.info("backupSnapshotFromManagedStorage: Device available at {}", deviceByPath);
-
-            verifyDeviceReadable(deviceByPath, 30);
-
-            secondaryStorage = storagePoolMgr.getStoragePoolByURI(nfsImageStore.getUrl());
-
-            final String snapshotRelPath = destSnapshot.getPath();
-            final String snapshotDestPath = secondaryStorage.getLocalPath() + File.separator + snapshotRelPath;
-
-            storageLayer.mkdirs(snapshotDestPath);
-
-            final String snapshotName = UUID.randomUUID().toString();
-            final String destFile = snapshotDestPath + "/" + snapshotName;
-
-            logger.info("backupSnapshotFromManagedStorage: Copying raw device {} to {}", deviceByPath, destFile);
-
-            // Use qemu-img to convert the raw iSCSI device to a file on secondary storage
-            final QemuImgFile srcFile = new QemuImgFile(deviceByPath, PhysicalDiskFormat.RAW);
-            final QemuImgFile destQemuFile = new QemuImgFile(destFile, PhysicalDiskFormat.QCOW2);
-            final QemuImg qemu = new QemuImg(cmd.getWaitInMillSeconds());
-            qemu.convert(srcFile, destQemuFile);
-
-            final File snapFile = new File(destFile);
-            final long size = snapFile.exists() ? snapFile.length() : 0;
-
-            logger.info("backupSnapshotFromManagedStorage: Successfully copied snapshot, size={}", size);
-
-            final SnapshotObjectTO newSnapshot = new SnapshotObjectTO();
-            newSnapshot.setPath(snapshotRelPath + File.separator + snapshotName);
-            newSnapshot.setPhysicalSize(size);
-
-            return new CopyCmdAnswer(newSnapshot);
-        } catch (final Exception ex) {
-            logger.error("backupSnapshotFromManagedStorage: Failed to backup snapshot", ex);
-            return new CopyCmdAnswer("backupSnapshotFromManagedStorage: " + ex.getMessage());
-        } finally {
-            // Do NOT disconnect the iSCSI session here. The session is shared with the VM's
-            // attached volume (same target IQN). Disconnecting would logout the entire session
-            // and crash the VM. The management server's revokeAccessForSnapshot() will unmap
-            // the snapshot LUN from the igroup on the storage side.
-            if (secondaryStorage != null) {
-                secondaryStorage.delete();
-            }
-        }
-    }
-
-     private void verifyDeviceReadable(String devicePath, int timeoutSeconds) {
-        logger.info("verifyDeviceReadable: Testing read access to device {}", devicePath);
-
-        Script script = new Script("/bin/dd", timeoutSeconds * 1000L, logger);
-        script.add("if=" + devicePath);
-        script.add("bs=64k");
-        script.add("count=16");  // Read 1MB
-        script.add("iflag=direct");
-        script.add("of=/dev/null");
-
-        long startTime = System.currentTimeMillis();
-        String result = script.execute();
-        long elapsed = System.currentTimeMillis() - startTime;
-
-        if (result != null) {
-            throw new CloudRuntimeException("verifyDeviceReadable: Device " + devicePath +
-                    " is not readable (error: " + result + "). The iSCSI LUN may be offline, " +
-                    "unmapped, or experiencing I/O errors.");
-        }
-
-        // If 1MB read took more than 10 seconds, warn about slow throughput
-        if (elapsed > 10000) {
-            long throughputKBps = (1024 * 1000) / elapsed;
-            logger.warn("verifyDeviceReadable: Device {} has very slow throughput: {} kB/s " +
-                    "(1MB read took {}ms). The qemu-img convert will be extremely slow.",
-                    devicePath, throughputKBps, elapsed);
-        } else {
-            logger.info("verifyDeviceReadable: Device {} is readable (1MB read completed in {}ms)", devicePath, elapsed);
-        }
-    }
-
-    /**
-     * Ensures an iSCSI session is active and rescanned so that the target LUN is visible.
-     * Handles three scenarios:
-     *   1. Session already exists → rescan to discover newly mapped LUNs
-     *   2. Node record exists but no session → login, then rescan
-     *   3. No node record at all → discover target, create node record, login
-     */
-    private void rescanIscsiSession(String iqn, String host, String port) {
-        // Step 1: Try rescan — works if session already exists
-        Script rescanCmd = new Script(true, "iscsiadm", 0, logger);
-        rescanCmd.add("-m", "node");
-        rescanCmd.add("-T", iqn);
-        rescanCmd.add("-p", host + ":" + port);
-        rescanCmd.add("--rescan");
-
-        String result = rescanCmd.execute();
-        if (result == null) {
-            logger.info("rescanIscsiSession: Successfully rescanned existing session for {}@{}:{}", iqn, host, port);
-            return;
-        }
-
-        logger.info("rescanIscsiSession: Rescan failed ({}), attempting full connect for {}@{}:{}", result, iqn, host, port);
-
-        // Step 2: Create node record (iscsiadm -m node -T <iqn> -p <host>:<port> -o new)
-        // This is required before login can succeed.
-        Script nodeCreateCmd = new Script(true, "iscsiadm", 0, logger);
-        nodeCreateCmd.add("-m", "node");
-        nodeCreateCmd.add("-T", iqn);
-        nodeCreateCmd.add("-p", host + ":" + port);
-        nodeCreateCmd.add("-o", "new");
-        result = nodeCreateCmd.execute();
-        if (result != null) {
-            // "already exists" is fine
-            logger.info("rescanIscsiSession: Node create result for {}@{}:{}: {}", iqn, host, port, result);
-        } else {
-            logger.info("rescanIscsiSession: Node record created for {}@{}:{}", iqn, host, port);
-        }
-
-        // Step 3: Login
-        Script loginCmd = new Script(true, "iscsiadm", 0, logger);
-        loginCmd.add("-m", "node");
-        loginCmd.add("-T", iqn);
-        loginCmd.add("-p", host + ":" + port);
-        loginCmd.add("--login");
-        result = loginCmd.execute();
-        if (result != null) {
-            // "already present" is fine
-            logger.info("rescanIscsiSession: Login result for {}@{}:{}: {}", iqn, host, port, result);
-        } else {
-            logger.info("rescanIscsiSession: Successfully logged in to {}@{}:{}", iqn, host, port);
-        }
-
-        // Step 4: Rescan again to discover newly mapped LUNs
-        rescanCmd = new Script(true, "iscsiadm", 0, logger);
-        rescanCmd.add("-m", "node");
-        rescanCmd.add("-T", iqn);
-        rescanCmd.add("-p", host + ":" + port);
-        rescanCmd.add("--rescan");
-        result = rescanCmd.execute();
-        if (result != null) {
-            logger.warn("rescanIscsiSession: Post-login rescan failed for {}@{}:{}: {}", iqn, host, port, result);
-        } else {
-            logger.info("rescanIscsiSession: Post-login rescan succeeded for {}@{}:{}", iqn, host, port);
-        }
-    }
-
-    /**
-     * Waits for a /dev/disk/by-path device to appear after an iSCSI rescan.
-     */
-    private boolean waitForDeviceToAppear(String deviceByPath, int maxTries, int sleepMs) {
-        for (int i = 0; i < maxTries; i++) {
-            if (Files.exists(Paths.get(deviceByPath))) {
-                return true;
-            }
-            logger.debug("waitForDeviceToAppear: {} not yet available, attempt {}/{}", deviceByPath, i + 1, maxTries);
-            try {
-                Thread.sleep(sleepMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return Files.exists(Paths.get(deviceByPath));
-    }
-
     @Override
     public Answer backupSnapshot(final CopyCommand cmd) {
         final DataTO srcData = cmd.getSrcTO();
@@ -1256,16 +1034,6 @@ public class KVMStorageProcessor implements StorageProcessor {
         final PrimaryDataStoreTO primaryStore = (PrimaryDataStoreTO)snapshot.getDataStore();
         final SnapshotObjectTO destSnapshot = (SnapshotObjectTO)destData;
         final DataStoreTO imageStore = destData.getDataStore();
-
-        // For managed storage (e.g., ONTAP iSCSI), the IQN/path is passed in options
-        // by grantAccessForSnapshot(). Route to the managed-storage handler which connects
-        // to the iSCSI device and copies the raw data to secondary storage.
-        final Map<String, String> srcDetails = cmd.getOptions();
-        logger.info("backupSnapshot: Received request to backup snapshot with srcDetails: {}", srcDetails);
-        if (srcDetails != null && (srcDetails.get(DiskTO.IQN) != null || srcDetails.get(DiskTO.PATH) != null)) {
-            logger.info("backupSnapshot: backupSnapshotFromManagedStorage: {}", cmd.toString());
-            return backupSnapshotFromManagedStorage(cmd);
-        }
 
         if (!(imageStore instanceof NfsTO)) {
             return backupSnapshotForObjectStore(cmd);
@@ -1290,7 +1058,6 @@ public class KVMStorageProcessor implements StorageProcessor {
 
         final VolumeObjectTO srcVolume = snapshot.getVolume();
         try {
-            logger.info("backupSnapshot: isCreatedFromVmSnapshot: {}", isCreatedFromVmSnapshot);
             conn = LibvirtConnection.getConnectionByVmName(vmName);
 
             secondaryStoragePool = storagePoolMgr.getStoragePoolByURI(secondaryStoragePoolUrl);
@@ -1299,11 +1066,8 @@ public class KVMStorageProcessor implements StorageProcessor {
             snapshotRelPath = destSnapshot.getPath();
 
             snapshotDestPath = ssPmountPath + File.separator + snapshotRelPath;
-            logger.info("backupSnapshot: snapshotDestPath: {}",snapshotDestPath);
-            logger.info("backupSnapshot: volumePath: {}",volumePath);
             snapshotDisk = storagePoolMgr.getPhysicalDisk(primaryStore.getPoolType(), primaryStore.getUuid(), volumePath);
             primaryPool = snapshotDisk.getPool();
-            logger.info("backupSnapshot: primaryPool: {}", primaryPool.toString());
 
             long size = 0;
             /**
@@ -1350,7 +1114,6 @@ public class KVMStorageProcessor implements StorageProcessor {
                     return new CopyCmdAnswer(e.toString());
                 }
             } else {
-                logger.info("backupSnapshot: primaryPool.getType(): {}",primaryPool.getType());
                 final Script command = new Script(_manageSnapshotPath, cmd.getWaitInMillSeconds(), logger);
                 command.add("-b", isCreatedFromVmSnapshot ? snapshotDisk.getPath() : snapshot.getPath());
                 command.add(NAME_OPTION, snapshotName);

@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
-import java.util.Set;
 import java.util.UUID;
 
 import javax.inject.Inject;
@@ -112,13 +111,11 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
     @Override
     public SnapshotInfo backupSnapshot(SnapshotInfo snapshotInfo) {
-        logger.info("backupSnapshot snapshotInfo: {} ", snapshotInfo.toString());
-        logger.info("backupSnapshot snapshotInfo.getLocationType(): {} ", snapshotInfo.getLocationType());
         Preconditions.checkArgument(snapshotInfo != null, "'snapshotInfo' cannot be 'null'.");
 
         if (snapshotInfo.getLocationType() != Snapshot.LocationType.SECONDARY) {
-            logger.info("backupSnapshot markAsBackedUp");
             markAsBackedUp((SnapshotObject)snapshotInfo);
+
             return snapshotInfo;
         }
 
@@ -126,7 +123,7 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
         // snapshot on the storage or exists as a volume on the storage (clone).
         // If archive flag is passed in, we should copy this snapshot to secondary
         // storage and delete it from primary storage.
-        logger.info("backupSnapshot copy to secondary storage");
+
         HostVO host = getHost(snapshotInfo.getVolumeId());
 
         boolean canStorageSystemCreateVolumeFromSnapshot = canStorageSystemCreateVolumeFromSnapshot(snapshotInfo.getBaseVolume().getPoolId());
@@ -141,9 +138,9 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
         boolean computeClusterSupportsResign = clusterDao.getSupportsResigning(host.getClusterId());
 
-        if (!computeClusterSupportsResign && host.getHypervisorType() != HypervisorType.KVM) {
+        if (!computeClusterSupportsResign) {
             String msg = "Cannot archive snapshot: 'computeClusterSupportsResign' was false.";
-            logger.info("backupSnapshot: {}", msg);
+
             logger.warn(msg);
 
             throw new CloudRuntimeException(msg);
@@ -276,12 +273,9 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
 
     private void verifyLocationType(SnapshotInfo snapshotInfo) {
         VolumeInfo volumeInfo = snapshotInfo.getBaseVolume();
-        logger.info("verifyLocationType: {}", snapshotInfo.getLocationType());
-        logger.info("verifyLocationType: {}", volumeInfo.getFormat());
-        Set<ImageFormat> supportedFormats = Set.of(ImageFormat.VHD, ImageFormat.QCOW2, ImageFormat.RAW);
 
-        if (snapshotInfo.getLocationType() == Snapshot.LocationType.SECONDARY && !supportedFormats.contains(volumeInfo.getFormat())) {
-            throw new CloudRuntimeException("Only the '" + supportedFormats + "' image types can be used when 'LocationType' is set to 'SECONDARY'.");
+        if (snapshotInfo.getLocationType() == Snapshot.LocationType.SECONDARY && volumeInfo.getFormat() != ImageFormat.VHD) {
+            throw new CloudRuntimeException("Only the '" + ImageFormat.VHD + "' image type can be used when 'LocationType' is set to 'SECONDARY'.");
         }
     }
 
@@ -515,7 +509,6 @@ public class StorageSystemSnapshotStrategy extends SnapshotStrategyBase {
             }
 
             snapshotOnPrimary = result.getSnapshot();
-            snapshotOnPrimary.addPayload(snapshotInfo.getPayload());
         }
         finally {
             if (result != null && result.isSuccess()) {

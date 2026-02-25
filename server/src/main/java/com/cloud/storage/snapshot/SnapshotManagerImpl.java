@@ -1793,7 +1793,6 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
         if (asyncBackup) {
             backupSnapshotExecutor.schedule(new BackupSnapshotTask(snapshotOnPrimary, snapshotBackupRetries - 1, snapshotStrategy, zoneIds, poolIds), 0, TimeUnit.SECONDS);
         } else {
-            logger.info("backupSnapshotToSecondary: Backing up snapshot [{}]", snapshotOnPrimary.toString());
             SnapshotInfo backedUpSnapshot = snapshotStrategy.backupSnapshot(snapshotOnPrimary);
             if (backedUpSnapshot != null) {
                 snapshotStrategy.postSnapshotCreation(snapshotOnPrimary);
@@ -1851,22 +1850,13 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
     }
 
     private void updateSnapshotPayload(long storagePoolId, CreateSnapshotPayload payload, boolean isKvmAndFileBasedStorage, Long clusterId) {
-        logger.info("updateSnapshotPayload: storagePoolId={}, isKvmAndFileBasedStorage={}, clusterId={}", storagePoolId, isKvmAndFileBasedStorage, clusterId);
         StoragePoolVO storagePoolVO = _storagePoolDao.findById(storagePoolId);
 
         if (storagePoolVO.isManaged()) {
             Snapshot.LocationType locationType = payload.getLocationType();
-            logger.info("updateSnapshotPayload : locationType {}", locationType);
+
             if (locationType == null) {
-                if (!isKvmAndFileBasedStorage) {
-                    // For managed, non-file-based storage (e.g., iSCSI), default to SECONDARY
-                    // so that the snapshot gets copied to secondary storage.
-                    // File-based storage (e.g., NFS) uses a shortcut path that bypasses
-                    // the locationType check, so PRIMARY is fine for them.
-                    payload.setLocationType(Snapshot.LocationType.SECONDARY);
-                } else {
-                    payload.setLocationType(Snapshot.LocationType.PRIMARY);
-                }
+                payload.setLocationType(Snapshot.LocationType.PRIMARY);
             }
         } else {
             payload.setLocationType(null);
@@ -1875,8 +1865,6 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
         if (isKvmAndFileBasedStorage && kvmIncrementalSnapshot.valueIn(clusterId)) {
             payload.setKvmIncrementalSnapshot(true);
         }
-        logger.info("updateSnapshotPayload : payload {}", payload);
-        logger.info("updateSnapshotPayload : payload.getLocationType() {}", payload.getLocationType());
     }
 
     @Override

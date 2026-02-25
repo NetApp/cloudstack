@@ -1144,7 +1144,6 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
             if (HypervisorType.KVM.equals(snapshotInfo.getHypervisorType()) && storagePoolVO.getPoolType() == StoragePoolType.PowerFlex) {
                 usingBackendSnapshot = false;
             }
-            logger.info("handleCopyAsyncToSecondaryStorage: usingBackendSnapshot {}", usingBackendSnapshot);
 
             if (usingBackendSnapshot) {
                 createVolumeFromSnapshot(snapshotInfo);
@@ -1182,7 +1181,7 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
             int primaryStorageDownloadWait = StorageManager.PRIMARY_STORAGE_DOWNLOAD_WAIT.value();
             CopyCommand copyCommand = new CopyCommand(snapshotInfo.getTO(), destOnStore.getTO(), primaryStorageDownloadWait,
                     VirtualMachineManager.ExecuteInSequence.value());
-            logger.info("handleCopyAsyncToSecondaryStorage: keepGrantedAccess {}", keepGrantedAccess);
+
             try {
                 if (!keepGrantedAccess) {
                     _volumeService.grantAccess(snapshotInfo, hostVO, srcDataStore);
@@ -1206,7 +1205,7 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 copyCommand.setOptions(srcDetails);
 
                 copyCmdAnswer = (CopyCmdAnswer)agentManager.send(hostVO.getId(), copyCommand);
-                logger.info("handleCopyAsyncToSecondaryStorage: copyCmdAnswer {}", copyCmdAnswer.getResult());
+
                 if (!copyCmdAnswer.getResult()) {
                     errMsg = copyCmdAnswer.getDetails();
 

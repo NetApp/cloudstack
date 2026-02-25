@@ -3832,7 +3832,6 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
     @ActionEvent(eventType = EventTypes.EVENT_SNAPSHOT_CREATE, eventDescription = "taking snapshot", async = true)
     public Snapshot takeSnapshot(Long volumeId, Long policyId, Long snapshotId, Account account, boolean quiescevm, Snapshot.LocationType locationType, boolean asyncBackup,
             Map<String, String> tags, List<Long> zoneIds, List<Long> poolIds, Boolean useStorageReplication) throws ResourceAllocationException {
-        logger.info("eventTakeSnapshot: Location {}", locationType);
         final Snapshot snapshot = takeSnapshotInternal(volumeId, policyId, snapshotId, account, quiescevm, locationType, asyncBackup, zoneIds, poolIds, useStorageReplication);
         if (snapshot != null && MapUtils.isNotEmpty(tags)) {
             taggedResourceService.createTags(Collections.singletonList(snapshot.getUuid()), ResourceTag.ResourceObjectType.Snapshot, tags, null);
@@ -3879,12 +3878,7 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         StoragePoolVO storagePoolVO = _storagePoolDao.findById(volume.getPoolId());
 
         if (storagePoolVO.isManaged() && locationType == null) {
-            logger.info("takeSnapshotInternal: locationType : {}", locationType);
             locationType = Snapshot.LocationType.PRIMARY;
-            if (!isFileBasedStoragePool(storagePoolVO)) {
-                locationType = Snapshot.LocationType.SECONDARY;
-            }
-            logger.info("takeSnapshotInternal: locationType after : {}", locationType);
         }
 
         VMInstanceVO vm = null;
@@ -4001,21 +3995,6 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         return volService.takeSnapshot(volume);
     }
 
-    /**
-     * Checks if the storage pool is file-based (NFS, SharedMountPoint, Filesystem).
-     * File-based managed pools can keep snapshots on primary storage, while non-file-based
-     * managed pools (e.g., iSCSI) need snapshots copied to secondary storage.
-     * Consistent with SnapshotManagerImpl.isHypervisorKvmAndFileBasedStorage().
-     */
-    private boolean isFileBasedStoragePool(StoragePoolVO storagePoolVO) {
-        Set<StoragePoolType> fileBasedTypes = Set.of(
-            StoragePoolType.SharedMountPoint,
-            StoragePoolType.NetworkFilesystem,
-            StoragePoolType.Filesystem
-        );
-        return fileBasedTypes.contains(storagePoolVO.getPoolType());
-    }
-
     private boolean isOperationSupported(VMTemplateVO template, UserVmVO userVm) {
         if (template != null && template.getTemplateType() == Storage.TemplateType.SYSTEM &&
                 (userVm == null || !UserVmManager.CKS_NODE.equals(userVm.getUserVmType()) || !UserVmManager.SHAREDFSVM.equals(userVm.getUserVmType()))) {
@@ -4070,13 +4049,7 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         }
 
         if (storagePoolVO.isManaged() && locationType == null) {
-            if (isFileBasedStoragePool(storagePoolVO)) {
-                locationType = Snapshot.LocationType.PRIMARY;
-            } else {
-                // For managed, non-file-based storage (e.g., iSCSI), default to SECONDARY
-                // so that the snapshot gets copied to secondary storage via the backup pipeline.
-                locationType = Snapshot.LocationType.SECONDARY;
-            }
+            locationType = Snapshot.LocationType.PRIMARY;
         }
 
         StoragePool storagePool = (StoragePool)volume.getDataStore();
