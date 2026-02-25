@@ -629,13 +629,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(store.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
 
-        // Build the ONTAP LUN name using the snapshot name (consistent with grantAccessForSnapshot/revokeAccessForSnapshot)
-        // Do NOT use snapshotInfo.getPath() — that holds the iSCSI path (/<IQN>/<LUN>), not the ONTAP LUN name.
-        if (snapshotInfo.getName() == null || snapshotInfo.getName().isEmpty()) {
-            s_logger.warn("deleteSnapshotClone: Snapshot name is null/empty for snapshot id: {}, nothing to delete", snapshotInfo.getId());
+        // Get the cloned LUN name from snapshotInfo.getPath() (set during takeSnapshot)
+        String snapshotLunName = snapshotInfo.getPath();
+        if (snapshotLunName == null) {
+            s_logger.warn("deleteSnapshotClone: Snapshot path is null for snapshot id: {}, nothing to delete", snapshotInfo.getId());
             return;
         }
-        String snapshotLunName = Constants.VOL + storagePool.getName() + Constants.SLASH + snapshotInfo.getName();
 
         // Get the cloned LUN UUID from snapshot_details
         SnapshotDetailsVO snapDetail = snapshotDetailsDao.findDetail(snapshotInfo.getSnapshotId(), Constants.ONTAP_SNAP_ID);
@@ -712,18 +711,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO)snapshot.getTO();
             CloudStackVolume snapshotCloudStackVolumeRequest = snapshotCloudStackVolumeRequestByProtocol(poolDetails, storagePool, cloudStackVolume, snapshot);
             CloudStackVolume clonedCloudStackVolume = storageStrategy.copyCloudStackVolume(snapshotCloudStackVolumeRequest);
-            UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(poolDetails);
-            String accessGroupName = Utility.getIgroupName(poolDetails.get(Constants.SVM_NAME), storagePool.getUuid());
-
-            // Map the snapshot's cloned LUN to the igroup
-            String lunNumber = sanStrategy.ensureLunMapped(poolDetails.get(Constants.SVM_NAME), clonedCloudStackVolume.getLun().getName(), accessGroupName);
-            // Store DiskTO.IQN in snapshot_details so StorageSystemDataMotionStrategy.getSnapshotDetails()
-            // can build the iSCSI source details for the CopyCommand sent to the KVM agent
-
-            // Update volume path if changed (e.g., after migration or re-mapping)
-            String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(poolDetails.get(Constants.PROTOCOL))) {
-                snapshotObjectTo.setPath(iscsiPath);
+                snapshotObjectTo.setPath(clonedCloudStackVolume.getLun().getName());
                 snapshotId = clonedCloudStackVolume.getLun().getUuid();
                 snapshotSize = clonedCloudStackVolume.getLun().getSpace().getSize();
             }
