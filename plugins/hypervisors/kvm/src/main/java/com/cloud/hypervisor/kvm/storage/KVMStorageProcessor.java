@@ -1091,6 +1091,10 @@ public class KVMStorageProcessor implements StorageProcessor {
             verifyDeviceReadable(deviceByPath, 30);
 
             secondaryStorage = storagePoolMgr.getStoragePoolByURI(nfsImageStore.getUrl());
+            if (secondaryStorage == null) {
+                return new CopyCmdAnswer("backupSnapshotFromManagedStorage: Failed to mount secondary storage " +
+                        nfsImageStore.getUrl() + " after retries");
+            }
 
             final String snapshotRelPath = destSnapshot.getPath();
             final String snapshotDestPath = secondaryStorage.getLocalPath() + File.separator + snapshotRelPath;
@@ -1101,15 +1105,78 @@ public class KVMStorageProcessor implements StorageProcessor {
             final String destFile = snapshotDestPath + "/" + snapshotName;
 
             logger.info("backupSnapshotFromManagedStorage: Copying raw device {} to {}", deviceByPath, destFile);
+            // On slow storage (e.g., ONTAP VSIM), qemu-img convert reads in small blocks
+            // (64KB) which causes extremely slow throughput due to per-I/O latency.
+            // Instead, use dd with a large block size (1MB) to copy the raw device to a
+            // temporary raw file, then convert to QCOW2 locally.
+            //
+            // Step 1: dd raw device → temporary raw file on LOCAL disk (/tmp)
+            //         Writing to local disk avoids the double-network bottleneck of
+            //         reading from iSCSI + writing to NFS simultaneously. The NFS write
+            //         only happens in Step 2 for the final (much smaller) QCOW2 file.
+            // Step 2: qemu-img convert local raw file → QCOW2 on secondary (NFS) storage
+            // Step 3: Delete temporary local raw file
+            final String tempDir = "/tmp/cloudstack-snapshots";
+            storageLayer.mkdirs(tempDir);
+            final String tempRawFile = tempDir + "/" + snapshotName + ".raw";
 
-            // Use qemu-img to convert the raw iSCSI device to a file on secondary storage
-            final QemuImgFile srcFile = new QemuImgFile(deviceByPath, PhysicalDiskFormat.RAW);
-            final QemuImgFile destQemuFile = new QemuImgFile(destFile, PhysicalDiskFormat.QCOW2);
-            final QemuImg qemu = new QemuImg(cmd.getWaitInMillSeconds());
-            qemu.convert(srcFile, destQemuFile);
+            // Get volume size from options for dd count parameter
+            final String volumeSizeStr = details.get("volumeSize");
+            final long volumeSize = volumeSizeStr != null ? Long.parseLong(volumeSizeStr) : 0;
+            final long countMB = volumeSize > 0 ? (volumeSize / (1024 * 1024)) : 0;
+
+            logger.info("backupSnapshotFromManagedStorage: Step 1 - dd {} to local {} with bs=1M{}",
+                    deviceByPath, tempRawFile, countMB > 0 ? " count=" + countMB : "");
+            long startTime = System.currentTimeMillis();
+
+            final Script ddCmd = new Script("dd", cmd.getWaitInMillSeconds(), logger);
+            ddCmd.add("if=" + deviceByPath);
+            ddCmd.add("of=" + tempRawFile);
+            ddCmd.add("bs=1M");
+            if (countMB > 0) {
+                ddCmd.add("count=" + countMB);  // Only read exactly the volume size
+            }
+            ddCmd.add("iflag=direct");  // Bypass OS cache for iSCSI reads — more predictable I/O
+            ddCmd.add("conv=sparse");   // Skip zero blocks — critical for thin-provisioned disks
+
+            String ddResult = ddCmd.execute();
+            long ddElapsed = System.currentTimeMillis() - startTime;
+
+            if (ddResult != null) {
+                // Clean up temp file on failure
+                new File(tempRawFile).delete();
+                return new CopyCmdAnswer("backupSnapshotFromManagedStorage: dd failed: " + ddResult);
+            }
+
+            long tempFileSize = new File(tempRawFile).length();
+            logger.info("backupSnapshotFromManagedStorage: Step 1 complete - dd finished in {}ms, raw file size={}",
+                    ddElapsed, toHumanReadableSize(tempFileSize));
+
+            // Step 2: Convert raw → QCOW2 directly to NFS secondary storage
+            // Since the source is now a local file, this is fast (local read, NFS write of
+            // compressed QCOW2 which is much smaller than the raw file)
+            logger.info("backupSnapshotFromManagedStorage: Step 2 - converting local raw to QCOW2 on NFS: {} → {}", tempRawFile, destFile);
+            startTime = System.currentTimeMillis();
+
+            try {
+                final QemuImgFile srcFile = new QemuImgFile(tempRawFile, PhysicalDiskFormat.RAW);
+                final QemuImgFile destQemuFile = new QemuImgFile(destFile, PhysicalDiskFormat.QCOW2);
+                final QemuImg qemu = new QemuImg(cmd.getWaitInMillSeconds());
+                qemu.convert(srcFile, destQemuFile);
+            } finally {
+                // Always delete the temporary local raw file
+                boolean deleted = new File(tempRawFile).delete();
+                logger.info("backupSnapshotFromManagedStorage: Deleted temp raw file {}: {}", tempRawFile, deleted);
+            }
+
+            long convertElapsed = System.currentTimeMillis() - startTime;
+            logger.info("backupSnapshotFromManagedStorage: Step 2 complete - convert finished in {}ms", convertElapsed);
 
             final File snapFile = new File(destFile);
             final long size = snapFile.exists() ? snapFile.length() : 0;
+
+            logger.info("backupSnapshotFromManagedStorage: Successfully copied snapshot, total time={}ms, final size={}",
+                    (ddElapsed + convertElapsed), toHumanReadableSize(size));
 
             logger.info("backupSnapshotFromManagedStorage: Successfully copied snapshot, size={}", size);
 
@@ -1355,7 +1422,6 @@ public class KVMStorageProcessor implements StorageProcessor {
                 command.add("-b", isCreatedFromVmSnapshot ? snapshotDisk.getPath() : snapshot.getPath());
                 command.add(NAME_OPTION, snapshotName);
                 command.add("-p", snapshotDestPath);
-
                 if (isCreatedFromVmSnapshot) {
                     descName = UUID.randomUUID().toString();
                 }
