@@ -281,8 +281,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
-        // TODO- need to check if no host to connect then throw exception or just continue?
         logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
+        if(hostsToConnect.isEmpty()) {
+            s_logger.info("attachCluster: No hosts found for primary storage");
+            throw new CloudRuntimeException("attachCluster: No hosts found for primary storage");
+        }
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
@@ -294,22 +297,24 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
-
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
-        //TODO - check if no host to connect then also need to create access group without initiators
-        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
-            try {
-                AccessGroup accessGroupRequest = new AccessGroup();
-                accessGroupRequest.setHostsToConnect(hostsToConnect);
-                accessGroupRequest.setScope(scope);
-                primaryStore.setDetails(details);// setting details as it does not come from cloudstack
-                accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-                strategy.createAccessGroup(accessGroupRequest);
-            } catch (Exception e) {
-                s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
-                throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+        // We need to create export policy at pool level and igroup at host level(in grantAccess)
+        if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            if (!hostsIdentifier.isEmpty()) {
+                try {
+                    AccessGroup accessGroupRequest = new AccessGroup();
+                    accessGroupRequest.setHostsToConnect(hostsToConnect);
+                    accessGroupRequest.setScope(scope);
+                    primaryStore.setDetails(details);// setting details as it does not come from cloudstack
+                    accessGroupRequest.setStoragePoolId(storagePool.getId());
+                    strategy.createAccessGroup(accessGroupRequest);
+                } catch (Exception e) {
+                    s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+                    throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+                }
             }
         }
+
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
             try {
@@ -347,12 +352,14 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
+        if(hostsToConnect.isEmpty()) {
+            s_logger.info("attachCluster: No hosts found for primary storage");
+            throw new CloudRuntimeException("attachCluster: No hosts found for primary storage");
+        }
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
 
-        // TODO- need to check if no host to connect then throw exception or just continue
-        logger.debug("attachZone: Eligible Up and Enabled hosts: {}", hostsToConnect);
         ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
         //TODO- Check if we have to handle heterogeneous host within the zone
         if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
@@ -360,17 +367,21 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
-        if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
-            try {
-                AccessGroup accessGroupRequest = new AccessGroup();
-                accessGroupRequest.setHostsToConnect(hostsToConnect);
-                accessGroupRequest.setScope(scope);
-                primaryStore.setDetails(details); // setting details as it does not come from cloudstack
-                accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-                strategy.createAccessGroup(accessGroupRequest);
-            } catch (Exception e) {
-                s_logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
-                throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+
+        // We need to create export policy at pool level and igroup at host level
+        if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            if (!hostsIdentifier.isEmpty()) {
+                try {
+                    AccessGroup accessGroupRequest = new AccessGroup();
+                    accessGroupRequest.setHostsToConnect(hostsToConnect);
+                    accessGroupRequest.setScope(scope);
+                    primaryStore.setDetails(details); // setting details as it does not come from cloudstack
+                    accessGroupRequest.setStoragePoolId(storagePool.getId());
+                    strategy.createAccessGroup(accessGroupRequest);
+                } catch (Exception e) {
+                    s_logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                    throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                }
             }
         }
         for (HostVO host : hostsToConnect) {
@@ -485,7 +496,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                         storagePoolId, e.getMessage(), e);
             }
             AccessGroup accessGroup = new AccessGroup();
-            accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
+            accessGroup.setStoragePoolId(storagePoolId);
             // Delete access groups associated with this storage pool
             storageStrategy.deleteAccessGroup(accessGroup);
             s_logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
