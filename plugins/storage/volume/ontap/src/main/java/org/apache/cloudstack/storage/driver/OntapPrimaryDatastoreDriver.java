@@ -149,7 +149,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     volumeVO.setPoolId(storagePool.getId());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                        String svmName = details.get(Constants.SVM_NAME);
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
                         if (lunName == null) {
                             throw new CloudRuntimeException("createAsync: Missing LUN name for volume " + volInfo.getId());
@@ -171,9 +170,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         volumeVO.setPath(null);
                         createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+                        // For NFS, set path to volume UUID to ensure uniqueness
+                        // This prevents multiple VMs from using the same template file path
+                        volumeVO.setPath(volInfo.getUuid());
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
-                        s_logger.info("createAsync: Managed NFS volume [{}] associated with pool {}",
-                                volumeVO.getId(), storagePool.getId());
+                        s_logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
+                                volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
                     }
                     volumeDao.update(volumeVO.getId(), volumeVO);
                 }
@@ -340,6 +342,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     }else{
                         s_logger.info("grantAccess: Igroup {} already exist for the host {}: ", accessGroup.getIgroup().getName() ,host.getName());
                         igroup = accessGroup.getIgroup();
+                        // TODO
                         // Verify host initiator is registered in the igroup before allowing access
 //                        if (sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroup.getIgroup())) {
 //                            // add host initiator to the igroup ? or fail here ?
