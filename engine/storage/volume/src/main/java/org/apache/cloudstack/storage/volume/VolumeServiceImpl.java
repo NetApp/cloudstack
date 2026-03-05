@@ -730,7 +730,16 @@ public class VolumeServiceImpl implements VolumeService {
             CopyCmdAnswer answer = (CopyCmdAnswer)result.getAnswer();
             TemplateObjectTO templateObjectTo = (TemplateObjectTO)answer.getNewData();
 
-            volume.setPath(templateObjectTo.getPath());
+            // For NFS managed storage, preserve the volume UUID path to avoid file collision
+            // For iSCSI, update path as before (iSCSI uses _iScsiName field for actual LUN access)
+            PrimaryDataStore primaryDataStore = (PrimaryDataStore) volumeInfo.getDataStore();
+            if (primaryDataStore != null && primaryDataStore.getPoolType() == StoragePoolType.NetworkFilesystem) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("NFS managed storage - preserving volume path: " + volume.getPath() + " (not overwriting with template path: " + templateObjectTo.getPath() + ")");
+                }
+            } else {
+                volume.setPath(templateObjectTo.getPath());
+            }
 
             if (templateObjectTo.getFormat() != null) {
                 volume.setFormat(templateObjectTo.getFormat());
