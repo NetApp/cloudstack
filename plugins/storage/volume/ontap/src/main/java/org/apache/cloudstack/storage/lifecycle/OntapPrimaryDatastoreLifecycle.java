@@ -120,7 +120,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
         }
 
-        if (podId == null && clusterId == null) {
+        if (podId == null) {
             if (zoneId != null) {
                 s_logger.info("Both Pod Id and Cluster Id are null, Primary storage pool will be associated with a Zone");
             } else {
@@ -231,7 +231,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 path = Constants.SLASH + storagePoolName;
                 port = Constants.NFS3_PORT;
                 // Force NFSv3 for ONTAP managed storage to avoid NFSv4 ID mapping issues
-                details.put("nfsmountopts", "vers=3");
+                details.put(Constants.NFS_MOUNT_OPTIONS,Constants.NFS3_MOUNT_OPTIONS_VER_3);
                 s_logger.info("Setting NFS path for storage pool: " + path + ", port: " + port + " with mount option: vers=3");
                 break;
             case ISCSI:

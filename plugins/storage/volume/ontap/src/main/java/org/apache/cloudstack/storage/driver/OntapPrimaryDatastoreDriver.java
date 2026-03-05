@@ -170,19 +170,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         volumeVO.set_iScsiName(null);
                         volumeVO.setPath(null);
                         createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
-
-//                        // Create LUN-to-igroup mapping and retrieve the assigned LUN ID
-//                        UnifiedSANStrategy sanStrategy = (UnifiedSANStrategy) Utility.getStrategyByStoragePoolDetails(details);
-//                        String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
-//                        String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
-//
-//                        // Construct iSCSI path: /<iqn>/<lun_id> format for KVM/libvirt attachment
-//                        String iscsiPath = Constants.SLASH + storagePool.getPath() + Constants.SLASH + lunNumber;
-//                        volumeVO.set_iScsiName(iscsiPath);
-//                        volumeVO.setPath(iscsiPath);
-//                        s_logger.info("createAsync: Volume [{}] iSCSI path set to {}", volumeVO.getId(), iscsiPath);
-//                        createCmdResult = new CreateCmdResult(null, new Answer(null, true, null));
-
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
                         s_logger.info("createAsync: Managed NFS volume [{}] associated with pool {}",
