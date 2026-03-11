@@ -23,9 +23,6 @@ import com.cloud.host.HostVO;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
-import org.apache.cloudstack.storage.feign.FeignClientFactory;
-import org.apache.cloudstack.storage.feign.client.SANFeignClient;
-import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Svm;
@@ -67,7 +64,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.info("createCloudStackVolume : Creating Lun with cloudstackVolume request {} ", cloudstackVolume);
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
             s_logger.error("createCloudStackVolume: LUN creation failed. Invalid request: {}", cloudstackVolume);
-            throw new CloudRuntimeException("createCloudStackVolume : Failed to create Lun, invalid request");
+            throw new CloudRuntimeException(" Failed to create Lun, invalid request");
         }
         try {
             // Get AuthHeader
@@ -106,7 +103,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
             s_logger.error("deleteCloudStackVolume: Lun deletion failed. Invalid request: {}", cloudstackVolume);
-            throw new CloudRuntimeException("deleteCloudStackVolume : Failed to delete Lun, invalid request");
+            throw new CloudRuntimeException(" Failed to delete Lun, invalid request");
         }
         s_logger.info("deleteCloudStackVolume : Deleting Lun: {}", cloudstackVolume.getLun().getName());
         try {
@@ -139,13 +136,13 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.debug("getCloudStackVolume : fetching Lun with params {} ", values);
         if (values == null || values.isEmpty()) {
             s_logger.error("getCloudStackVolume: get Lun failed. Invalid request: {}", values);
-            throw new CloudRuntimeException("getCloudStackVolume : get Lun Failed, invalid request");
+            throw new CloudRuntimeException(" get Lun Failed, invalid request");
         }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.NAME);
         if (svmName == null || lunName == null || svmName.isEmpty() || lunName.isEmpty()) {
             s_logger.error("getCloudStackVolume: get Lun failed. Invalid svm:{} or Lun name: {}", svmName, lunName);
-            throw new CloudRuntimeException("getCloudStackVolume : Failed to get Lun, invalid request");
+            throw new CloudRuntimeException("Failed to get Lun, invalid request");
         }
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -180,14 +177,14 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.debug("createAccessGroup : Creating Igroup with access group request {} ", accessGroup);
         if (accessGroup == null) {
             s_logger.error("createAccessGroup: Igroup creation failed. Invalid request: {}", accessGroup);
-            throw new CloudRuntimeException("createAccessGroup : Failed to create Igroup, invalid request");
+            throw new CloudRuntimeException(" Failed to create Igroup, invalid request");
         }
         // Get StoragePool details
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("createAccessGroup : Failed to create Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException(" Failed to create Igroup, invalid datastore details in the request");
         }
         if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
-            throw new CloudRuntimeException("createAccessGroup : Failed to create Igroup, no hosts to connect provided in the request");
+            throw new CloudRuntimeException(" Failed to create Igroup, no hosts to connect provided in the request");
         }
 
         String igroupName = null;
@@ -202,7 +199,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
             // Check if all hosts support the protocol
             if (!validateProtocolSupport(accessGroup.getHostsToConnect(), protocol)) {
-                String errMsg = "createAccessGroup: Not all hosts " + " support the protocol: " + protocol.name();
+                String errMsg = " Not all hosts " + " support the protocol: " + protocol.name();
                 throw new CloudRuntimeException(errMsg);
             }
 
@@ -268,14 +265,14 @@ public class UnifiedSANStrategy extends SANStrategy {
 
         if (accessGroup == null) {
             s_logger.error("deleteAccessGroup: Igroup deletion failed. Invalid request: {}", accessGroup);
-            throw new CloudRuntimeException("deleteAccessGroup : Failed to delete Igroup, invalid request");
+            throw new CloudRuntimeException(" Failed to delete Igroup, invalid request");
         }
         // Get StoragePool details
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("deleteAccessGroup : Failed to delete Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException(" Failed to delete Igroup, invalid datastore details in the request");
         }
         if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
-            throw new CloudRuntimeException("deleteAccessGroup : Failed to delete Igroup, no hosts to connect provided in the request");
+            throw new CloudRuntimeException(" Failed to delete Igroup, no hosts to connect provided in the request");
         }
 
         try {
@@ -303,7 +300,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                     String igroupUuid = igroup.getUuid();
 
                     if (igroupUuid == null || igroupUuid.isEmpty()) {
-                        throw new CloudRuntimeException("deleteAccessGroup: iGroup UUID is null or empty for iGroup: " + igroupName);
+                        throw new CloudRuntimeException(" iGroup UUID is null or empty for iGroup: " + igroupName);
                     }
 
                     s_logger.info("deleteAccessGroup: Deleting iGroup '{}' with UUID '{}'", igroupName, igroupUuid);
@@ -357,13 +354,13 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.debug("getAccessGroup : fetching Igroup with params {} ", values);
         if (values == null || values.isEmpty()) {
             s_logger.error("getAccessGroup: get Igroup failed. Invalid request: {}", values);
-            throw new CloudRuntimeException("getAccessGroup : get Igroup Failed, invalid request");
+            throw new CloudRuntimeException(" get Igroup Failed, invalid request");
         }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String igroupName = values.get(Constants.NAME);
         if (svmName == null || igroupName == null || svmName.isEmpty() || igroupName.isEmpty()) {
             s_logger.error("getAccessGroup: get Igroup failed. Invalid svm:{} or igroup name: {}", svmName, igroupName);
-            throw new CloudRuntimeException("getAccessGroup : Failed to get Igroup, invalid request");
+            throw new CloudRuntimeException(" Failed to get Igroup, invalid request");
         }
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -396,14 +393,14 @@ public class UnifiedSANStrategy extends SANStrategy {
         Map<String, String> response = null;
         if (values == null) {
             s_logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: null");
-            throw new CloudRuntimeException("enableLogicalAccess : Failed to create LunMap, invalid request");
+            throw new CloudRuntimeException(" Failed to create LunMap, invalid request");
         }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
         String igroupName = values.get(Constants.IGROUP_DOT_NAME);
         if (svmName == null || lunName == null || igroupName == null || svmName.isEmpty() || lunName.isEmpty() || igroupName.isEmpty()) {
             s_logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: {}", values);
-            throw new CloudRuntimeException("enableLogicalAccess : Failed to create LunMap, invalid request");
+            throw new CloudRuntimeException(" Failed to create LunMap, invalid request");
         }
         try {
             // Get AuthHeader
@@ -463,13 +460,13 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.debug("disableLogicalAccess : Deleting LunMap with values {} ", values);
         if (values == null) {
             s_logger.error("disableLogicalAccess: LunMap deletion failed. Invalid request values: null");
-            throw new CloudRuntimeException("disableLogicalAccess : Failed to delete LunMap, invalid request");
+            throw new CloudRuntimeException(" Failed to delete LunMap, invalid request");
         }
         String lunUUID = values.get(Constants.LUN_DOT_UUID);
         String igroupUUID = values.get(Constants.IGROUP_DOT_UUID);
         if (lunUUID == null || igroupUUID == null || lunUUID.isEmpty() || igroupUUID.isEmpty()) {
             s_logger.error("disableLogicalAccess: LunMap deletion failed. Invalid request values: {}", values);
-            throw new CloudRuntimeException("disableLogicalAccess : Failed to delete LunMap, invalid request");
+            throw new CloudRuntimeException(" Failed to delete LunMap, invalid request");
         }
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -494,14 +491,14 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.debug("getLogicalAccess : Fetching LunMap with values {} ", values);
         if (values == null) {
             s_logger.error("getLogicalAccess: Invalid request values: null");
-            throw new CloudRuntimeException("getLogicalAccess : Invalid request");
+            throw new CloudRuntimeException(" Invalid request");
         }
         String svmName = values.get(Constants.SVM_DOT_NAME);
         String lunName = values.get(Constants.LUN_DOT_NAME);
         String igroupName = values.get(Constants.IGROUP_DOT_NAME);
         if (svmName == null || lunName == null || igroupName == null || svmName.isEmpty() || lunName.isEmpty() || igroupName.isEmpty()) {
             s_logger.error("getLogicalAccess: Invalid request values: {}", values);
-            throw new CloudRuntimeException("getLogicalAccess : Invalid request");
+            throw new CloudRuntimeException(" Invalid request");
         }
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -553,7 +550,6 @@ public class UnifiedSANStrategy extends SANStrategy {
         s_logger.info("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}] with LUN number [{}]", lunName, accessGroupName, response.get(Constants.LOGICAL_UNIT_NUMBER));
         return response.get(Constants.LOGICAL_UNIT_NUMBER);
     }
-    
     /**
      * Reverts a LUN to a snapshot using the ONTAP CLI-based snapshot file restore API.
      *

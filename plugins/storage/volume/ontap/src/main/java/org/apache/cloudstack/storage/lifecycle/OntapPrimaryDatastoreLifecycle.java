@@ -268,16 +268,16 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
         if (dataStore == null) {
-            throw new InvalidParameterValueException("attachCluster: dataStore should not be null");
+            throw new InvalidParameterValueException(" dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachCluster: scope should not be null");
+            throw new InvalidParameterValueException(" scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if (storagePool == null) {
             s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException(" Storage Pool not found for id: " + dataStore.getId());
         }
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
@@ -305,7 +305,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                     strategy.createAccessGroup(accessGroupRequest);
                 } catch (Exception e) {
                     s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
-                    throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+                    throw new CloudRuntimeException("Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
                 }
             }
         }
@@ -332,16 +332,16 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
         logger.debug("In attachZone for ONTAP primary storage");
         if (dataStore == null) {
-            throw new InvalidParameterValueException("attachZone: dataStore should not be null");
+            throw new InvalidParameterValueException("dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachZone: scope should not be null");
+            throw new InvalidParameterValueException("scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if (storagePool == null) {
             s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("attachZone : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("Storage Pool not found for id: " + dataStore.getId());
         }
 
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
@@ -370,7 +370,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                     strategy.createAccessGroup(accessGroupRequest);
                 } catch (Exception e) {
                     s_logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
-                    throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                    throw new CloudRuntimeException(" Failed to create access group on storage system for zone with Exception: " + e.getMessage());
                 }
             }
         }
@@ -393,7 +393,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 for (HostVO host : hosts) {
                     if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty()
                             || !host.getStorageUrl().startsWith(protocolPrefix)) {
-                        return false;
+                        // TODO we will inform customer through alert for excluded host because of protocol enabled on host
+                        continue;
                     }
                     hostIdentifiers.add(host.getStorageUrl());
                 }
@@ -404,7 +405,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                     if (host != null) {
                         ip =  host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : "";
                         if (ip.isEmpty() && host.getPrivateIpAddress() != null || host.getPrivateIpAddress().trim().isEmpty()) {
-                            return false;
+                            // TODO we will inform customer through alert for excluded host because of protocol enabled on host
+                            continue;
                         } else {
                             ip = ip.isEmpty() ? host.getPrivateIpAddress().trim() : ip;
                         }
@@ -413,7 +415,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 }
                 break;
             default:
-                throw new CloudRuntimeException("validateProtocolSupportAndFetchHostsIdentifier : Unsupported protocol: " + protocolType.name());
+                throw new CloudRuntimeException("Unsupported protocol: " + protocolType.name());
         }
         logger.info("validateProtocolSupportAndFetchHostsIdentifier: All hosts support the protocol: " + protocolType.name());
         return true;
