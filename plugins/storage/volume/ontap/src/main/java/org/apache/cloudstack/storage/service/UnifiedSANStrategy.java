@@ -271,10 +271,6 @@ public class UnifiedSANStrategy extends SANStrategy {
         if (accessGroup.getStoragePoolId() == null) {
             throw new CloudRuntimeException(" Failed to delete Igroup, invalid datastore details in the request");
         }
-        if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
-            throw new CloudRuntimeException(" Failed to delete Igroup, no hosts to connect provided in the request");
-        }
-
         try {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             String svmName = storage.getSvmName();
