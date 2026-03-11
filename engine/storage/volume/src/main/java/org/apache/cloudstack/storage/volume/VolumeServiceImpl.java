@@ -222,6 +222,8 @@ public class VolumeServiceImpl implements VolumeService {
     @Inject
     protected DiskOfferingDao diskOfferingDao;
 
+    private static final String ONTAP_PROVIDER_NAME = "NetApp ONTAP";
+
     public VolumeServiceImpl() {
     }
 
@@ -731,16 +733,12 @@ public class VolumeServiceImpl implements VolumeService {
             TemplateObjectTO templateObjectTo = (TemplateObjectTO)answer.getNewData();
 
             // For NFS managed storage, preserve the volume UUID path to avoid file collision
-            // For iSCSI, update path as before (iSCSI uses _iScsiName field for actual LUN access)
             PrimaryDataStore primaryDataStore = (PrimaryDataStore) volumeInfo.getDataStore();
-            if (primaryDataStore != null && primaryDataStore.getPoolType() == StoragePoolType.NetworkFilesystem) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("NFS managed storage - preserving volume path: " + volume.getPath() + " (not overwriting with template path: " + templateObjectTo.getPath() + ")");
-                }
-            } else {
+            if (primaryDataStore.isManaged() && ONTAP_PROVIDER_NAME.equals(primaryDataStore.getStorageProviderName()) && primaryDataStore.getPoolType() == StoragePoolType.NetworkFilesystem) {
+                logger.debug("NFS managed storage - preserving volume path: " + volume.getPath() + " (not overwriting with template path: " + templateObjectTo.getPath() + ")");
+            }else {
                 volume.setPath(templateObjectTo.getPath());
             }
-
             if (templateObjectTo.getFormat() != null) {
                 volume.setFormat(templateObjectTo.getFormat());
             }

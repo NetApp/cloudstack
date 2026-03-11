@@ -267,7 +267,7 @@ public abstract class StorageStrategy {
 
             if (ontapVolume == null || ontapVolume.getRecords() == null || ontapVolume.getRecords().isEmpty()) {
                 s_logger.error("OntapResponse is null for volume: " + volumeName);
-                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": Response is null");
+                throw new CloudRuntimeException("Failed to fetch volume " + volumeName + ": no records found");
             }
             Volume volume = ontapVolume.getRecords().get(0);
             s_logger.info("Volume retrieved successfully: " + volumeName + ", UUID: " + volume.getUuid());
@@ -278,11 +278,26 @@ public abstract class StorageStrategy {
         }
     }
 
+     /**
+     * Updates ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param volume the volume to update
+     * @return the updated Volume object
+     */
     public Volume updateStorageVolume(Volume volume) {
         //TODO
         return null;
     }
 
+    /**
+     * Delete ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param volume the volume to delete
+     */
     public void deleteStorageVolume(Volume volume) {
         s_logger.info("Deleting ONTAP volume by name: " + volume.getName() + " and uuid: " + volume.getUuid());
         // Calling the VolumeFeignClient to delete the volume
@@ -302,7 +317,14 @@ public abstract class StorageStrategy {
         }
         s_logger.info("ONTAP volume deletion process completed for volume: " + volume.getName());
     }
-
+    /**
+     * Gets ONTAP Flex-Volume
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param volume the volume to retrieve
+     * @return the retrieved Volume object
+     */
     public Volume getStorageVolume(Volume volume) {
         //TODO
         return null;

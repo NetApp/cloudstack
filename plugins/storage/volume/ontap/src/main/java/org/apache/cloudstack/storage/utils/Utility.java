@@ -146,7 +146,7 @@ public class Utility {
     }
 
     public static String generateExportPolicyName(String svmName, String volumeName){
-        return Constants.EXPORT + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
+        return Constants.CS + Constants.HYPHEN + svmName + Constants.HYPHEN + volumeName;
     }
 
     public static String getLunName(String volName, String lunName) {

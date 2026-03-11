@@ -163,16 +163,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                         s_logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
                                 lunName, volumeVO.getId());
-
-                        // Path will be set during grantAccess when LUN is mapped and we get the LUN ID
-                        // Return LUN name as identifier for CloudStack tracking
-                        volumeVO.set_iScsiName(null);
-                        volumeVO.setPath(null);
                         createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-                        // For NFS, set path to volume UUID to ensure uniqueness
-                        // This prevents multiple VMs from using the same template file path
-                        volumeVO.setPath(volInfo.getUuid());
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
                         s_logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
                                 volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
@@ -331,7 +323,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     Igroup igroup = new Igroup();
                     AccessGroup accessGroup = sanStrategy.getAccessGroup(getAccessGroupMap);
                     if(accessGroup == null || accessGroup.getIgroup() == null) {
-                        s_logger.info("grantAccess: Igroup does not exist for the host: Need to create Igroup " + host.getName());
+                        s_logger.info("grantAccess: Igroup {} does not exist for the host {} : Need to create Igroup for the host ", accessGroupName, host.getName());
                         // create the igroup for the host and perform lun-mapping
                         accessGroup = new AccessGroup();
                         List<HostVO> hosts = new ArrayList<>();
@@ -342,14 +334,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     }else{
                         s_logger.info("grantAccess: Igroup {} already exist for the host {}: ", accessGroup.getIgroup().getName() ,host.getName());
                         igroup = accessGroup.getIgroup();
-                        // TODO
-                        // Verify host initiator is registered in the igroup before allowing access
-//                        if (sanStrategy.validateInitiatorInAccessGroup(host.getStorageUrl(), svmName, accessGroup.getIgroup())) {
-//                            // add host initiator to the igroup ? or fail here ?
-//                        }
-                        // Use the existing igroup and perform lun-mapping
+                        /* TODO Below cases will be covered later, for now they will be a pre-requisite on customer side
+                          1. Igroup exist with the same name but host initiator has been rempved
+                          2.  Igroup exist with the same name but host initiator has been changed may be due to new NIC or new adapter
+                          In both cases we need to verify current host initiator is registered in the igroup before allowing access
+                          Incase it is not , add it and proceed for lun-mapping
+                         */
                     }
-
+                    s_logger.info("grantAccess: Igroup {}  is present now with initiators {} ", accessGroup.getIgroup().getName(), accessGroup.getIgroup().getInitiators());
                     // Create or retrieve existing LUN mapping
                     String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
 

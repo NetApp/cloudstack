@@ -230,7 +230,6 @@ public class UnifiedSANStrategy extends SANStrategy {
             ProtocolType protocol = ProtocolType.valueOf(dataStoreDetails.get(Constants.PROTOCOL));
 
             // Check if all hosts support the protocol
-            List<String> hostIdentifiers = new ArrayList<>();
             if (!validateProtocolSupport(accessGroup.getHostsToConnect(), protocol)) {
                 String errMsg = "createAccessGroup: Not all hosts " + " support the protocol: " + protocol.name();
                 throw new CloudRuntimeException(errMsg);
@@ -370,7 +369,6 @@ public class UnifiedSANStrategy extends SANStrategy {
             if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty() || !host.getStorageUrl().startsWith(protocolPrefix)) {
                 return false;
             }
-//            hostIdentifiers.add(host.getStorageUrl());
         }
         s_logger.info("validateProtocolSupportAndFetchHostsIdentifier: All hosts support the protocol: " + protocolType.name());
         return true;

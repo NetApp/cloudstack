@@ -282,11 +282,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
         logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
-        if(hostsToConnect.isEmpty()) {
-            s_logger.info("attachCluster: No hosts found for primary storage");
-            throw new CloudRuntimeException("attachCluster: No hosts found for primary storage");
-        }
-
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
 
@@ -300,12 +295,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         // We need to create export policy at pool level and igroup at host level(in grantAccess)
         if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            // If there are no eligible host, export policy or igroup will not be created and will be taken as part of HostListener
             if (!hostsIdentifier.isEmpty()) {
                 try {
                     AccessGroup accessGroupRequest = new AccessGroup();
                     accessGroupRequest.setHostsToConnect(hostsToConnect);
                     accessGroupRequest.setScope(scope);
-                    primaryStore.setDetails(details);// setting details as it does not come from cloudstack
                     accessGroupRequest.setStoragePoolId(storagePool.getId());
                     strategy.createAccessGroup(accessGroupRequest);
                 } catch (Exception e) {
@@ -352,11 +347,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
-        if(hostsToConnect.isEmpty()) {
-            s_logger.info("attachCluster: No hosts found for primary storage");
-            throw new CloudRuntimeException("attachCluster: No hosts found for primary storage");
-        }
-
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
         StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
 
@@ -370,12 +360,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // We need to create export policy at pool level and igroup at host level
         if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            // If there are no eligible host, export policy or igroup will not be created and will be taken as part of HostListener
             if (!hostsIdentifier.isEmpty()) {
                 try {
                     AccessGroup accessGroupRequest = new AccessGroup();
                     accessGroupRequest.setHostsToConnect(hostsToConnect);
                     accessGroupRequest.setScope(scope);
-                    primaryStore.setDetails(details); // setting details as it does not come from cloudstack
                     accessGroupRequest.setStoragePoolId(storagePool.getId());
                     strategy.createAccessGroup(accessGroupRequest);
                 } catch (Exception e) {

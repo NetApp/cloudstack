@@ -31,8 +31,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
 import org.apache.cloudstack.storage.command.DeleteCommand;
-import com.cloud.agent.api.to.DataTO;
-import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
@@ -89,10 +87,10 @@ public class UnifiedNASStrategy extends NASStrategy {
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         s_logger.info("createCloudStackVolume: Create cloudstack volume " + cloudstackVolume);
         try {
-            // Step 1: set cloudstack volume metadata and get the volumeUuid
+            // Step 1: set cloudstack volume metadata
             String volumeUuid = updateCloudStackVolumeMetadata(cloudstackVolume.getDatastoreId(), cloudstackVolume.getVolumeInfo());
-            // Step 2: Send command to KVM host with explicit volumeUuid to avoid stale cached path
-            Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo(), volumeUuid);
+            // Step 2: Send command to KVM host to create qcow2 file using qemu-img
+            Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
             if (answer == null || !answer.getResult()) {
                 String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
                 s_logger.error("createCloudStackVolume: " + errMsg);
@@ -482,7 +480,7 @@ public class UnifiedNASStrategy extends NASStrategy {
            String volumeUuid = volumeInfo.getUuid();
            volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
            volume.setPoolId(Long.parseLong(dataStoreId));
-           volume.setPath(volumeUuid);  // Filename for qcow2 file - unique per volume
+           volume.setPath(volumeUuid);  // Filename for qcow2 file
            volumeDao.update(volume.getId(), volume);
            s_logger.info("Updated volume path to {} for volume ID {}", volumeUuid, volumeId);
            return volumeUuid;
@@ -492,19 +490,12 @@ public class UnifiedNASStrategy extends NASStrategy {
        }
     }
 
-    private Answer createVolumeOnKVMHost(DataObject volumeInfo, String correctPath) {
-        s_logger.info("createVolumeOnKVMHost called with volumeInfo: {}, correctPath: {}", volumeInfo, correctPath);
+    private Answer createVolumeOnKVMHost(DataObject volumeInfo) {
+        s_logger.info("createVolumeOnKVMHost called with volumeInfo: {} ", volumeInfo);
 
         try {
-            // Get the base TO and override the path with correct value to avoid stale cached path
-            DataTO dataTO = volumeInfo.getTO();
-            if (dataTO instanceof VolumeObjectTO) {
-                VolumeObjectTO volumeTO = (VolumeObjectTO) dataTO;
-                s_logger.info("createVolumeOnKVMHost: Original TO path: {}, overriding with correct path: {}", volumeTO.getPath(), correctPath);
-                volumeTO.setPath(correctPath);  // Override stale path with correct UUID
-            }
             s_logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
-            CreateObjectCommand cmd = new CreateObjectCommand(dataTO);
+            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
             EndPoint ep = epSelector.select(volumeInfo);
             if (ep == null) {
                 String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";

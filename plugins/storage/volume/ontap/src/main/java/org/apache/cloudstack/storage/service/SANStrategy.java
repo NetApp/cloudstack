@@ -48,7 +48,7 @@ public abstract class SANStrategy extends StorageStrategy {
      *
      * @param hostInitiator the host initiator IQN
      * @param svmName the SVM name
-     * @param accessGroupName the igroup name
+     * @param igroup the igroup
      * @return true if the initiator is found in the igroup, false otherwise
      */
     public boolean validateInitiatorInAccessGroup(String hostInitiator, String svmName, Igroup igroup) {
