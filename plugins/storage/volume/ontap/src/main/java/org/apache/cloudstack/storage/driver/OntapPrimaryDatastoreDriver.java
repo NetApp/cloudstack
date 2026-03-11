@@ -114,6 +114,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return null;
     }
 
+    @Override
+    public boolean volumesRequireGrantAccessWhenUsed(){
+        s_logger.info("OntapPrimaryDatastoreDriver: volumesRequireGrantAccessWhenUsed: Called");
+        return true;
+    }
+
     /**
      * Creates a volume on the ONTAP storage system.
      */
