@@ -220,6 +220,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                 initiator.setName(host.getStorageUrl());// CloudStack has one iqn for one host
                 initiators.add(initiator);
                 igroupRequest.setInitiators(initiators);
+                igroupRequest.setDeleteOnUnmap(true);
             }
             igroupRequest.setProtocol(Igroup.ProtocolEnum.valueOf(Constants.ISCSI));
             // Create Igroup
