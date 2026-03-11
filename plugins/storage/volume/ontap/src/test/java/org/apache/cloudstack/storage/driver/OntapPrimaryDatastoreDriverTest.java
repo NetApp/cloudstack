@@ -28,9 +28,6 @@ import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
-import com.cloud.vm.VirtualMachine;
-import com.cloud.vm.VMInstanceVO;
-import com.cloud.vm.dao.VMInstanceDao;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
@@ -67,7 +64,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -86,9 +82,6 @@ class OntapPrimaryDatastoreDriverTest {
 
     @Mock
     private PrimaryDataStoreDao storagePoolDao;
-
-    @Mock
-    private VMInstanceDao vmDao;
 
     @Mock
     private VolumeDao volumeDao;
@@ -442,25 +435,33 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testRevokeAccess_VolumeAttachedToRunningVM_SkipsRevoke() {
-        // Setup
+    void testRevokeAccess_NFSVolume_SkipsRevoke() {
+        // Setup - NFS volumes have no LUN mapping, so revokeAccess is a no-op
+        when(dataStore.getId()).thenReturn(1L);
         when(volumeInfo.getType()).thenReturn(VOLUME);
         when(volumeInfo.getId()).thenReturn(100L);
 
-        VolumeVO mockVolume = mock(VolumeVO.class);
-        when(mockVolume.getInstanceId()).thenReturn(200L);
-        when(volumeDao.findById(100L)).thenReturn(mockVolume);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+        when(volumeVO.getName()).thenReturn("test-volume");
 
-        VMInstanceVO vm = mock(VMInstanceVO.class);
-        when(vm.getState()).thenReturn(VirtualMachine.State.Running);
-        when(vm.getInstanceName()).thenReturn("i-2-100-VM");
-        when(vmDao.findById(200L)).thenReturn(vm);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePool.getUuid()).thenReturn("pool-uuid-123");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(host.getName()).thenReturn("host1");
 
-        // Execute
-        driver.revokeAccess(volumeInfo, host, dataStore);
+        try (MockedStatic<Utility> utilityMock = mockStatic(Utility.class)) {
+            utilityMock.when(() -> Utility.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
 
-        // Verify - should skip revoke for running VM
-        verify(storagePoolDao, never()).findById(anyLong());
+            // Execute - NFS has no iSCSI protocol, so revokeAccessForVolume does nothing
+            driver.revokeAccess(volumeInfo, host, dataStore);
+
+            // Verify - no LUN unmap operations for NFS
+            verify(sanStrategy, never()).disableLogicalAccess(any());
+        }
     }
 
     @Test
@@ -472,7 +473,6 @@ class OntapPrimaryDatastoreDriverTest {
 
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getInstanceId()).thenReturn(null);
         when(volumeVO.getName()).thenReturn("test-volume");
 
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);

@@ -222,8 +222,6 @@ public class VolumeServiceImpl implements VolumeService {
     @Inject
     protected DiskOfferingDao diskOfferingDao;
 
-    private static final String ONTAP_PROVIDER_NAME = "NetApp ONTAP";
-
     public VolumeServiceImpl() {
     }
 
@@ -732,13 +730,8 @@ public class VolumeServiceImpl implements VolumeService {
             CopyCmdAnswer answer = (CopyCmdAnswer)result.getAnswer();
             TemplateObjectTO templateObjectTo = (TemplateObjectTO)answer.getNewData();
 
-            // For NFS managed storage, preserve the volume UUID path to avoid file collision
-            PrimaryDataStore primaryDataStore = (PrimaryDataStore) volumeInfo.getDataStore();
-            if (primaryDataStore.isManaged() && ONTAP_PROVIDER_NAME.equals(primaryDataStore.getStorageProviderName()) && primaryDataStore.getPoolType() == StoragePoolType.NetworkFilesystem) {
-                logger.debug("NFS managed storage - preserving volume path: " + volume.getPath() + " (not overwriting with template path: " + templateObjectTo.getPath() + ")");
-            }else {
-                volume.setPath(templateObjectTo.getPath());
-            }
+            volume.setPath(templateObjectTo.getPath());
+
             if (templateObjectTo.getFormat() != null) {
                 volume.setFormat(templateObjectTo.getFormat());
             }
@@ -1327,7 +1320,8 @@ public class VolumeServiceImpl implements VolumeService {
             details.put(PrimaryDataStore.STORAGE_HOST, primaryDataStore.getHostAddress());
             details.put(PrimaryDataStore.STORAGE_PORT, String.valueOf(primaryDataStore.getPort()));
             // for managed storage, the storage repository (XenServer) or datastore (ESX) name is based off of the iScsiName property of a volume
-            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, volumeInfo.get_iScsiName());
+            String managedStoreTarget = volumeInfo.get_iScsiName() != null ? volumeInfo.get_iScsiName() : volumeInfo.getUuid();
+            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, managedStoreTarget);
             details.put(PrimaryDataStore.MANAGED_STORE_TARGET_ROOT_VOLUME, volumeInfo.getName());
             details.put(PrimaryDataStore.VOLUME_SIZE, String.valueOf(volumeInfo.getSize()));
             details.put(StorageManager.STORAGE_POOL_DISK_WAIT.toString(), String.valueOf(StorageManager.STORAGE_POOL_DISK_WAIT.valueIn(primaryDataStore.getId())));
@@ -1345,7 +1339,8 @@ public class VolumeServiceImpl implements VolumeService {
 
             grantAccess(volumeInfo, destHost, primaryDataStore);
             volumeInfo = volFactory.getVolume(volumeInfo.getId(), primaryDataStore);
-            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, volumeInfo.get_iScsiName());
+            managedStoreTarget = volumeInfo.get_iScsiName() != null ? volumeInfo.get_iScsiName() : volumeInfo.getUuid();
+            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, managedStoreTarget);
             primaryDataStore.setDetails(details);
 
             // Update destTemplateInfo with the iSCSI path from volumeInfo

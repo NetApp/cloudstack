@@ -36,8 +36,6 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
-import com.cloud.vm.VirtualMachine;
-import com.cloud.vm.dao.VMInstanceDao;
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
@@ -75,7 +73,6 @@ import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,7 +87,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private PrimaryDataStoreDao storagePoolDao;
-    @Inject private VMInstanceDao vmDao;
     @Inject private VolumeDao volumeDao;
     @Inject private VolumeDetailsDao volumeDetailsDao;
     @Inject private SnapshotDetailsDao snapshotDetailsDao;
@@ -483,22 +479,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             if (host == null) {
                 throw new InvalidParameterValueException("host should not be null");
-            }
-
-            // Safety check: don't revoke access if volume is still attached to an active VM
-            if (dataObject.getType() == DataObjectType.VOLUME) {
-                Volume volume = volumeDao.findById(dataObject.getId());
-                if (volume.getInstanceId() != null) {
-                    VirtualMachine vm = vmDao.findById(volume.getInstanceId());
-                    if (vm != null && !Arrays.asList(
-                            VirtualMachine.State.Destroyed,
-                            VirtualMachine.State.Expunging,
-                            VirtualMachine.State.Error).contains(vm.getState())) {
-                        s_logger.warn("revokeAccess: Volume [{}] is still attached to VM [{}] in state [{}], skipping revokeAccess",
-                                dataObject.getId(), vm.getInstanceName(), vm.getState());
-                        return;
-                    }
-                }
             }
 
             StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());

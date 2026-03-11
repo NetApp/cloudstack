@@ -221,6 +221,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                 initiators.add(initiator);
                 igroupRequest.setInitiators(initiators);
                 igroupRequest.setDeleteOnUnmap(true);
+                igroupRequest.setDeleteOnUnmap(true);
             }
             igroupRequest.setProtocol(Igroup.ProtocolEnum.valueOf(Constants.ISCSI));
             // Create Igroup
