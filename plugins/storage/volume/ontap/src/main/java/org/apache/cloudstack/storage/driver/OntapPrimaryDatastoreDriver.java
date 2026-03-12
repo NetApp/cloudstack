@@ -518,10 +518,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
         String svmName = details.get(Constants.SVM_NAME);
-        String storagePoolUuid = storagePool.getUuid();
 
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
-            String accessGroupName = Utility.getIgroupName(svmName, storagePoolUuid);
+            String accessGroupName = Utility.getIgroupName(svmName, host.getName());
 
             // Retrieve LUN name from volume details; if missing, volume may not have been fully created
             String lunName = volumeDetailsDao.findDetail(volumeVO.getId(), Constants.LUN_DOT_NAME) != null ?
