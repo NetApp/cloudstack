@@ -448,7 +448,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
-        when(storagePool.getUuid()).thenReturn("pool-uuid-123");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(host.getName()).thenReturn("host1");
 
@@ -478,7 +477,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
-        when(storagePool.getUuid()).thenReturn("pool-uuid-123");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
         when(host.getStorageUrl()).thenReturn("iqn.1993-08.org.debian:01:host1");
