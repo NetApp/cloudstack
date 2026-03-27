@@ -215,6 +215,12 @@ export default {
           message: this.$t(field.message)
         })
       }
+      if (field.number) {
+        this.rules[field.key].push({
+          validator: this.checkNumberFormat,
+          message: this.$t('message.error.number')
+        })
+      }
     },
     getPrefilled (field) {
       if (field.key === 'authmethod' && this.hypervisor !== 'KVM') {
@@ -242,6 +248,15 @@ export default {
       } else if (rule.ipV4 && !this.ipV4Regex.test(value)) {
         return Promise.reject(rule.message)
       } else if (rule.ipV6 && !this.ipV6Regex.test(value)) {
+        return Promise.reject(rule.message)
+      } else {
+        return Promise.resolve()
+      }
+    },
+    async checkNumberFormat (rule, value) {
+      if (!value || value === '') {
+        return Promise.resolve()
+      } else if (!/^\d+$/.test(String(value).replace(/,/g, ''))) {
         return Promise.reject(rule.message)
       } else {
         return Promise.resolve()
