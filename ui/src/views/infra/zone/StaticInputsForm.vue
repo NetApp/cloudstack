@@ -215,12 +215,6 @@ export default {
           message: this.$t(field.message)
         })
       }
-      if (field.number) {
-        this.rules[field.key].push({
-          validator: this.checkNumberFormat,
-          message: this.$t('message.error.number')
-        })
-      }
     },
     getPrefilled (field) {
       if (field.key === 'authmethod' && this.hypervisor !== 'KVM') {

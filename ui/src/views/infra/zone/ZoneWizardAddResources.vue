@@ -575,7 +575,7 @@ export default {
           key: 'managed',
           checkbox: true,
           hidden: {
-            provider: ['DefaultPrimary', 'PowerFlex', 'Linstor']
+            provider: ['DefaultPrimary', 'PowerFlex', 'Linstor', 'NetApp ONTAP']
           }
         },
         {
