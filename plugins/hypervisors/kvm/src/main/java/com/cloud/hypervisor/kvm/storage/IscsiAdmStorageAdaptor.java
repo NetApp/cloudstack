@@ -461,6 +461,9 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             QemuImg q = new QemuImg(timeout);
             q.convert(srcFile, destFile);
             // Below fix is required when vendor depends on host based copy rather than storage CAN_CREATE_VOLUME_FROM_VOLUME capability
+            // When host based template copy is triggered , small size template sits in RAM(depending on host memory and RAM) and copy is marked successful and by the time flush to storage is triggered
+            // disconectPhysicalDisk would disconnect the lun , hence template staying in RAM is not copied to storage lun. Below does flushing of data to storage and marking
+            // copy as succesful once flush is complete.
             Script flushCmd = new Script(true, "blockdev", 0, logger);
             flushCmd.add("--flushbufs", destDisk.getPath());
             String flushResult = flushCmd.execute();
