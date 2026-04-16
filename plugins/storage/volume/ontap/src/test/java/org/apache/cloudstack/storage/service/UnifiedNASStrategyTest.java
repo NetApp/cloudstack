@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.to.DataTO;
 import com.cloud.host.HostVO;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
@@ -28,6 +29,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
+import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
@@ -181,7 +183,8 @@ public class UnifiedNASStrategyTest {
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeObject.getTO()).thenReturn(mock(DataTO.class));
+        when(volumeDao.findById(anyLong())).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
         when(epSelector.select(volumeObject)).thenReturn(endPoint);
         when(endPoint.sendMessage(any(CreateObjectCommand.class))).thenReturn(answer);
@@ -205,7 +208,8 @@ public class UnifiedNASStrategyTest {
         when(cloudStackVolume.getDatastoreId()).thenReturn("1");
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
         when(volumeObject.getId()).thenReturn(100L);
-        when(volumeDao.findById(100L)).thenReturn(null);
+        when(volumeObject.getTO()).thenReturn(mock(DataTO.class));
+        when(volumeDao.findById(anyLong())).thenReturn(null);
 
         assertThrows(CloudRuntimeException.class, () -> {
             strategy.createCloudStackVolume(cloudStackVolume);
@@ -225,7 +229,8 @@ public class UnifiedNASStrategyTest {
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeObject.getTO()).thenReturn(mock(DataTO.class));
+        when(volumeDao.findById(anyLong())).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
         when(epSelector.select(volumeObject)).thenReturn(endPoint);
         when(endPoint.sendMessage(any(CreateObjectCommand.class))).thenReturn(answer);
@@ -246,7 +251,8 @@ public class UnifiedNASStrategyTest {
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeObject.getTO()).thenReturn(mock(DataTO.class));
+        when(volumeDao.findById(anyLong())).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
         when(epSelector.select(volumeObject)).thenReturn(null);
 
@@ -519,19 +525,19 @@ public class UnifiedNASStrategyTest {
         CloudStackVolume cloudStackVolume = mock(CloudStackVolume.class);
         VolumeInfo volumeInfo = mock(VolumeInfo.class);
         EndPoint endpoint = mock(EndPoint.class);
-        Answer answer = mock(Answer.class);
+        Answer answer = new Answer(null, true, "Success");
 
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeInfo);
+        when(volumeInfo.getTO()).thenReturn(mock(DataTO.class));
         when(epSelector.select(volumeInfo)).thenReturn(endpoint);
-        when(endpoint.sendMessage(any())).thenReturn(answer);
-        when(answer.getResult()).thenReturn(true);
+        when(endpoint.sendMessage(any(DeleteCommand.class))).thenReturn(answer);
 
         // Execute - should not throw exception
         strategy.deleteCloudStackVolume(cloudStackVolume);
 
         // Verify endpoint was selected and message sent
         verify(epSelector).select(volumeInfo);
-        verify(endpoint).sendMessage(any());
+        verify(endpoint).sendMessage(any(DeleteCommand.class));
     }
 
     // Test deleteCloudStackVolume - Endpoint Not Found
@@ -541,6 +547,7 @@ public class UnifiedNASStrategyTest {
         VolumeInfo volumeInfo = mock(VolumeInfo.class);
 
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeInfo);
+        when(volumeInfo.getTO()).thenReturn(mock(DataTO.class));
         when(epSelector.select(volumeInfo)).thenReturn(null);
 
         assertThrows(CloudRuntimeException.class, () -> {
@@ -554,13 +561,12 @@ public class UnifiedNASStrategyTest {
         CloudStackVolume cloudStackVolume = mock(CloudStackVolume.class);
         VolumeInfo volumeInfo = mock(VolumeInfo.class);
         EndPoint endpoint = mock(EndPoint.class);
-        Answer answer = mock(Answer.class);
+        Answer answer = new Answer(null, false, "Failed to delete volume file");
 
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeInfo);
+        when(volumeInfo.getTO()).thenReturn(mock(DataTO.class));
         when(epSelector.select(volumeInfo)).thenReturn(endpoint);
-        when(endpoint.sendMessage(any())).thenReturn(answer);
-        when(answer.getResult()).thenReturn(false);
-        when(answer.getDetails()).thenReturn("Failed to delete volume file");
+        when(endpoint.sendMessage(any(DeleteCommand.class))).thenReturn(answer);
 
         assertThrows(CloudRuntimeException.class, () -> {
             strategy.deleteCloudStackVolume(cloudStackVolume);
@@ -575,8 +581,9 @@ public class UnifiedNASStrategyTest {
         EndPoint endpoint = mock(EndPoint.class);
 
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeInfo);
+        when(volumeInfo.getTO()).thenReturn(mock(DataTO.class));
         when(epSelector.select(volumeInfo)).thenReturn(endpoint);
-        when(endpoint.sendMessage(any())).thenReturn(null);
+        when(endpoint.sendMessage(any(DeleteCommand.class))).thenReturn(null);
 
         assertThrows(CloudRuntimeException.class, () -> {
             strategy.deleteCloudStackVolume(cloudStackVolume);

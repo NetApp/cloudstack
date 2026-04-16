@@ -31,7 +31,6 @@ import com.cloud.storage.Storage;
 import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.StoragePoolAutomation;
-import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.google.common.base.Preconditions;
 import org.apache.cloudstack.engine.subsystem.api.storage.ClusterScope;
@@ -52,15 +51,14 @@ import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
-import org.apache.cloudstack.storage.utils.OntapStorageConstants;
-import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.cloudstack.storage.utils.Constants;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -75,16 +73,15 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private StoragePoolAutomation _storagePoolAutomation;
     @Inject private PrimaryDataStoreDao storagePoolDao;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
-    private static final Logger logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
+    private static final Logger s_logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
-    private static final long ONTAP_MIN_VOLUME_SIZE_IN_BYTES = 1677721600L;
+    private static final long ONTAP_MIN_VOLUME_SIZE = 1677721600L;
 
     @Override
     public DataStore initialize(Map<String, Object> dsInfos) {
         if (dsInfos == null) {
             throw new CloudRuntimeException("Datastore info map is null, cannot create primary storage");
         }
-        String url = (String) dsInfos.get("url");
         Long zoneId = (Long) dsInfos.get("zoneId");
         Long podId = (Long) dsInfos.get("podId");
         Long clusterId = (Long) dsInfos.get("clusterId");
@@ -95,14 +92,43 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         String tags = (String) dsInfos.get("tags");
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
 
-        logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
+        s_logger.info("Creating ONTAP primary storage pool with name: " + storagePoolName + ", provider: " + providerName +
                 ", zoneId: " + zoneId + ", podId: " + podId + ", clusterId: " + clusterId);
-        logger.debug("Received capacityBytes from UI: " + capacityBytes);
+        s_logger.debug("Received capacityBytes from UI: " + capacityBytes);
 
+        // Additional details requested for ONTAP primary storage pool creation
         @SuppressWarnings("unchecked")
         Map<String, String> details = (Map<String, String>) dsInfos.get("details");
 
-        capacityBytes = validateInitializeInputs(capacityBytes, podId, clusterId, zoneId, storagePoolName, providerName, managed, url, details);
+        // Validate and set capacity
+        if (capacityBytes == null || capacityBytes <= 0) {
+            s_logger.warn("capacityBytes not provided or invalid (" + capacityBytes + "), using ONTAP minimum size: " + ONTAP_MIN_VOLUME_SIZE);
+            capacityBytes = ONTAP_MIN_VOLUME_SIZE;
+        } else if (capacityBytes < ONTAP_MIN_VOLUME_SIZE) {
+            s_logger.warn("capacityBytes (" + capacityBytes + ") is below ONTAP minimum (" + ONTAP_MIN_VOLUME_SIZE + "), adjusting to minimum");
+            capacityBytes = ONTAP_MIN_VOLUME_SIZE;
+        }
+
+        // Validate scope
+        if (podId == null ^ clusterId == null) {
+            throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
+        }
+
+        if (podId == null) {
+            if (zoneId != null) {
+                s_logger.info("Both Pod Id and Cluster Id are null, Primary storage pool will be associated with a Zone");
+            } else {
+                throw new CloudRuntimeException("Pod Id, Cluster Id and Zone Id are all null, cannot create primary storage");
+            }
+        }
+
+        if (storagePoolName == null || storagePoolName.isEmpty()) {
+            throw new CloudRuntimeException("Storage pool name is null or empty, cannot create primary storage");
+        }
+
+        if (providerName == null || providerName.isEmpty()) {
+            throw new CloudRuntimeException("Provider name is null or empty, cannot create primary storage");
+        }
 
         PrimaryDataStoreParameters parameters = new PrimaryDataStoreParameters();
         if (clusterId != null) {
@@ -114,69 +140,106 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
 
-        details.put(OntapStorageConstants.SIZE, capacityBytes.toString());
-        details.putIfAbsent(OntapStorageConstants.IS_DISAGGREGATED, "false");
+        s_logger.debug("ONTAP primary storage will be created as " + (managed ? "managed" : "unmanaged"));
+        if (!managed) {
+            throw new CloudRuntimeException("ONTAP primary storage must be managed");
+        }
 
-        ProtocolType protocol = ProtocolType.valueOf(details.get(OntapStorageConstants.PROTOCOL));
+        //Required ONTAP detail keys
+        Set<String> requiredKeys = Set.of(
+                Constants.USERNAME,
+                Constants.PASSWORD,
+                Constants.SVM_NAME,
+                Constants.PROTOCOL,
+                Constants.STORAGE_IP
+        );
 
-//        long volumeSize = Long.parseLong(details.get(OntapStorageConstants.SIZE));
+        // Validate existing entries (reject unexpected keys, empty values)
+        for (Map.Entry<String, String> e : details.entrySet()) {
+            String key = e.getKey();
+            String val = e.getValue();
+            if (!requiredKeys.contains(key)) {
+                throw new CloudRuntimeException("Unexpected ONTAP detail key in URL: " + key);
+            }
+            if (val == null || val.isEmpty()) {
+                throw new CloudRuntimeException("ONTAP primary storage creation failed, empty detail: " + key);
+            }
+        }
+
+        // Detect missing required keys
+        Set<String> providedKeys = new java.util.HashSet<>(details.keySet());
+        if (!providedKeys.containsAll(requiredKeys)) {
+            Set<String> missing = new java.util.HashSet<>(requiredKeys);
+            missing.removeAll(providedKeys);
+            throw new CloudRuntimeException("ONTAP primary storage creation failed, missing detail(s): " + missing);
+        }
+
+        details.put(Constants.SIZE, capacityBytes.toString());
+
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        // Connect to ONTAP and create volume
+        long volumeSize = Long.parseLong(details.get(Constants.SIZE));
         OntapStorage ontapStorage = new OntapStorage(
-                details.get(OntapStorageConstants.USERNAME),
-                details.get(OntapStorageConstants.PASSWORD),
-                details.get(OntapStorageConstants.MANAGEMENT_LIF),
-                details.get(OntapStorageConstants.SVM_NAME),
-                capacityBytes,
-                protocol,
-                Boolean.parseBoolean(details.get(OntapStorageConstants.IS_DISAGGREGATED).toLowerCase()));
+                details.get(Constants.USERNAME),
+                details.get(Constants.PASSWORD),
+                details.get(Constants.STORAGE_IP),
+                details.get(Constants.SVM_NAME),
+                volumeSize,
+                protocol);
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
+            // Get the DataLIF for data access
             String dataLIF = storageStrategy.getNetworkInterface();
             if (dataLIF == null || dataLIF.isEmpty()) {
                 throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
             }
-            logger.info("Using Data LIF for storage access: " + dataLIF);
-            details.put(OntapStorageConstants.DATA_LIF, dataLIF);
-            logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + capacityBytes + " bytes (" +
-                    (capacityBytes / (1024 * 1024 * 1024)) + " GB)");
+            s_logger.info("Using Data LIF for storage access: " + dataLIF);
+            details.put(Constants.DATA_LIF, dataLIF);
+            s_logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + volumeSize + " bytes (" +
+                    (volumeSize / (1024 * 1024 * 1024)) + " GB)");
             try {
-                Volume volume = storageStrategy.createStorageVolume(storagePoolName, capacityBytes);
+                Volume volume = storageStrategy.createStorageVolume(storagePoolName, volumeSize);
                 if (volume == null) {
-                    logger.error("createStorageVolume returned null for volume: " + storagePoolName);
+                    s_logger.error("createStorageVolume returned null for volume: " + storagePoolName);
                     throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
                 }
-                logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
-                details.putIfAbsent(OntapStorageConstants.VOLUME_UUID, volume.getUuid());
-                details.putIfAbsent(OntapStorageConstants.VOLUME_NAME, volume.getName());
+                s_logger.info("Volume object retrieved successfully. UUID: " + volume.getUuid() + ", Name: " + volume.getName());
+                details.putIfAbsent(Constants.VOLUME_UUID, volume.getUuid());
+                details.putIfAbsent(Constants.VOLUME_NAME, volume.getName());
             } catch (Exception e) {
-                logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
+                s_logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
                 throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
             }
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
 
+        // Determine storage pool type, path and port based on protocol
         String path;
         int port;
         switch (protocol) {
             case NFS3:
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
-                path = OntapStorageConstants.SLASH + storagePoolName;
-                port = OntapStorageConstants.NFS3_PORT;
-                logger.info("Setting NFS path for storage pool: " + path + ", port: " + port);
+                path = Constants.SLASH + storagePoolName;
+                port = Constants.NFS3_PORT;
+                // Force NFSv3 for ONTAP managed storage to avoid NFSv4 ID mapping issues
+                details.put(Constants.NFS_MOUNT_OPTIONS,Constants.NFS3_MOUNT_OPTIONS_VER_3);
+                s_logger.info("Setting NFS path for storage pool: " + path + ", port: " + port + " with mount option: vers=3");
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.Iscsi);
                 path = storageStrategy.getStoragePath();
-                port = OntapStorageConstants.ISCSI_PORT;
-                logger.info("Setting iSCSI path for storage pool: " + path + ", port: " + port);
+                port = Constants.ISCSI_PORT;
+                s_logger.info("Setting iSCSI path for storage pool: " + path + ", port: " + port);
                 break;
             default:
                 throw new CloudRuntimeException("Unsupported protocol: " + protocol + ", cannot create primary storage");
         }
 
-        parameters.setHost(details.get(OntapStorageConstants.DATA_LIF));
+        // Set parameters for primary data store
+        parameters.setHost(details.get(Constants.DATA_LIF));
         parameters.setPort(port);
         parameters.setPath(path);
         parameters.setTags(tags);
@@ -195,135 +258,54 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         return _dataStoreHelper.createPrimaryDataStore(parameters);
     }
 
-    private long validateInitializeInputs(Long capacityBytes, Long podId, Long clusterId, Long zoneId,
-                                          String storagePoolName, String providerName, boolean managed, String url, Map<String, String> details) {
-
-        // Capacity validation
-        if (capacityBytes == null || capacityBytes <= 0) {
-            logger.warn("capacityBytes not provided or invalid (" + capacityBytes + "), using ONTAP minimum size: " + ONTAP_MIN_VOLUME_SIZE_IN_BYTES);
-            capacityBytes = ONTAP_MIN_VOLUME_SIZE_IN_BYTES;
-        } else if (capacityBytes < ONTAP_MIN_VOLUME_SIZE_IN_BYTES) {
-            logger.warn("capacityBytes (" + capacityBytes + ") is below ONTAP minimum (" + ONTAP_MIN_VOLUME_SIZE_IN_BYTES + "), adjusting to minimum");
-            capacityBytes = ONTAP_MIN_VOLUME_SIZE_IN_BYTES;
-        }
-
-        // Scope (pod/cluster/zone) validation
-        if (podId == null ^ clusterId == null) {
-            throw new CloudRuntimeException("Cluster Id or Pod Id is null, cannot create primary storage");
-        }
-        if (podId == null && clusterId == null) {
-            if (zoneId != null) {
-                logger.info("Both Pod Id and Cluster Id are null, Primary storage pool will be associated with a Zone");
-            } else {
-                throw new CloudRuntimeException("Pod Id, Cluster Id and Zone Id are all null, cannot create primary storage");
-            }
-        }
-
-        // Basic parameter validation
-        if (StringUtils.isBlank(storagePoolName)) {
-            throw new CloudRuntimeException("Storage pool name is null or empty, cannot create primary storage");
-        }
-        if (StringUtils.isBlank(providerName)) {
-            throw new CloudRuntimeException("Provider name is null or empty, cannot create primary storage");
-        }
-        logger.debug("ONTAP primary storage will be created as " + (managed ? "managed" : "unmanaged"));
-        if (!managed) {
-            throw new CloudRuntimeException("ONTAP primary storage must be managed");
-        }
-
-        // Details key validation
-        Set<String> requiredKeys = Set.of(
-                OntapStorageConstants.USERNAME,
-                OntapStorageConstants.PASSWORD,
-                OntapStorageConstants.SVM_NAME,
-                OntapStorageConstants.PROTOCOL,
-                OntapStorageConstants.MANAGEMENT_LIF
-        );
-        Set<String> optionalKeys = Set.of(
-                OntapStorageConstants.IS_DISAGGREGATED
-        );
-        Set<String> allowedKeys = new java.util.HashSet<>(requiredKeys);
-        allowedKeys.addAll(optionalKeys);
-
-        if (StringUtils.isNotBlank(url)) {
-            for (String segment : url.split(OntapStorageConstants.SEMICOLON)) {
-                if (segment.isEmpty()) {
-                    continue;
-                }
-                String[] kv = segment.split(OntapStorageConstants.EQUALS, 2);
-                if (kv.length == 2) {
-                    details.put(kv[0].trim(), kv[1].trim());
-                }
-            }
-        }
-
-        for (Map.Entry<String, String> e : details.entrySet()) {
-            String key = e.getKey();
-            String val = e.getValue();
-            if (!allowedKeys.contains(key)) {
-                throw new CloudRuntimeException("Unexpected ONTAP detail key in URL: " + key);
-            }
-            if (StringUtils.isBlank(val)) {
-                throw new CloudRuntimeException("ONTAP primary storage creation failed, empty detail: " + key);
-            }
-        }
-
-        Set<String> providedKeys = new HashSet<>(details.keySet());
-        if (!providedKeys.containsAll(requiredKeys)) {
-            Set<String> missing = new HashSet<>(requiredKeys);
-            missing.removeAll(providedKeys);
-            throw new CloudRuntimeException("ONTAP primary storage creation failed, missing detail(s): " + missing);
-        }
-
-        return capacityBytes;
-    }
-
     @Override
     public boolean attachCluster(DataStore dataStore, ClusterScope scope) {
         logger.debug("In attachCluster for ONTAP primary storage");
         if (dataStore == null) {
-            throw new InvalidParameterValueException("attachCluster: dataStore should not be null");
+            throw new InvalidParameterValueException(" dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachCluster: scope should not be null");
+            throw new InvalidParameterValueException(" scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if (storagePool == null) {
-            logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            s_logger.error("attachCluster : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException(" Storage Pool not found for id: " + dataStore.getId());
         }
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(primaryStore);
         logger.debug("attachCluster: Eligible Up and Enabled hosts: {} in cluster {}", hostsToConnect, primaryStore.getClusterId());
-
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
-        StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
 
-        ProtocolType protocol = ProtocolType.valueOf(details.get(OntapStorageConstants.PROTOCOL));
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        //TODO- Check if we have to handle heterogeneous host within the cluster
         if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
             String errMsg = "attachCluster: Not all hosts in the cluster support the protocol: " + protocol.name();
-            logger.error(errMsg);
+            s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
+        }
+        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
+        // We need to create export policy at pool level and igroup at host level(in grantAccess)
+        if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            // If there are no eligible host, export policy or igroup will not be created and will be taken as part of HostListener
+            if (!hostsIdentifier.isEmpty()) {
+                try {
+                    AccessGroup accessGroupRequest = new AccessGroup();
+                    accessGroupRequest.setHostsToConnect(hostsToConnect);
+                    accessGroupRequest.setScope(scope);
+                    accessGroupRequest.setStoragePoolId(storagePool.getId());
+                    strategy.createAccessGroup(accessGroupRequest);
+                } catch (Exception e) {
+                    s_logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+                    throw new CloudRuntimeException("Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
+                }
+            }
         }
 
         logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
-        if (hostsIdentifier != null && hostsIdentifier.size() > 0) {
-            try {
-                AccessGroup accessGroupRequest = new AccessGroup();
-                accessGroupRequest.setHostsToConnect(hostsToConnect);
-                accessGroupRequest.setScope(scope);
-                primaryStore.setDetails(details);
-                accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-                strategy.createAccessGroup(accessGroupRequest);
-            } catch (Exception e) {
-                logger.error("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
-                throw new CloudRuntimeException("attachCluster: Failed to create access group on storage system for cluster: " + primaryStore.getClusterId() + ". Exception: " + e.getMessage());
-            }
-        }
-        logger.debug("attachCluster: Attaching the pool to each of the host in the cluster: {}", primaryStore.getClusterId());
         for (HostVO host : hostsToConnect) {
-            // TODO: Fetch the host IQN and add to the initiator group on ONTAP cluster
             try {
                 _storageMgr.connectHostToSharedPool(host, dataStore.getId());
             } catch (Exception e) {
@@ -344,43 +326,46 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     public boolean attachZone(DataStore dataStore, ZoneScope scope, Hypervisor.HypervisorType hypervisorType) {
         logger.debug("In attachZone for ONTAP primary storage");
         if (dataStore == null) {
-            throw new InvalidParameterValueException("attachZone: dataStore should not be null");
+            throw new InvalidParameterValueException("dataStore should not be null");
         }
         if (scope == null) {
-            throw new InvalidParameterValueException("attachZone: scope should not be null");
+            throw new InvalidParameterValueException("scope should not be null");
         }
         List<String> hostsIdentifier = new ArrayList<>();
         StoragePoolVO storagePool = storagePoolDao.findById(dataStore.getId());
         if (storagePool == null) {
-            logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
-            throw new CloudRuntimeException("attachZone : Storage Pool not found for id: " + dataStore.getId());
+            s_logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
+            throw new CloudRuntimeException("Storage Pool not found for id: " + dataStore.getId());
         }
 
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), Hypervisor.HypervisorType.KVM);
         logger.debug(String.format("In createPool. Attaching the pool to each of the hosts in %s.", hostsToConnect));
-
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(primaryStore.getId());
-        StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        StorageStrategy strategy = Utility.getStrategyByStoragePoolDetails(details);
 
-        logger.debug("attachZone: Eligible Up and Enabled hosts: {}", hostsToConnect);
-        ProtocolType protocol = ProtocolType.valueOf(details.get(OntapStorageConstants.PROTOCOL));
+        ProtocolType protocol = ProtocolType.valueOf(details.get(Constants.PROTOCOL));
+        //TODO- Check if we have to handle heterogeneous host within the zone
         if (!validateProtocolSupportAndFetchHostsIdentifier(hostsToConnect, protocol, hostsIdentifier)) {
             String errMsg = "attachZone: Not all hosts in the zone support the protocol: " + protocol.name();
-            logger.error(errMsg);
+            s_logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
-        if (hostsIdentifier != null && !hostsIdentifier.isEmpty()) {
-            try {
-                AccessGroup accessGroupRequest = new AccessGroup();
-                accessGroupRequest.setHostsToConnect(hostsToConnect);
-                accessGroupRequest.setScope(scope);
-                primaryStore.setDetails(details);
-                accessGroupRequest.setPrimaryDataStoreInfo(primaryStore);
-                strategy.createAccessGroup(accessGroupRequest);
-            } catch (Exception e) {
-                logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
-                throw new CloudRuntimeException("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+
+        // We need to create export policy at pool level and igroup at host level
+        if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(Constants.PROTOCOL))) {
+            // If there are no eligible host, export policy or igroup will not be created and will be taken as part of HostListener
+            if (!hostsIdentifier.isEmpty()) {
+                try {
+                    AccessGroup accessGroupRequest = new AccessGroup();
+                    accessGroupRequest.setHostsToConnect(hostsToConnect);
+                    accessGroupRequest.setScope(scope);
+                    accessGroupRequest.setStoragePoolId(storagePool.getId());
+                    strategy.createAccessGroup(accessGroupRequest);
+                } catch (Exception e) {
+                    s_logger.error("attachZone: Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                    throw new CloudRuntimeException(" Failed to create access group on storage system for zone with Exception: " + e.getMessage());
+                }
             }
         }
         for (HostVO host : hostsToConnect) {
@@ -398,11 +383,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     private boolean validateProtocolSupportAndFetchHostsIdentifier(List<HostVO> hosts, ProtocolType protocolType, List<String> hostIdentifiers) {
         switch (protocolType) {
             case ISCSI:
-                String protocolPrefix = OntapStorageConstants.IQN;
+                String protocolPrefix = Constants.IQN;
                 for (HostVO host : hosts) {
                     if (host == null || host.getStorageUrl() == null || host.getStorageUrl().trim().isEmpty()
                             || !host.getStorageUrl().startsWith(protocolPrefix)) {
-                        return false;
+                        // TODO we will inform customer through alert for excluded host because of protocol enabled on host
+                        continue;
                     }
                     hostIdentifiers.add(host.getStorageUrl());
                 }
@@ -412,18 +398,18 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 for (HostVO host : hosts) {
                     if (host != null) {
                         ip =  host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : "";
-                        if (ip.isEmpty()) {
-                            if (host.getPrivateIpAddress() == null || host.getPrivateIpAddress().trim().isEmpty()) {
-                                return false;
-                            }
-                            ip = host.getPrivateIpAddress().trim();
+                        if (ip.isEmpty() && host.getPrivateIpAddress() != null || host.getPrivateIpAddress().trim().isEmpty()) {
+                            // TODO we will inform customer through alert for excluded host because of protocol enabled on host
+                            continue;
+                        } else {
+                            ip = ip.isEmpty() ? host.getPrivateIpAddress().trim() : ip;
                         }
                     }
                     hostIdentifiers.add(ip);
                 }
                 break;
             default:
-                throw new CloudRuntimeException("validateProtocolSupportAndFetchHostsIdentifier : Unsupported protocol: " + protocolType.name());
+                throw new CloudRuntimeException("Unsupported protocol: " + protocolType.name());
         }
         logger.info("validateProtocolSupportAndFetchHostsIdentifier: All hosts support the protocol: " + protocolType.name());
         return true;
@@ -451,56 +437,64 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public boolean deleteDataStore(DataStore store) {
-        logger.info("deleteDataStore: Starting deletion process for storage pool id: {}", store.getId());
+        s_logger.info("deleteDataStore: Starting deletion process for storage pool id: {}", store.getId());
 
         long storagePoolId = store.getId();
+        // Get the StoragePool details
         StoragePool storagePool = _storageMgr.getStoragePool(storagePoolId);
         if (storagePool == null) {
-            logger.warn("deleteDataStore: Storage pool not found for id: {}, skipping deletion", storagePoolId);
-            return true;
+            s_logger.warn("deleteDataStore: Storage pool not found for id: {}, skipping deletion", storagePoolId);
+            return true; // Return true since the entity doesn't exist
         }
 
         try {
+            // Fetch storage pool details
             Map<String, String> details = _datastoreDetailsDao.listDetailsKeyPairs(storagePoolId);
             if (details == null || details.isEmpty()) {
-                logger.warn("deleteDataStore: No details found for storage pool id: {}, proceeding with CS entity deletion only", storagePoolId);
+                s_logger.warn("deleteDataStore: No details found for storage pool id: {}, proceeding with CS entity deletion only", storagePoolId);
                 return _dataStoreHelper.deletePrimaryDataStore(store);
             }
 
-            logger.info("deleteDataStore: Deleting access groups for storage pool '{}'", storagePool.getName());
+            s_logger.info("deleteDataStore: Deleting access groups for storage pool '{}'", storagePool.getName());
 
-            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+            // Get the storage strategy to interact with ONTAP
+            StorageStrategy storageStrategy = Utility.getStrategyByStoragePoolDetails(details);
 
+            // Cast DataStore to PrimaryDataStoreInfo to get full details
             PrimaryDataStoreInfo primaryDataStoreInfo = (PrimaryDataStoreInfo) store;
             primaryDataStoreInfo.setDetails(details);
 
-            logger.info("deleteDataStore: Deleting ONTAP volume for storage pool '{}'", storagePool.getName());
+            // Call deleteStorageVolume to delete the underlying ONTAP volume
+            s_logger.info("deleteDataStore: Deleting ONTAP volume for storage pool '{}'", storagePool.getName());
             Volume volume = new Volume();
-            volume.setUuid(details.get(OntapStorageConstants.VOLUME_UUID));
-            volume.setName(details.get(OntapStorageConstants.VOLUME_NAME));
+            volume.setUuid(details.get(Constants.VOLUME_UUID));
+            volume.setName(details.get(Constants.VOLUME_NAME));
             try {
                 if (volume.getUuid() == null || volume.getUuid().isEmpty() || volume.getName() == null || volume.getName().isEmpty()) {
-                    logger.error("deleteDataStore: Volume UUID/Name not found in details for storage pool id: {}, cannot delete volume", storagePoolId);
+                    s_logger.error("deleteDataStore: Volume UUID/Name not found in details for storage pool id: {}, cannot delete volume", storagePoolId);
                     throw new CloudRuntimeException("Volume UUID/Name not found in details, cannot delete ONTAP volume");
                 }
                 storageStrategy.deleteStorageVolume(volume);
-                logger.info("deleteDataStore: Successfully deleted ONTAP volume '{}' (UUID: {}) for storage pool '{}'",
+                s_logger.info("deleteDataStore: Successfully deleted ONTAP volume '{}' (UUID: {}) for storage pool '{}'",
                         volume.getName(), volume.getUuid(), storagePool.getName());
             } catch (Exception e) {
-                logger.error("deleteDataStore: Exception while retrieving volume UUID for storage pool id: {}. Error: {}",
+                s_logger.error("deleteDataStore: Exception while retrieving volume UUID for storage pool id: {}. Error: {}",
                         storagePoolId, e.getMessage(), e);
             }
             AccessGroup accessGroup = new AccessGroup();
-            accessGroup.setPrimaryDataStoreInfo(primaryDataStoreInfo);
+            accessGroup.setStoragePoolId(storagePoolId);
+            // Delete access groups associated with this storage pool
             storageStrategy.deleteAccessGroup(accessGroup);
-            logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
+            s_logger.info("deleteDataStore: Successfully deleted access groups for storage pool '{}'", storagePool.getName());
 
         } catch (Exception e) {
-            logger.error("deleteDataStore: Failed to delete access groups for storage pool id: {}. Error: {}",
+            s_logger.error("deleteDataStore: Failed to delete access groups for storage pool id: {}. Error: {}",
                     storagePoolId, e.getMessage(), e);
-            logger.warn("deleteDataStore: Proceeding with CloudStack entity deletion despite ONTAP cleanup failure");
+            // Continue with CloudStack entity deletion even if ONTAP cleanup fails
+            s_logger.warn("deleteDataStore: Proceeding with CloudStack entity deletion despite ONTAP cleanup failure");
         }
 
+        // Delete the CloudStack primary data store entity
         return _dataStoreHelper.deletePrimaryDataStore(store);
     }
 

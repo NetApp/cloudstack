@@ -53,8 +53,7 @@ public class OntapStorageUtils {
         String protocol = details.get(OntapStorageConstants.PROTOCOL);
         OntapStorage ontapStorage = new OntapStorage(details.get(OntapStorageConstants.USERNAME), details.get(OntapStorageConstants.PASSWORD),
                 details.get(OntapStorageConstants.MANAGEMENT_LIF), details.get(OntapStorageConstants.SVM_NAME), Long.parseLong(details.get(OntapStorageConstants.SIZE)),
-                ProtocolType.valueOf(protocol),
-                Boolean.parseBoolean(details.get(OntapStorageConstants.IS_DISAGGREGATED)));
+                ProtocolType.valueOf(protocol));
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {

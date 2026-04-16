@@ -19,17 +19,16 @@
 
 package org.apache.cloudstack.storage.service;
 
+import com.cloud.agent.api.Answer;
 import com.cloud.host.HostVO;
+import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
+import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
-import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
-import org.apache.cloudstack.storage.feign.FeignClientFactory;
-import org.apache.cloudstack.storage.feign.client.JobFeignClient;
-import org.apache.cloudstack.storage.feign.client.NASFeignClient;
-import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.Job;
@@ -39,10 +38,13 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.command.CreateObjectCommand;
+import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
-import org.apache.cloudstack.storage.utils.OntapStorageConstants;
+import org.apache.cloudstack.storage.utils.Constants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.cloudstack.storage.utils.Utility;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -53,22 +55,13 @@ import java.util.Map;
 
 public class UnifiedNASStrategy extends NASStrategy {
 
-    private static final Logger logger = LogManager.getLogger(UnifiedNASStrategy.class);
-    private final FeignClientFactory feignClientFactory;
-    private final NASFeignClient nasFeignClient;
-    private final VolumeFeignClient volumeFeignClient;
-    private final JobFeignClient jobFeignClient;
+    private static final Logger s_logger = LogManager.getLogger(UnifiedNASStrategy.class);
     @Inject private VolumeDao volumeDao;
     @Inject private EndPointSelector epSelector;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
 
     public UnifiedNASStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
-        String baseURL = OntapStorageConstants.HTTPS + ontapStorage.getManagementLIF();
-        this.feignClientFactory = new FeignClientFactory();
-        this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
-        this.volumeFeignClient = feignClientFactory.createClient(VolumeFeignClient.class, baseURL);
-        this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL );
     }
 
     public void setOntapStorage(OntapStorage ontapStorage) {
@@ -77,7 +70,26 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        return null;
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null) {
+            throw new CloudRuntimeException(" Failed to create volume, invalid request");
+        }
+        DataObject volumeObject = cloudstackVolume.getVolumeInfo();
+        VolumeVO volumeVO = volumeDao.findById(volumeObject.getId());
+        if (volumeVO == null) {
+            throw new CloudRuntimeException(" Failed to create volume, volume not found");
+        }
+        EndPoint endPoint = epSelector.select(volumeObject);
+        if (endPoint == null) {
+            throw new CloudRuntimeException(" Failed to create volume, no endpoint available");
+        }
+        CreateObjectCommand cmd = new CreateObjectCommand(volumeObject.getTO());
+        Answer answer = endPoint.sendMessage(cmd);
+        if (answer == null || !answer.getResult()) {
+            String detail = answer != null ? answer.getDetails() : "no answer";
+            throw new CloudRuntimeException(" Failed to create volume: " + detail);
+        }
+        volumeDao.update(volumeObject.getId(), volumeVO);
+        return cloudstackVolume;
     }
 
     @Override
@@ -87,6 +99,20 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null) {
+            throw new CloudRuntimeException(" Failed to delete volume, invalid request");
+        }
+        DataObject volumeInfo = cloudstackVolume.getVolumeInfo();
+        EndPoint endpoint = epSelector.select(volumeInfo);
+        if (endpoint == null) {
+            throw new CloudRuntimeException(" Failed to delete volume, no endpoint available");
+        }
+        DeleteCommand cmd = new DeleteCommand(volumeInfo.getTO());
+        Answer answer = endpoint.sendMessage(cmd);
+        if (answer == null || !answer.getResult()) {
+            String detail = answer != null ? answer.getDetails() : "no answer";
+            throw new CloudRuntimeException(" Failed to delete volume: " + detail);
+        }
     }
 
     @Override
@@ -100,61 +126,62 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
-        logger.info("createAccessGroup: Create access group {}: " , accessGroup);
-        Map<String, String> details = accessGroup.getPrimaryDataStoreInfo().getDetails();
-        String svmName = details.get(OntapStorageConstants.SVM_NAME);
-        String volumeUUID = details.get(OntapStorageConstants.VOLUME_UUID);
-        String volumeName = details.get(OntapStorageConstants.VOLUME_NAME);
+    public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid, String snapshotUuid, String volumePath, String lunUuid, String flexVolName) {
+        return null;
+    }
 
+    @Override
+    public AccessGroup createAccessGroup(AccessGroup accessGroup) {
+        s_logger.info("createAccessGroup: Create access group {}: " , accessGroup);
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
+        String svmName = details.get(Constants.SVM_NAME);
+        String volumeUUID = details.get(Constants.VOLUME_UUID);
+        String volumeName = details.get(Constants.VOLUME_NAME);
+
+        // Create the export policy
         ExportPolicy policyRequest = createExportPolicyRequest(accessGroup,svmName,volumeName);
         try {
             ExportPolicy createdPolicy = createExportPolicy(svmName, policyRequest);
-            logger.info("ExportPolicy created: {}, now attaching this policy to storage pool volume", createdPolicy.getName());
+            s_logger.info("createAccessGroup: ExportPolicy created: {}, now attaching this policy to storage pool volume", createdPolicy.getName());
+            // attach export policy to volume of storage pool
             assignExportPolicyToVolume(volumeUUID,createdPolicy.getName());
-            storagePoolDetailsDao.addDetail(accessGroup.getPrimaryDataStoreInfo().getId(), OntapStorageConstants.EXPORT_POLICY_ID, String.valueOf(createdPolicy.getId()), true);
-            storagePoolDetailsDao.addDetail(accessGroup.getPrimaryDataStoreInfo().getId(), OntapStorageConstants.EXPORT_POLICY_NAME, createdPolicy.getName(), true);
-            logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
+            // save the export policy details in storage pool details
+            storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), Constants.EXPORT_POLICY_ID, String.valueOf(createdPolicy.getId()), true);
+            storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), Constants.EXPORT_POLICY_NAME, createdPolicy.getName(), true);
+            s_logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
             accessGroup.setPolicy(policyRequest);
             return accessGroup;
         }catch(Exception e){
-            logger.error("Exception occurred while creating access group: " +  e);
+            s_logger.error("createAccessGroup: Exception occurred while creating access group: " +  e);
             throw new CloudRuntimeException("Failed to create access group: " + e);
         }
     }
 
     @Override
     public void deleteAccessGroup(AccessGroup accessGroup) {
-        logger.info("deleteAccessGroup: Deleting export policy");
+        s_logger.info("deleteAccessGroup: Deleting export policy");
 
         if (accessGroup == null) {
-            throw new CloudRuntimeException("deleteAccessGroup: Invalid accessGroup object - accessGroup is null");
+            throw new CloudRuntimeException("Invalid accessGroup object - accessGroup is null");
         }
 
-        PrimaryDataStoreInfo primaryDataStoreInfo = accessGroup.getPrimaryDataStoreInfo();
-        if (primaryDataStoreInfo == null) {
-            throw new CloudRuntimeException("deleteAccessGroup: PrimaryDataStoreInfo is null in accessGroup");
-        }
-        logger.info("deleteAccessGroup: Deleting export policy for the storage pool {}", primaryDataStoreInfo.getName());
         try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            String svmName = storage.getSvmName();
-            String exportPolicyName = primaryDataStoreInfo.getDetails().get(OntapStorageConstants.EXPORT_POLICY_NAME);
-            String exportPolicyId = primaryDataStoreInfo.getDetails().get(OntapStorageConstants.EXPORT_POLICY_ID);
-            if (exportPolicyId == null || exportPolicyId.isEmpty()) {
-                logger.warn("deleteAccessGroup: Export policy ID not found in storage pool details for storage pool {}. Cannot delete export policy.", primaryDataStoreInfo.getName());
-                throw new CloudRuntimeException("Export policy ID not found for storage pool: " + primaryDataStoreInfo.getName());
-            }
+            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // Determine export policy attached to the storage pool
+            String exportPolicyName = details.get(Constants.EXPORT_POLICY_NAME);
+            String exportPolicyId = details.get(Constants.EXPORT_POLICY_ID);
 
             try {
                 nasFeignClient.deleteExportPolicyById(authHeader,exportPolicyId);
-                logger.info("deleteAccessGroup: Successfully deleted export policy '{}'", exportPolicyName);
+                s_logger.info("deleteAccessGroup: Successfully deleted export policy '{}'", exportPolicyName);
             } catch (Exception e) {
-                logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+                s_logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
                 throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
             }
         } catch (Exception e) {
-            logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
+            s_logger.error("deleteAccessGroup: Failed to delete export policy. Exception: {}", e.getMessage(), e);
             throw new CloudRuntimeException("Failed to delete export policy: " + e.getMessage(), e);
         }
     }
@@ -184,40 +211,41 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     private ExportPolicy createExportPolicy(String svmName, ExportPolicy policy) {
-        logger.info("Creating export policy: {} for SVM: {}", policy, svmName);
+        s_logger.info("createExportPolicy: Creating export policy: {} for SVM: {}", policy, svmName);
 
         try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             nasFeignClient.createExportPolicy(authHeader,  policy);
             OntapResponse<ExportPolicy> policiesResponse = null;
             try {
-                Map<String, Object> queryParams = Map.of(OntapStorageConstants.NAME, policy.getName());
+                Map<String, Object> queryParams = Map.of(Constants.NAME, policy.getName());
                 policiesResponse = nasFeignClient.getExportPolicyResponse(authHeader, queryParams);
                 if (policiesResponse == null || policiesResponse.getRecords().isEmpty()) {
                     throw new CloudRuntimeException("Export policy " + policy.getName() + " was not created on ONTAP. " +
                             "Received successful response but policy does not exist.");
                 }
-                logger.info("Export policy created and verified successfully: " + policy.getName());
+                s_logger.info("createExportPolicy: Export policy created and verified successfully: " + policy.getName());
             } catch (FeignException e) {
-                logger.error("Failed to verify export policy creation: " + policy.getName(), e);
+                s_logger.error("createExportPolicy: Failed to verify export policy creation: " + policy.getName(), e);
                 throw new CloudRuntimeException("Export policy creation verification failed: " + e.getMessage());
             }
-            logger.info("Export policy created successfully with name {}", policy.getName());
+            s_logger.info("createExportPolicy: Export policy created successfully with name {}", policy.getName());
             return policiesResponse.getRecords().get(0);
         } catch (FeignException e) {
-            logger.error("Failed to create export policy: {}", policy, e);
+            s_logger.error("createExportPolicy: Failed to create export policy: {}", policy, e);
             throw new CloudRuntimeException("Failed to create export policy: " + e.getMessage());
         } catch (Exception e) {
-            logger.error("Exception while creating export policy: {}", policy, e);
+            s_logger.error("createExportPolicy: Exception while creating export policy: {}", policy, e);
             throw new CloudRuntimeException("Failed to create export policy: " + e.getMessage());
         }
     }
 
     private void assignExportPolicyToVolume(String volumeUuid, String policyName) {
-        logger.info("Assigning export policy: {} to volume: {}", policyName, volumeUuid);
+        s_logger.info("assignExportPolicyToVolume: Assigning export policy: {} to volume: {}", policyName, volumeUuid);
 
         try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            // Create Volume update object with NAS configuration
             Volume volumeUpdate = new Volume();
             Nas nas = new Nas();
             ExportPolicy policy = new ExportPolicy();
@@ -231,36 +259,37 @@ public class UnifiedNASStrategy extends NASStrategy {
                     throw new CloudRuntimeException("Failed to attach policy " + policyName + "to volume " + volumeUuid);
                 }
                 String jobUUID = jobResponse.getJob().getUuid();
+                //Create URI for GET Job API
                 int jobRetryCount = 0;
                 Job createVolumeJob = null;
-                while(createVolumeJob == null || !createVolumeJob.getState().equals(OntapStorageConstants.JOB_SUCCESS)) {
-                    if(jobRetryCount >= OntapStorageConstants.JOB_MAX_RETRIES) {
-                        logger.error("Job to update volume " + volumeUuid + " did not complete within expected time.");
+                while(createVolumeJob == null || !createVolumeJob.getState().equals(Constants.JOB_SUCCESS)) {
+                    if(jobRetryCount >= Constants.JOB_MAX_RETRIES) {
+                        s_logger.error("assignExportPolicyToVolume: Job to update volume " + volumeUuid + " did not complete within expected time.");
                         throw new CloudRuntimeException("Job to update volume " + volumeUuid + " did not complete within expected time.");
                     }
                     try {
                         createVolumeJob = jobFeignClient.getJobByUUID(authHeader, jobUUID);
                         if (createVolumeJob == null) {
-                            logger.warn("Job with UUID " + jobUUID + " not found. Retrying...");
-                        } else if (createVolumeJob.getState().equals(OntapStorageConstants.JOB_FAILURE)) {
+                            s_logger.warn("assignExportPolicyToVolume: Job with UUID " + jobUUID + " not found. Retrying...");
+                        } else if (createVolumeJob.getState().equals(Constants.JOB_FAILURE)) {
                             throw new CloudRuntimeException("Job to update volume " + volumeUuid + " failed with error: " + createVolumeJob.getMessage());
                         }
                     } catch (FeignException.FeignClientException e) {
                         throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
                     }
                     jobRetryCount++;
-                    Thread.sleep(OntapStorageConstants.CREATE_VOLUME_CHECK_SLEEP_TIME);
+                    Thread.sleep(Constants.CREATE_VOLUME_CHECK_SLEEP_TIME); // Sleep for 2 seconds before polling again
                 }
             } catch (Exception e) {
-                logger.error("Exception while updating volume: ", e);
+                s_logger.error("assignExportPolicyToVolume: Exception while updating volume: ", e);
                 throw new CloudRuntimeException("Failed to update volume: " + e.getMessage());
             }
-            logger.info("Export policy successfully assigned to volume: {}", volumeUuid);
+            s_logger.info("assignExportPolicyToVolume: Export policy successfully assigned to volume: {}", volumeUuid);
         } catch (FeignException e) {
-            logger.error("Failed to assign export policy to volume: {}", volumeUuid, e);
+            s_logger.error("assignExportPolicyToVolume: Failed to assign export policy to volume: {}", volumeUuid, e);
             throw new CloudRuntimeException("Failed to assign export policy: " + e.getMessage());
         } catch (Exception e) {
-            logger.error("Exception while assigning export policy to volume: {}", volumeUuid, e);
+            s_logger.error("assignExportPolicyToVolume: Exception while assigning export policy to volume: {}", volumeUuid, e);
             throw new CloudRuntimeException("Failed to assign export policy: " + e.getMessage());
         }
     }
@@ -280,7 +309,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
                     ? hostStorageIp
                     : host.getPrivateIpAddress();
-            String ipToUse = ip + "/31";
+            String ipToUse = ip + "/32";
             ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
             exportClient.setMatch(ipToUse);
             exportClients.add(exportClient);
