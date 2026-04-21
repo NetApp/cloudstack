@@ -277,47 +277,49 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = Utility.generateAuthHeader(storage.getUsername(), storage.getPassword());
             String svmName = storage.getSvmName();
             //Get iGroup name per host
-            for(HostVO host : accessGroup.getHostsToConnect()) {
-                String igroupName = Utility.getIgroupName(svmName, host.getName());
-                s_logger.info("deleteAccessGroup: iGroup name '{}'", igroupName);
+            if(accessGroup.getHostsToConnect() != null && !accessGroup.getHostsToConnect().isEmpty()) {
+                for (HostVO host : accessGroup.getHostsToConnect()) {
+                    String igroupName = Utility.getIgroupName(svmName, host.getName());
+                    s_logger.info("deleteAccessGroup: iGroup name '{}'", igroupName);
 
-                // Get the iGroup to retrieve its UUID
-                Map<String, Object> igroupParams = Map.of(
-                        Constants.SVM_DOT_NAME, svmName,
-                        Constants.NAME, igroupName
-                );
+                    // Get the iGroup to retrieve its UUID
+                    Map<String, Object> igroupParams = Map.of(
+                            Constants.SVM_DOT_NAME, svmName,
+                            Constants.NAME, igroupName
+                    );
 
-                try {
-                    OntapResponse<Igroup> igroupResponse = sanFeignClient.getIgroupResponse(authHeader, igroupParams);
-                    if (igroupResponse == null || igroupResponse.getRecords() == null || igroupResponse.getRecords().isEmpty()) {
-                        s_logger.warn("deleteAccessGroup: iGroup '{}' not found, may have been already deleted", igroupName);
-                        return;
-                    }
+                    try {
+                        OntapResponse<Igroup> igroupResponse = sanFeignClient.getIgroupResponse(authHeader, igroupParams);
+                        if (igroupResponse == null || igroupResponse.getRecords() == null || igroupResponse.getRecords().isEmpty()) {
+                            s_logger.warn("deleteAccessGroup: iGroup '{}' not found, may have been already deleted", igroupName);
+                            return;
+                        }
 
-                    Igroup igroup = igroupResponse.getRecords().get(0);
-                    String igroupUuid = igroup.getUuid();
+                        Igroup igroup = igroupResponse.getRecords().get(0);
+                        String igroupUuid = igroup.getUuid();
 
-                    if (igroupUuid == null || igroupUuid.isEmpty()) {
-                        throw new CloudRuntimeException(" iGroup UUID is null or empty for iGroup: " + igroupName);
-                    }
+                        if (igroupUuid == null || igroupUuid.isEmpty()) {
+                            throw new CloudRuntimeException(" iGroup UUID is null or empty for iGroup: " + igroupName);
+                        }
 
-                    s_logger.info("deleteAccessGroup: Deleting iGroup '{}' with UUID '{}'", igroupName, igroupUuid);
+                        s_logger.info("deleteAccessGroup: Deleting iGroup '{}' with UUID '{}'", igroupName, igroupUuid);
 
-                    // Delete the iGroup using the UUID
-                    sanFeignClient.deleteIgroup(authHeader, igroupUuid);
+                        // Delete the iGroup using the UUID
+                        sanFeignClient.deleteIgroup(authHeader, igroupUuid);
 
-                    s_logger.info("deleteAccessGroup: Successfully deleted iGroup '{}'", igroupName);
+                        s_logger.info("deleteAccessGroup: Successfully deleted iGroup '{}'", igroupName);
 
-                } catch (FeignException e) {
-                    if (e.status() == 404) {
-                        s_logger.warn("deleteAccessGroup: iGroup '{}' does not exist (status 404), skipping deletion", igroupName);
-                    } else {
-                        s_logger.error("deleteAccessGroup: FeignException occurred: Status: {}, Exception: {}", e.status(), e.getMessage(), e);
+                    } catch (FeignException e) {
+                        if (e.status() == 404) {
+                            s_logger.warn("deleteAccessGroup: iGroup '{}' does not exist (status 404), skipping deletion", igroupName);
+                        } else {
+                            s_logger.error("deleteAccessGroup: FeignException occurred: Status: {}, Exception: {}", e.status(), e.getMessage(), e);
+                            throw e;
+                        }
+                    } catch (Exception e) {
+                        s_logger.error("deleteAccessGroup: Exception occurred: {}", e.getMessage(), e);
                         throw e;
                     }
-                } catch (Exception e) {
-                    s_logger.error("deleteAccessGroup: Exception occurred: {}", e.getMessage(), e);
-                    throw e;
                 }
             }
         } catch (FeignException e) {
