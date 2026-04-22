@@ -1038,10 +1038,6 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
         if (Grouping.AllocationState.Disabled == zone.getAllocationState() && !_accountMgr.isRootAdmin(account.getId())) {
             throw new PermissionDeniedException(String.format("Cannot perform this operation, Zone is currently disabled: %s", zone));
         }
-        // Check if it's local storage and if it's enabled on the zone
-        if (isFileScheme && !isLocalStorageEnabledForZone(zone)) {
-            throw new InvalidParameterValueException("Local storage is not enabled for zone: " + zone);
-        }
 
         Map<String, Object> params = new HashMap<>();
         params.put("zoneId", zone.getId());

@@ -83,9 +83,6 @@ public class UserVmJoinDaoImplTest extends GenericDaoBaseWithTagInformationBaseT
     @Mock
     private VMTemplateDao vmTemplateDao;
 
-    @Mock
-    ExtensionHelper extensionHelper;
-
     private UserVmJoinVO userVm = new UserVmJoinVO();
     private UserVmResponse userVmResponse = new UserVmResponse();
 

@@ -39,6 +39,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.cloud.offering.DiskOffering;
+import com.cloud.storage.Snapshot;
+import com.cloud.storage.SnapshotVO;
+import com.cloud.storage.dao.SnapshotDao;
+import com.cloud.vm.ImportVMTaskVO;
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.ResponseGenerator;
 import org.apache.cloudstack.api.ResponseObject;

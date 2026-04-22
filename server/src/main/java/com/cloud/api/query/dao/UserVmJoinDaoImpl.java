@@ -127,8 +127,6 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
     private VgpuProfileDao vgpuProfileDao;
     @Inject
     VMTemplateDao vmTemplateDao;
-    @Inject
-    ExtensionHelper extensionHelper;
 
     private final SearchBuilder<UserVmJoinVO> VmDetailSearch;
     private final SearchBuilder<UserVmJoinVO> activeVmByIsoSearch;

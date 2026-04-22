@@ -40,6 +40,10 @@ import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
+import com.cloud.domain.dao.DomainDao;
+import com.cloud.user.AccountVO;
+import com.cloud.user.ApiKeyPairState;
+import com.cloud.user.dao.AccountDao;
 import org.apache.cloudstack.acl.ControlledEntity;
 import org.apache.cloudstack.acl.ControlledEntity.ACLType;
 import org.apache.cloudstack.acl.RoleVO;
@@ -5856,15 +5860,5 @@ protected Map<String, ResourceIcon> getResourceIconsUsingOsCategory(List<Templat
         }
         response.setResponses(permissionResponses);
         return response;
-    }
-
-    @Override
-    public EntityManager getEntityManager() {
-        return _entityMgr;
-    }
-
-    @Override
-    public AccountManager getAccountManager() {
-        return _accountMgr;
     }
 }

@@ -16,6 +16,7 @@
 // specific language governing permissions and limitations
 // under the License.
 //
+<<<<<<<< HEAD:server/src/main/java/com/cloud/resourcelimit/ReservationHelper.java
 
 package com.cloud.resourcelimit;
 
@@ -30,6 +31,16 @@ public class ReservationHelper {
         for (Reserver reservation : reservations) {
             reservation.close();
         }
+========
+package com.cloud.agent.api;
+
+public class UpdateVmNicAnswer extends Answer {
+    public UpdateVmNicAnswer() {
+    }
+
+    public UpdateVmNicAnswer(UpdateVmNicCommand cmd, boolean success, String result) {
+        super(cmd, success, result);
+>>>>>>>> origin/main:core/src/main/java/com/cloud/agent/api/UpdateVmNicAnswer.java
     }
 
 }

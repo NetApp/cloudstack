@@ -1317,7 +1317,7 @@ export default {
             params.forceconverttopool = values.forceconverttopool
           }
         }
-        var keys = ['hostname', 'domainid', 'projectid', 'account', 'migrateallowed', 'forced', 'osid']
+        var keys = ['hostname', 'domainid', 'projectid', 'account', 'migrateallowed', 'forced', 'forcemstoimportvmfiles', 'osid']
         if (this.templateType !== 'auto') {
           keys.push('templateid')
         }

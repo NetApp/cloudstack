@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+<<<<<<<< HEAD:core/src/main/java/com/cloud/agent/api/UpdateVmNicAnswer.java
 //
 package com.cloud.agent.api;
 
@@ -24,4 +25,16 @@ public class UpdateVmNicAnswer extends Answer {
     public UpdateVmNicAnswer(UpdateVmNicCommand cmd, boolean success, String result) {
         super(cmd, success, result);
     }
+========
+package org.apache.cloudstack.acl.apikeypair;
+
+import java.util.List;
+
+public interface ApiKeyPairService {
+    List<ApiKeyPairPermission> findAllPermissionsByKeyPairId(Long apiKeyPairId, Long roleId);
+
+    ApiKeyPair findByApiKey(String apiKey);
+
+    ApiKeyPair findById(Long id);
+>>>>>>>> origin/main:api/src/main/java/org/apache/cloudstack/acl/apikeypair/ApiKeyPairService.java
 }

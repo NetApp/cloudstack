@@ -372,40 +372,14 @@ public class VMSnapshotManagerTest {
     }
 
     @Test
-    public void testUserVmServiceOfferingNeedsChangeWhenSameNonDynamicOffering() {
-        assertFalse(_vmSnapshotMgr.userVmServiceOfferingNeedsChange(userVm, vmSnapshotVO));
+    public void testUpdateUserVmServiceOfferingDifferentServiceOffering() throws ConcurrentOperationException, ResourceUnavailableException, ManagementServerException, VirtualMachineMigrationException {
+        when(userVm.getServiceOfferingId()).thenReturn(SERVICE_OFFERING_DIFFERENT_ID);
+        when(_userVmManager.upgradeVirtualMachine(eq(TEST_VM_ID), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture())).thenReturn(true);
+        _vmSnapshotMgr.updateUserVmServiceOffering(userVm, vmSnapshotVO);
 
-        verify(_serviceOfferingDao).findByIdIncludingRemoved(TEST_VM_ID, SERVICE_OFFERING_ID);
-        verify(_serviceOfferingDao, never()).getComputeOffering(any(ServiceOfferingVO.class), any());
-    }
-
-    @Test
-    public void testUserVmServiceOfferingNeedsChangeWhenDynamicOfferingMatchesSnapshot() {
-        when(serviceOffering.isDynamic()).thenReturn(true);
-        when(serviceOffering.getCpu()).thenReturn(2);
-        when(serviceOffering.getRamSize()).thenReturn(2048);
-        when(serviceOffering.getSpeed()).thenReturn(1000);
-        when(_serviceOfferingDao.getComputeOffering(eq(serviceOffering), any())).thenReturn(serviceOffering);
-
-        assertFalse(_vmSnapshotMgr.userVmServiceOfferingNeedsChange(userVm, vmSnapshotVO));
-
-        verify(_serviceOfferingDao).getComputeOffering(eq(serviceOffering), any());
-        verify(_vmSnapshotMgr).getVmMapDetails(vmSnapshotVO);
-    }
-
-    @Test
-    public void testUserVmServiceOfferingNeedsChangeWhenDynamicCpuDiffersFromSnapshot() {
-        when(serviceOffering.isDynamic()).thenReturn(true);
-        when(serviceOffering.getCpu()).thenReturn(2);
-        when(serviceOffering.getRamSize()).thenReturn(2048);
-        when(serviceOffering.getSpeed()).thenReturn(1000);
-        ServiceOfferingVO fromSnapshot = mock(ServiceOfferingVO.class);
-        when(fromSnapshot.getCpu()).thenReturn(4);
-        when(fromSnapshot.getRamSize()).thenReturn(2048);
-        when(fromSnapshot.getSpeed()).thenReturn(1000);
-        when(_serviceOfferingDao.getComputeOffering(eq(serviceOffering), any())).thenReturn(fromSnapshot);
-
-        assertTrue(_vmSnapshotMgr.userVmServiceOfferingNeedsChange(userVm, vmSnapshotVO));
+        verify(_vmSnapshotMgr).changeUserVmServiceOffering(userVm, vmSnapshotVO);
+        verify(_vmSnapshotMgr).getVmMapDetails(userVm);
+        verify(_vmSnapshotMgr).upgradeUserVmServiceOffering(eq(userVm), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture());
     }
 
     @Test
@@ -422,7 +396,7 @@ public class VMSnapshotManagerTest {
     public void testChangeUserVmServiceOffering() throws ConcurrentOperationException, ResourceUnavailableException, ManagementServerException, VirtualMachineMigrationException {
         when(_userVmManager.upgradeVirtualMachine(eq(TEST_VM_ID), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture())).thenReturn(true);
         _vmSnapshotMgr.changeUserVmServiceOffering(userVm, vmSnapshotVO);
-        verify(_vmSnapshotMgr).getVmMapDetails(vmSnapshotVO);
+        verify(_vmSnapshotMgr).getVmMapDetails(userVm);
         verify(_vmSnapshotMgr).upgradeUserVmServiceOffering(eq(userVm), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture());
     }
 
@@ -430,7 +404,7 @@ public class VMSnapshotManagerTest {
     public void testChangeUserVmServiceOfferingFailOnUpgradeVMServiceOffering() throws ConcurrentOperationException, ResourceUnavailableException, ManagementServerException, VirtualMachineMigrationException {
         when(_userVmManager.upgradeVirtualMachine(eq(TEST_VM_ID), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture())).thenReturn(false);
         _vmSnapshotMgr.changeUserVmServiceOffering(userVm, vmSnapshotVO);
-        verify(_vmSnapshotMgr).getVmMapDetails(vmSnapshotVO);
+        verify(_vmSnapshotMgr).getVmMapDetails(userVm);
         verify(_vmSnapshotMgr).upgradeUserVmServiceOffering(eq(userVm), eq(SERVICE_OFFERING_ID), mapDetailsCaptor.capture());
     }
 

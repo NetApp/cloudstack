@@ -979,10 +979,8 @@ public class VMSnapshotManagerImpl extends MutualExclusiveIdsManagerBase impleme
             Transaction.execute(new TransactionCallbackWithExceptionNoReturn<CloudRuntimeException>() {
                 @Override
                 public void doInTransactionWithoutResult(TransactionStatus status) throws CloudRuntimeException {
-                    if (userVmServiceOfferingNeedsChange(userVm, vmSnapshotVo)) {
-                        changeUserVmServiceOffering(userVm, vmSnapshotVo);
-                    }
                     revertCustomServiceOfferingDetailsFromVmSnapshot(userVm, vmSnapshotVo);
+                    updateUserVmServiceOffering(userVm, vmSnapshotVo);
                 }
             });
             return userVm;

@@ -889,8 +889,6 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
     private boolean convertInstanceVerboseMode = false;
     private Map<String, String> convertInstanceEnv = null;
-    private String vddkLibDir = null;
-    private static final String libguestfsBackend = "direct";
     protected boolean dpdkSupport = false;
     protected String dpdkOvsPath;
     protected String directDownloadTemporaryDownloadPath;

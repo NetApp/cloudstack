@@ -70,10 +70,6 @@ async function applyDynamicCustomization (response) {
   vueProps.$config.logo = jsonConfig?.logo ?? vueProps.$config.logo
   vueProps.$config.minilogo = jsonConfig?.minilogo ?? vueProps.$config.minilogo
   vueProps.$config.banner = jsonConfig?.banner ?? vueProps.$config.banner
-  vueProps.$config.docBase = jsonConfig?.docBase ?? vueProps.$config.docBase
-  vueProps.$config.apidocs = jsonConfig?.apidocs ?? vueProps.$config.apidocs
-  vueProps.$config.docHelpMappings = jsonConfig?.docHelpMappings ?? vueProps.$config.docHelpMappings
-  vueProps.$config.keyboardOptions = jsonConfig?.keyboardOptions ?? vueProps.$config.keyboardOptions
   vueProps.$config.defaultLanguage = vueProps.$localStorage.get('LOCALE') ?? jsonConfig?.defaultLanguage ?? vueProps.$config.defaultLanguage
 
   applyJsonConfigToObject(jsonConfig?.error, vueProps.$config.error)

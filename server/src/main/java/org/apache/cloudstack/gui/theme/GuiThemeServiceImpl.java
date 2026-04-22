@@ -54,6 +54,16 @@ public class GuiThemeServiceImpl implements GuiThemeService {
 
     protected Logger logger = LogManager.getLogger(getClass());
 
+    private static final List<String> ALLOWED_PRIMITIVE_PROPERTIES = List.of("appTitle", "footer", "loginFooter", "logo", "minilogo", "banner", "defaultLanguage");
+
+    private static final List<String> ALLOWED_ERROR_PROPERTIES = List.of("403", "404", "500");
+
+    private static final List<String> ALLOWED_PLUGIN_PROPERTIES = List.of("name", "path", "icon", "isExternalLink");
+
+    private static final String ERROR = "error";
+
+    private static final String PLUGINS = "plugins";
+
     @Inject
     GuiThemeDao guiThemeDao;
 

@@ -1731,6 +1731,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
     }
 
+    private void checkForPendingBackupJobs(final BackupVO backup) {
+        String backupUuid = backup.getUuid();
+        long pendingJobs = asyncJobManager.countPendingJobs(backupUuid,
+                CreateVMFromBackupCmd.class.getName(),
+                CreateVMFromBackupCmdByAdmin.class.getName(),
+                RestoreBackupCmd.class.getName(),
+                RestoreVolumeFromBackupAndAttachToVMCmd.class.getName());
+        if (pendingJobs > 0) {
+            throw new CloudRuntimeException("Cannot delete Backup while a create Instance from Backup or restore Backup operation is in progress, please try again later.");
+        }
+    }
+
     /**
      * Get the pair: hostIp, datastoreUuid in which to restore the volume, based on the VM to be attached information
      */
