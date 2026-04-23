@@ -31,7 +31,6 @@ import feign.Param;
 import feign.RequestLine;
 import java.util.Map;
 
-//TODO: Proper URLs should be added in the RequestLine annotations below
 public interface SANFeignClient {
     // iSCSI Service APIs
     @RequestLine("GET /api/protocols/san/iscsi/services")
