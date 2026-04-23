@@ -34,11 +34,11 @@ import org.apache.logging.log4j.Logger;
 
 
 public class StorageProviderFactory {
-    private static final Logger s_logger = LogManager.getLogger(StorageProviderFactory.class);
+    private static final Logger logger = LogManager.getLogger(StorageProviderFactory.class);
 
     public static StorageStrategy getStrategy(OntapStorage ontapStorage) {
         ProtocolType protocol = ontapStorage.getProtocol();
-        s_logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
+        logger.info("Initializing StorageProviderFactory with protocol: " + protocol);
         String decodedPassword = new String(java.util.Base64.getDecoder().decode(ontapStorage.getPassword()), StandardCharsets.UTF_8);
         ontapStorage = new OntapStorage(
             ontapStorage.getUsername(),
