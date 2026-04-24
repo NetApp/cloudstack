@@ -395,26 +395,6 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
                 fw.write("1");
             }
             logger.info("Removed stale SCSI device " + devName + " for LUN /" + iqn + "/" + lun + " via sysfs");
-
-            // Also remove any partition by-path symlinks for this LUN (e.g. lun-0-part1, lun-0-part2).
-            // Writing "1" to the parent device's sysfs delete removes the disk and all its partitions
-            // from the kernel, but the by-path symlinks for partitions can remain as dangling symlinks.
-            // Clean them up explicitly.
-            String partPrefix = byPath + "-part";
-            java.io.File byPathDir = new java.io.File("/dev/disk/by-path");
-            java.io.File[] entries = byPathDir.listFiles();
-            if (entries != null) {
-                for (java.io.File entry : entries) {
-                    if (entry.getAbsolutePath().startsWith(partPrefix)) {
-                        try {
-                            java.nio.file.Files.deleteIfExists(entry.toPath());
-                            logger.info("Removed stale partition symlink: " + entry.getName());
-                        } catch (Exception e) {
-                            logger.warn("Failed to remove partition symlink " + entry.getName() + ": " + e.getMessage());
-                        }
-                    }
-                }
-            }
         } catch (Exception e) {
             logger.warn("Failed to remove stale SCSI device for LUN /" + iqn + "/" + lun + ": " + e.getMessage());
         }
@@ -430,7 +410,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
                     " — other LUNs on the same target are still active. Removing stale SCSI device for this LUN only.");
             removeStaleScsiDevice(host, port, iqn, lun);
             // After removing this LUN's device, re-check: if no other LUNs remain active,
-            // we are the last one and must logout to clean up the iSCSI session entirely.
+            // If it is the last one then must logout to clean up the iSCSI session entirely.
             if (hasOtherActiveLuns(host, port, iqn, lun)) {
                 logger.info("Other LUNs still active after removing /" + iqn + "/" + lun + " — session kept alive.");
                 return true;
