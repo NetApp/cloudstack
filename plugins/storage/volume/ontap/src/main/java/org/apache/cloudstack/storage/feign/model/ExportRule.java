@@ -19,9 +19,11 @@
 
 package org.apache.cloudstack.storage.feign.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
 import java.util.List;
 
 /**
@@ -54,6 +56,7 @@ public class ExportRule {
             this.value = value;
         }
 
+        @JsonValue
         public String getValue() {
             return value;
         }
@@ -63,9 +66,11 @@ public class ExportRule {
             return String.valueOf(value);
         }
 
+        @JsonCreator
         public static ProtocolsEnum fromValue(String text) {
+            if (text == null) return null;
             for (ProtocolsEnum b : ProtocolsEnum.values()) {
-                if (String.valueOf(b.value).equals(text)) {
+                if (b.value.equalsIgnoreCase(text)) {
                     return b;
                 }
             }
