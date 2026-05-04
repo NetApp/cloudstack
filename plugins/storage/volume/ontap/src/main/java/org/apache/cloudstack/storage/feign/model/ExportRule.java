@@ -70,7 +70,7 @@ public class ExportRule {
         public static ProtocolsEnum fromValue(String text) {
             if (text == null) return null;
             for (ProtocolsEnum b : ProtocolsEnum.values()) {
-                if (b.value.equalsIgnoreCase(text)) {
+                if (text.equalsIgnoreCase(b.value)) {
                     return b;
                 }
             }

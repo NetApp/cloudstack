@@ -87,7 +87,7 @@ public class Igroup {
         public static OsTypeEnum fromValue(String text) {
             if (text == null) return null;
             for (OsTypeEnum b : OsTypeEnum.values()) {
-                if (b.value.equalsIgnoreCase(text)) {
+                if (text.equalsIgnoreCase(b.value)) {
                     return b;
                 }
             }
@@ -141,7 +141,7 @@ public class Igroup {
         public static ProtocolEnum fromValue(String text) {
             if (text == null) return null;
             for (ProtocolEnum b : ProtocolEnum.values()) {
-                if (b.value.equalsIgnoreCase(text)) {
+                if (text.equalsIgnoreCase(b.value)) {
                     return b;
                 }
             }
