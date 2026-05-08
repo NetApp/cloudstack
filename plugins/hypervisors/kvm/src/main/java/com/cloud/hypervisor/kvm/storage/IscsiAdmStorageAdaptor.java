@@ -17,6 +17,8 @@
 package com.cloud.hypervisor.kvm.storage;
 
 import java.io.File;
+import java.io.FileWriter;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -363,6 +365,15 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             // independent LUNs, they are partition symlinks for the same LUN disk.
             // Only count actual LUN entries (no "-part" suffix after the lun number).
             if (name.startsWith(prefix) && !name.equals(prefix + lun) && !name.contains("-part")) {
+                // Skip dangling symlinks — after removeStaleScsiDevice() deletes the sysfs
+                // device, the by-path symlink becomes dangling before udev removes it.
+                // Counting a dangling symlink as an "active" LUN would cause the second
+                // of two sequential disconnects to incorrectly skip logout.
+                // Files.exists() follows symlinks: returns false if the target block device is gone.
+                if (!Files.exists(entry.toPath())) {
+                    logger.debug("Skipping dangling by-path symlink (device already removed): " + name);
+                    continue;
+                }
                 logger.debug("Found other active LUN on same target: " + name);
                 return true;
             }
@@ -387,20 +398,20 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
      */
     private void removeStaleScsiDevice(String host, int port, String iqn, String lun) {
         String byPath = getByPath(host, port, "/" + iqn + "/" + lun);
-        java.nio.file.Path byPathLink = java.nio.file.Paths.get(byPath);
-        if (!java.nio.file.Files.exists(byPathLink)) {
+        Path byPathLink = Paths.get(byPath);
+        if (!Files.exists(byPathLink)) {
             logger.debug("by-path entry for LUN " + lun + " already gone, nothing to remove");
             return;
         }
         try {
-            java.nio.file.Path realDevice = byPathLink.toRealPath();
+            Path realDevice = byPathLink.toRealPath();
             String devName = realDevice.getFileName().toString();
-            java.io.File deleteFile = new java.io.File("/sys/block/" + devName + "/device/delete");
+            File deleteFile = new File("/sys/block/" + devName + "/device/delete");
             if (!deleteFile.exists()) {
                 logger.warn("sysfs delete entry not found for device " + devName + " — cannot remove stale SCSI device");
                 return;
             }
-            try (java.io.FileWriter fw = new java.io.FileWriter(deleteFile)) {
+            try (FileWriter fw = new FileWriter(deleteFile)) {
                 fw.write("1");
             }
             logger.info("Removed stale SCSI device " + devName + " for LUN /" + iqn + "/" + lun + " via sysfs");
@@ -414,6 +425,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         // ONTAP (and similar) uses a single IQN per SVM with multiple LUNs.
         // Doing iscsiadm --logout tears down the ENTIRE target session,
         // which would destroy access to ALL LUNs — not just the one being disconnected.
+        //
         if (hasOtherActiveLuns(host, port, iqn, lun)) {
             logger.info("Skipping iSCSI logout for /" + iqn + "/" + lun +
                     " — other LUNs on the same target are still active. Removing stale SCSI device for this LUN only.");
