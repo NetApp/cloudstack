@@ -453,10 +453,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
         // Save capacity before the generic cancelMaintain path overwrites it.
         // The generic flow sends ModifyStoragePoolCommand to agents. For managed iSCSI pools,
-        // IscsiAdmStoragePool returns capacityBytes=0 (it doesn't track real ONTAP capacity),
-        // which causes updateStoragePoolHostVOAndBytes to overwrite the real capacity set during
-        // pool initialization. With capacity=0, the deployment planner's checkPoolforSpace
-        // divides by zero and rejects the pool ("No destination found").
+        // IscsiAdmStoragePool returns capacityBytes=0 , With capacity=0,
+        // the deployment planner's checkPoolforSpace rejects the pool ("No destination found").
         StoragePoolVO poolVO = storagePoolDao.findById(store.getId());
         long savedCapacityBytes = poolVO.getCapacityBytes();
         long savedUsedBytes = poolVO.getUsedBytes();
@@ -464,10 +462,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (_dataStoreHelper.cancelMaintain(store)) {
             boolean result = _storagePoolAutomation.cancelMaintain(store);
 
-            // Restore capacity if the generic path zeroed it out
+            // Restore capacity
             poolVO = storagePoolDao.findById(store.getId());
             if (poolVO.getCapacityBytes() == 0 && savedCapacityBytes > 0) {
-                logger.info("Restoring storage pool {} capacity to {} bytes (agent returned 0 during cancelMaintain)",
+                logger.info("Restoring storage pool {} capacity to {} bytes",
                         poolVO.getName(), savedCapacityBytes);
                 poolVO.setCapacityBytes(savedCapacityBytes);
                 poolVO.setUsedBytes(savedUsedBytes);
