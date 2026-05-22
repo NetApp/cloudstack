@@ -28,7 +28,7 @@ public class OntapStorageConstants {
     public static final int NFS3_PORT = 2049;
     public static final int ISCSI_PORT = 3260;
 
-    public static final String NFS3 = "nfs3";
+    public static final String NFS = "nfs";
     public static final String ISCSI = "iscsi";
     public static final String SIZE = "size";
     public static final String PROTOCOL = "protocol";

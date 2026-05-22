@@ -122,10 +122,10 @@ public abstract class StorageStrategy {
                 logger.error("SVM " + svmName + " is not in running state.");
                 return false;
             }
-            if (storage.getProtocol().name().equalsIgnoreCase(OntapStorageConstants.NFS3) && !svm.getNfsEnabled()) {
+            if (Objects.equals(storage.getProtocol(), ProtocolType.NFS3) && !svm.getNfsEnabled()) {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
                 return false;
-            } else if (storage.getProtocol().name().equalsIgnoreCase(OntapStorageConstants.ISCSI) && !svm.getIscsiEnabled()) {
+            } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 return false;
             }
