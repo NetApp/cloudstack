@@ -108,7 +108,8 @@ public abstract class StorageStrategy {
             Svm svm = new Svm();
             logger.info("Fetching the SVM details...");
             Map<String, Object> queryParams = Map.of(OntapStorageConstants.NAME, svmName, OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATES +
-                    OntapStorageConstants.COMMA + OntapStorageConstants.STATE);
+                    OntapStorageConstants.COMMA + OntapStorageConstants.STATE +
+                    OntapStorageConstants.COMMA +  OntapStorageConstants.NFS + OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI);
             OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
@@ -118,8 +119,8 @@ public abstract class StorageStrategy {
             }
 
             logger.info("Validating SVM state and protocol settings...");
-            logger.info("Protocol storage.getProtocol() = " + storage.getProtocol() + "Objects.equals(storage.getProtocol(), ProtocolType.ISCSI)" + Objects.equals(storage.getProtocol(), ProtocolType.ISCSI));
-            logger.info("svm.getIscsiEnabled() : " + svm.getIscsiEnabled());
+            logger.info("Protocol storage.getProtocol() = " + storage.getProtocol() + " Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) " + Objects.equals(storage.getProtocol(), ProtocolType.ISCSI));
+            logger.info("svm.getIscsiEnabled() : " + svm.getIscsiEnabled() + "svm.getNfsEnabled() : " + svm.getNfsEnabled());
             if (!Objects.equals(svm.getState(), OntapStorageConstants.RUNNING)) {
                 logger.error("SVM " + svmName + " is not in running state.");
                 return false;
@@ -127,7 +128,6 @@ public abstract class StorageStrategy {
             if (Objects.equals(storage.getProtocol(), ProtocolType.NFS3) && !svm.getNfsEnabled()) {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
                 return false;
-
             } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("iSCSI protocol is not enabled on SVM " + svmName);
                 return false;

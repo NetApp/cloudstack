@@ -36,14 +36,14 @@ public class Svm {
     @JsonProperty("name")
     private String name = null;
 
-    @JsonProperty("iscsi.enabled")
-    private Boolean iscsiEnabled = null;
+    @JsonProperty("iscsi")
+    private ProtocolStatus iscsi = null;
 
-    @JsonProperty("fcp.enabled")
-    private Boolean fcpEnabled = null;
+    @JsonProperty("fcp")
+    private ProtocolStatus fcp = null;
 
-    @JsonProperty("nfs.enabled")
-    private Boolean nfsEnabled = null;
+    @JsonProperty("nfs")
+    private ProtocolStatus nfs = null;
 
     @JsonProperty("aggregates")
     private List<Aggregate> aggregates = null;
@@ -73,28 +73,16 @@ public class Svm {
         this.name = name;
     }
 
-    public Boolean getIscsiEnabled() {
-        return iscsiEnabled;
+    public Boolean getNfsEnabled() {
+        return nfs == null ? false : nfs.getEnabled();
     }
 
-    public void setIscsiEnabled(Boolean iscsiEnabled) {
-        this.iscsiEnabled = iscsiEnabled;
+    public Boolean getIscsiEnabled() {
+        return iscsi == null ? false : iscsi.getEnabled();
     }
 
     public Boolean getFcpEnabled() {
-        return fcpEnabled;
-    }
-
-    public void setFcpEnabled(Boolean fcpEnabled) {
-        this.fcpEnabled = fcpEnabled;
-    }
-
-    public Boolean getNfsEnabled() {
-        return nfsEnabled;
-    }
-
-    public void setNfsEnabled(Boolean nfsEnabled) {
-        this.nfsEnabled = nfsEnabled;
+        return fcp == null ? false : fcp.getEnabled();
     }
 
     public List<Aggregate> getAggregates() {
@@ -139,6 +127,15 @@ public class Svm {
     @Override
     public int hashCode() {
         return Objects.hashCode(getUuid());
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class ProtocolStatus {
+        @JsonProperty("enabled")
+        private Boolean enabled;
+        public Boolean getEnabled() { return enabled; }
+        public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
