@@ -77,12 +77,33 @@ public class Svm {
         return nfs == null ? false : nfs.getEnabled();
     }
 
+    public void setNfsEnabled(Boolean nfsEnabled) {
+        if (this.nfs == null) {
+            this.nfs = new ProtocolStatus();
+        }
+        this.nfs.setEnabled(nfsEnabled);
+    }
+
     public Boolean getIscsiEnabled() {
         return iscsi == null ? false : iscsi.getEnabled();
     }
 
+    public void setIscsiEnabled(Boolean iscsiEnabled) {
+        if (this.iscsi == null) {
+            this.iscsi = new ProtocolStatus();
+        }
+        this.iscsi.setEnabled(iscsiEnabled);
+    }
+
     public Boolean getFcpEnabled() {
         return fcp == null ? false : fcp.getEnabled();
+    }
+
+    public void setFcpEnabled(Boolean fcpEnabled) {
+        if (this.fcp == null) {
+            this.fcp = new ProtocolStatus();
+        }
+        this.fcp.setEnabled(fcpEnabled);
     }
 
     public List<Aggregate> getAggregates() {
