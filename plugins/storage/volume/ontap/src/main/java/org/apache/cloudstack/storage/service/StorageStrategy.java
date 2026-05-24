@@ -127,8 +127,8 @@ public abstract class StorageStrategy {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
             } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
-                logger.error("iSCSI protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
+                logger.error("ISCSI protocol is not enabled on SVM " + svmName);
+                throw new CloudRuntimeException("ISCSI protocol is not enabled on SVM " + svmName);
             }
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
