@@ -109,31 +109,31 @@ public abstract class StorageStrategy {
             logger.info("Fetching the SVM details...");
             Map<String, Object> queryParams = Map.of(OntapStorageConstants.NAME, svmName, OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATES +
                     OntapStorageConstants.COMMA + OntapStorageConstants.STATE +
-                    OntapStorageConstants.COMMA +  OntapStorageConstants.NFS_ENABLED + OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI_ENABLED);
+                    OntapStorageConstants.COMMA +  OntapStorageConstants.NFS + OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI);
             OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
             } else {
-                logger.error("No SVM found on the ONTAP cluster by the name" + svmName);
-                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name " + svmName);
+                logger.error("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                return false;
             }
 
             logger.info("Validating SVM state and protocol settings...");
             if (!Objects.equals(svm.getState(), OntapStorageConstants.RUNNING)) {
-                logger.error("SVM " + svmName + " is not in running state");
-                throw new CloudRuntimeException("SVM " + svmName + " is not in running state");
+                logger.error("SVM " + svmName + " is not in running state.");
+                return false;
             }
             if (Objects.equals(storage.getProtocol(), ProtocolType.NFS3) && !svm.getNfsEnabled()) {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+                return false;
             } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("iSCSI protocol is not enabled on SVM " + svmName);
-                throw new CloudRuntimeException("iSCSI protocol is not enabled on SVM " + svmName);
+                return false;
             }
             List<Aggregate> aggrs = svm.getAggregates();
             if (aggrs == null || aggrs.isEmpty()) {
                 logger.error("No aggregates are assigned to SVM " + svmName);
-                throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
+                return false;
             }
             for (Aggregate aggr : aggrs) {
                 logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
@@ -156,13 +156,13 @@ public abstract class StorageStrategy {
             }
             if (this.aggregates == null || this.aggregates.isEmpty()) {
                 logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
-                return false;
+                throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
             }
 
             logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (Exception e) {
             logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
-            return false;
+            throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
         }
         return true;
     }
