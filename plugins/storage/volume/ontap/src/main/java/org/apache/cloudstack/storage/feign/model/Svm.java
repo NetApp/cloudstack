@@ -23,8 +23,10 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -36,14 +38,11 @@ public class Svm {
     @JsonProperty("name")
     private String name = null;
 
-    @JsonProperty("iscsi")
-    private ProtocolStatus iscsi = null;
+    private Boolean iscsiEnabled = null;
 
-    @JsonProperty("fcp")
-    private ProtocolStatus fcp = null;
+    private Boolean fcpEnabled = null;
 
-    @JsonProperty("nfs")
-    private ProtocolStatus nfs = null;
+    private Boolean nfsEnabled = null;
 
     @JsonProperty("aggregates")
     private List<Aggregate> aggregates = null;
@@ -74,36 +73,42 @@ public class Svm {
     }
 
     public Boolean getNfsEnabled() {
-        return nfs == null ? false : nfs.getEnabled();
+        return Boolean.TRUE.equals(nfsEnabled);
     }
 
     public void setNfsEnabled(Boolean nfsEnabled) {
-        if (this.nfs == null) {
-            this.nfs = new ProtocolStatus();
-        }
-        this.nfs.setEnabled(nfsEnabled);
+        this.nfsEnabled = nfsEnabled;
+    }
+
+    @JsonSetter("nfs")
+    public void setNfs(Map<String, Object> nfs) {
+        this.nfsEnabled = nfs != null ? Boolean.TRUE.equals(nfs.get("enabled")) : false;
     }
 
     public Boolean getIscsiEnabled() {
-        return iscsi == null ? false : iscsi.getEnabled();
+        return Boolean.TRUE.equals(iscsiEnabled);
     }
 
     public void setIscsiEnabled(Boolean iscsiEnabled) {
-        if (this.iscsi == null) {
-            this.iscsi = new ProtocolStatus();
-        }
-        this.iscsi.setEnabled(iscsiEnabled);
+        this.iscsiEnabled = iscsiEnabled;
+    }
+
+    @JsonSetter("iscsi")
+    public void setIscsi(Map<String, Object> iscsi) {
+        this.iscsiEnabled = iscsi != null ? Boolean.TRUE.equals(iscsi.get("enabled")) : false;
     }
 
     public Boolean getFcpEnabled() {
-        return fcp == null ? false : fcp.getEnabled();
+        return Boolean.TRUE.equals(fcpEnabled);
     }
 
     public void setFcpEnabled(Boolean fcpEnabled) {
-        if (this.fcp == null) {
-            this.fcp = new ProtocolStatus();
-        }
-        this.fcp.setEnabled(fcpEnabled);
+        this.fcpEnabled = fcpEnabled;
+    }
+
+    @JsonSetter("fcp")
+    public void setFcp(Map<String, Object> fcp) {
+        this.fcpEnabled = fcp != null ? Boolean.TRUE.equals(fcp.get("enabled")) : false;
     }
 
     public List<Aggregate> getAggregates() {
@@ -148,15 +153,6 @@ public class Svm {
     @Override
     public int hashCode() {
         return Objects.hashCode(getUuid());
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ProtocolStatus {
-        @JsonProperty("enabled")
-        private Boolean enabled;
-        public Boolean getEnabled() { return enabled; }
-        public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

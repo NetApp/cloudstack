@@ -310,7 +310,7 @@ public class StorageStrategyTest {
 
         // Execute & Verify
         CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
-        assertTrue(ex.getMessage().contains("iSCSI protocol is not enabled"));
+        assertTrue(ex.getMessage().contains("ISCSI protocol is not enabled"));
     }
 
     @Test
