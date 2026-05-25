@@ -114,8 +114,8 @@ public abstract class StorageStrategy {
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
             } else {
-                logger.error("No SVM found on the ONTAP cluster by the name" + svmName + ".");
-                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name" + svmName + ".");
+                logger.error("No SVM found on the ONTAP cluster by the name " + svmName + ".");
+                throw new CloudRuntimeException("No SVM found on the ONTAP cluster by the name " + svmName + ".");
             }
 
             logger.info("Validating SVM state and protocol settings...");
