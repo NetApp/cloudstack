@@ -619,6 +619,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         CreateCmdResult result;
 
         try {
+            logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: snapshot name [{}]", snapshot.getName());
             VolumeInfo volumeInfo = snapshot.getBaseVolume();
 
             VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
@@ -647,6 +648,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO) snapshot.getTO();
 
             // Build snapshot name using volume name and snapshot UUID
+            logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: snapshot name [{}]", snapshot.getName());
             String snapshotName = buildSnapshotName(volumeInfo.getName(), snapshot.getUuid());
 
             // Resolve the volume path for storing in snapshot details (for revert operation)
