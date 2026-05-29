@@ -673,6 +673,9 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      */
     String buildSnapshotName(VMSnapshot vmSnapshot) {
         logger.info("buildSnapshotName: snapshot name [{}]", vmSnapshot.getName());
+        logger.info("buildSnapshotName: snapshot Display Name [{}]", vmSnapshot.getDisplayName());
+        logger.info("buildSnapshotName: snapshot UUID [{}]", vmSnapshot.getUuid());
+        logger.info("buildSnapshotName: snapshot id [{}]", vmSnapshot.getId());
         String name = "vmsnap_" + vmSnapshot.getId() + "_" + System.currentTimeMillis();
         // ONTAP snapshot names: max 256 chars, must start with letter, only alphanumeric and underscores
         if (name.length() > OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH) {

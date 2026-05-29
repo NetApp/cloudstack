@@ -649,6 +649,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             // Build snapshot name using volume name and snapshot UUID
             logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: snapshot name [{}]", snapshot.getName());
+            logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: snapshot UUID [{}]", snapshot.getUuid());
+            logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: snapshot ID [{}]", snapshot.getId());
             String snapshotName = buildSnapshotName(volumeInfo.getName(), snapshot.getUuid());
 
             // Resolve the volume path for storing in snapshot details (for revert operation)
