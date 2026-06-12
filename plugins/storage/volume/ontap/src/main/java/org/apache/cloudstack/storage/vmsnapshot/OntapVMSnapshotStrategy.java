@@ -427,6 +427,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             clone.setSource(source);
                             cloneRequest.setClone(clone);
                             cloneRequest.setIsOverride(Boolean.FALSE);
+                            logger.info("CloneRequest: {}", cloneRequest);
                             jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
                             cloneUuid = resolveLunUuid(storageStrategy, authHeader,
                                     groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);

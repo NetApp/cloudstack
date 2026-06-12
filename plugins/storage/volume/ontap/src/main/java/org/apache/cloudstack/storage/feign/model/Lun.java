@@ -309,11 +309,14 @@ public class Lun {
         sb.append("    enabled: ").append(toIndentedString(enabled)).append("\n");
         sb.append("    lunMaps: ").append(toIndentedString(lunMaps)).append("\n");
         sb.append("    name: ").append(toIndentedString(name)).append("\n");
+        sb.append("    clone: ").append(toIndentedString(clone)).append("\n");
         sb.append("    osType: ").append(toIndentedString(osType)).append("\n");
         sb.append("    serialNumber: ").append(toIndentedString(serialNumber)).append("\n");
         sb.append("    space: ").append(toIndentedString(space)).append("\n");
         sb.append("    svm: ").append(toIndentedString(svm)).append("\n");
         sb.append("    uuid: ").append(toIndentedString(uuid)).append("\n");
+        sb.append("    location: ").append(toIndentedString(location)).append("\n");
+        sb.append("    isOverride: ").append(toIndentedString(isOverride)).append("\n");
         sb.append("}");
         return sb.toString();
     }
@@ -339,6 +342,15 @@ public class Lun {
         public void setSource(Source source) {
             this.source = source;
         }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("class Clone {\n");
+            sb.append("    source: ").append(source).append("\n");
+            sb.append("}");
+            return sb.toString();
+        }
     }
 
     public static class Source {
@@ -359,6 +371,16 @@ public class Lun {
         public void setUuid(String uuid) {
             this.uuid = uuid;
         }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("class Source {\n");
+            sb.append("    name: ").append(name).append("\n");
+            sb.append("    uuid: ").append(uuid).append("\n");
+            sb.append("}");
+            return sb.toString();
+        }
     }
 
     public static class Location {
@@ -372,6 +394,15 @@ public class Lun {
         public void setVolume(LocationVolume volume) {
             this.volume = volume;
         }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("class Location {\n");
+            sb.append("    volume: ").append(volume).append("\n");
+            sb.append("}");
+            return sb.toString();
+        }
     }
 
     public static class LocationVolume {
@@ -384,6 +415,15 @@ public class Lun {
 
         public void setName(String name) {
             this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("class LocationVolume {\n");
+            sb.append("    name: ").append(name).append("\n");
+            sb.append("}");
+            return sb.toString();
         }
     }
 }

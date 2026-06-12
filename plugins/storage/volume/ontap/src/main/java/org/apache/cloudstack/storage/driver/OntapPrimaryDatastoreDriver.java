@@ -641,6 +641,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     public void takeSnapshot(SnapshotInfo snapshot, AsyncCompletionCallback<CreateCmdResult> callback) {
         logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: Creating clone-backed snapshot for snapshot [{}]", snapshot.getId());
         CreateCmdResult result;
+        StorageStrategy storageStrategy = null;
+        String authHeader = null;
+        String protocol = null;
+        String flexVolUuid = null;
+        String cloneName = null;
+        String cloneLunPath = null;
+        String svmName = null;
 
         try {
             VolumeInfo volumeInfo = snapshot.getBaseVolume();
@@ -657,19 +664,20 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(volumeVO.getPoolId());
-            String protocol = poolDetails.get(OntapStorageConstants.PROTOCOL);
-            String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+            protocol = poolDetails.get(OntapStorageConstants.PROTOCOL);
+            flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+            svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
 
             if (flexVolUuid == null || flexVolUuid.isEmpty()) {
                 throw new CloudRuntimeException("FlexVolume UUID not found in pool details for pool " + volumeVO.getPoolId());
             }
 
-            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-            String authHeader = storageStrategy.getAuthHeader();
+            storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
+            authHeader = storageStrategy.getAuthHeader();
 
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO) snapshot.getTO();
             String cloudStackSnapshotName = snapshot.getName();
-            String cloneName = OntapStorageUtils.getOntapCloneName(cloudStackSnapshotName);
+            cloneName = OntapStorageUtils.getOntapCloneName(cloudStackSnapshotName);
             String volumePath = resolveVolumePathOnOntap(volumeVO, protocol, poolDetails);
             String cloneId = null;
             String lunUuid = null;
@@ -694,7 +702,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (lunUuid == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
-                String cloneLunPath = OntapStorageUtils.getLunName(
+                cloneLunPath = OntapStorageUtils.getLunName(
                         poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                 Lun cloneRequest = new Lun();
                 cloneRequest.setName(cloneLunPath);
@@ -729,7 +737,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-                String cloneLunPath = OntapStorageUtils.getLunName(
+                cloneLunPath = OntapStorageUtils.getLunName(
                         poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                 cloneId = resolveLunUuidByName(storageStrategy, authHeader,
                         poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);
@@ -749,12 +757,44 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     cloudStackSnapshotName, cloneName, volumeVO.getId());
 
         } catch (Exception ex) {
-            logger.error("takeSnapshot: Failed due to ", ex);
-            result = new CreateCmdResult(null, new CreateObjectAnswer(ex.toString()));
-            result.setResult(ex.toString());
+            String rollbackStatus = rollbackPartialSnapshotClone(storageStrategy, authHeader, protocol, flexVolUuid,
+                    cloneName, cloneLunPath, svmName);
+            String errorWithRollback = ex.toString() + " | rollbackStatus=" + rollbackStatus;
+            logger.error("takeSnapshot: Failed with rollback status [{}]", rollbackStatus, ex);
+            result = new CreateCmdResult(null, new CreateObjectAnswer(errorWithRollback));
+            result.setResult(errorWithRollback);
         }
 
         callback.complete(result);
+    }
+
+    /**
+     * Best-effort rollback of partially created snapshot clone objects when takeSnapshot fails.
+     * Returns a status string that is appended to the task result so CloudStack has clear context.
+     */
+    private String rollbackPartialSnapshotClone(StorageStrategy storageStrategy, String authHeader, String protocol,
+                                               String flexVolUuid, String cloneName, String cloneLunPath, String svmName) {
+        if (storageStrategy == null || authHeader == null || protocol == null || cloneName == null || cloneName.isEmpty()) {
+            return "not-attempted";
+        }
+        try {
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
+                storageStrategy.getNasFeignClient().deleteFile(authHeader, flexVolUuid, cloneName);
+                return "nfs-clone-deleted";
+            }
+            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+                String lunNameForLookup = cloneLunPath != null ? cloneLunPath : cloneName;
+                String cloneUuid = resolveLunUuidByName(storageStrategy, authHeader, svmName, lunNameForLookup);
+                storageStrategy.getSanFeignClient().deleteLun(authHeader, cloneUuid, Map.of("allow_delete_while_mapped", "true"));
+                return "iscsi-clone-deleted";
+            }
+            return "unsupported-protocol";
+        } catch (Exception cleanupEx) {
+            String cleanupMessage = cleanupEx.getMessage() != null ? cleanupEx.getMessage() : cleanupEx.toString();
+            logger.warn("rollbackPartialSnapshotClone: Failed to clean up clone [{}] for protocol [{}]: {}",
+                    cloneName, protocol, cleanupMessage);
+            return "cleanup-failed:" + cleanupMessage;
+        }
     }
 
     /**
