@@ -694,8 +694,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (lunUuid == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
+                String cloneLunPath = OntapStorageUtils.getLunName(
+                        poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                 Lun cloneRequest = new Lun();
-                cloneRequest.setName(cloneName);
+                cloneRequest.setName(cloneLunPath);
                 Svm svm = new Svm();
                 svm.setName(poolDetails.get(OntapStorageConstants.SVM_NAME));
                 cloneRequest.setSvm(svm);
@@ -727,8 +729,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+                String cloneLunPath = OntapStorageUtils.getLunName(
+                        poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                 cloneId = resolveLunUuidByName(storageStrategy, authHeader,
-                        poolDetails.get(OntapStorageConstants.SVM_NAME), cloneName);
+                        poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);
             }
 
             snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_CLONE_NAME + "=" + cloneName);

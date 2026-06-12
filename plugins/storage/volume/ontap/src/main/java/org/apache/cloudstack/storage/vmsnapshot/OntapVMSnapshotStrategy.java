@@ -409,8 +409,10 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             if (sourceLunUuid == null || sourceLunUuid.isEmpty()) {
                                 throw new CloudRuntimeException("Source LUN UUID missing for volume " + volumeId);
                             }
+                            String cloneLunPath = OntapStorageUtils.getLunName(
+                                    groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                             org.apache.cloudstack.storage.feign.model.Lun cloneRequest = new org.apache.cloudstack.storage.feign.model.Lun();
-                            cloneRequest.setName(cloneName);
+                            cloneRequest.setName(cloneLunPath);
                             org.apache.cloudstack.storage.feign.model.Svm svm = new org.apache.cloudstack.storage.feign.model.Svm();
                             svm.setName(groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME));
                             cloneRequest.setSvm(svm);
@@ -426,7 +428,8 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             cloneRequest.setClone(clone);
                             cloneRequest.setIsOverride(Boolean.FALSE);
                             jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
-                            cloneUuid = resolveLunUuid(storageStrategy, authHeader, groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME), cloneName);
+                            cloneUuid = resolveLunUuid(storageStrategy, authHeader,
+                                    groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);
                         } else {
                             throw new CloudRuntimeException("Unsupported protocol for VM snapshot clone: " + protocol);
                         }
