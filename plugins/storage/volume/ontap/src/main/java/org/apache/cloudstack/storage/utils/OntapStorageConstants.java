@@ -100,11 +100,13 @@ public class OntapStorageConstants {
     public static final String BASE_ONTAP_FV_ID = "base_ontap_fv_id";
     public static final String ONTAP_SNAP_ID = "ontap_snap_id";
     public static final String ONTAP_SNAP_NAME = "ontap_snap_name";
+    public static final String ONTAP_CLONE_ID = "ontap_clone_id";
+    public static final String ONTAP_CLONE_NAME = "ontap_clone_name";
     public static final String VOLUME_PATH = "volume_path";
     public static final String PRIMARY_POOL_ID = "primary_pool_id";
     public static final String ONTAP_SNAP_SIZE = "ontap_snap_size";
     public static final String FILE_PATH = "file_path";
-    public static final int MAX_SNAPSHOT_NAME_LENGTH = 64;
+    public static final int MAX_SNAPSHOT_NAME_LENGTH = 256;
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";

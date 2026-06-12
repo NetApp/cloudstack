@@ -33,8 +33,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
-import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -375,7 +373,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                         userVm.getInstanceName(), quiesceVm, vmIsRunning);
             }
 
-            // ── Step 2: Create FlexVolume-level snapshots ──
+            // ── Step 2: Create clone-backed VM snapshot entries ──
             try {
                 String snapshotNameBase = buildSnapshotName(vmSnapshot);
 
@@ -386,43 +384,66 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
                     // Build storage strategy from pool details to get the feign client
                     StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(groupInfo.poolDetails);
-                    SnapshotFeignClient snapshotClient = storageStrategy.getSnapshotFeignClient();
                     String authHeader = storageStrategy.getAuthHeader();
-
-                    // Use the same snapshot name for all FlexVolumes in this VM snapshot
-                    // (each FlexVolume gets its own independent snapshot with this name)
-                    FlexVolSnapshot snapshotRequest = new FlexVolSnapshot(snapshotNameBase,
-                            "CloudStack VM snapshot " + vmSnapshot.getName() + " for VM " + userVm.getInstanceName());
-
-                    logger.info("takeVMSnapshot: Creating ONTAP FlexVolume snapshot [{}] on FlexVol UUID [{}] covering {} volume(s)",
-                            snapshotNameBase, flexVolUuid, groupInfo.volumeIds.size());
-
-                    JobResponse jobResponse = snapshotClient.createSnapshot(authHeader, flexVolUuid, snapshotRequest);
-                    if (jobResponse == null || jobResponse.getJob() == null) {
-                        throw new CloudRuntimeException("Failed to initiate FlexVolume snapshot on FlexVol UUID [" + flexVolUuid + "]");
-                    }
-
-                    // Poll for job completion
-                    Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
-                    if (!jobSucceeded) {
-                        throw new CloudRuntimeException("FlexVolume snapshot job failed on FlexVol UUID [" + flexVolUuid + "]");
-                    }
-
-                    // Retrieve the created snapshot UUID by name
-                    String snapshotUuid = resolveSnapshotUuid(snapshotClient, authHeader, flexVolUuid, snapshotNameBase);
-
                     String protocol = groupInfo.poolDetails.get(OntapStorageConstants.PROTOCOL);
 
-                    // Create one detail per CloudStack volume in this FlexVol group (for single-file restore during revert)
+                    // Create one clone per CloudStack volume and persist detail for protocol-specific revert.
                     for (Long volumeId : groupInfo.volumeIds) {
                         String volumePath = resolveVolumePathOnOntap(volumeId, protocol, groupInfo.poolDetails);
+                        String cloneName = snapshotNameBase;
+                        String cloneUuid = cloneName;
+                        JobResponse jobResponse;
+                        if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
+                            org.apache.cloudstack.storage.feign.model.FileCloneRequest cloneRequest = new org.apache.cloudstack.storage.feign.model.FileCloneRequest();
+                            org.apache.cloudstack.storage.feign.model.FileCloneRequest.VolumeRef volumeRef = new org.apache.cloudstack.storage.feign.model.FileCloneRequest.VolumeRef();
+                            volumeRef.setUuid(flexVolUuid);
+                            volumeRef.setName(groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                            cloneRequest.setVolume(volumeRef);
+                            cloneRequest.setSourcePath(volumePath);
+                            cloneRequest.setDestinationPath(cloneName);
+                            cloneRequest.setIsOverride(Boolean.FALSE);
+                            jobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, cloneRequest);
+                        } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+                            VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
+                            String sourceLunUuid = lunDetail != null ? lunDetail.getValue() : null;
+                            if (sourceLunUuid == null || sourceLunUuid.isEmpty()) {
+                                throw new CloudRuntimeException("Source LUN UUID missing for volume " + volumeId);
+                            }
+                            org.apache.cloudstack.storage.feign.model.Lun cloneRequest = new org.apache.cloudstack.storage.feign.model.Lun();
+                            cloneRequest.setName(cloneName);
+                            org.apache.cloudstack.storage.feign.model.Svm svm = new org.apache.cloudstack.storage.feign.model.Svm();
+                            svm.setName(groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME));
+                            cloneRequest.setSvm(svm);
+                            org.apache.cloudstack.storage.feign.model.Lun.Location location = new org.apache.cloudstack.storage.feign.model.Lun.Location();
+                            org.apache.cloudstack.storage.feign.model.Lun.LocationVolume locationVolume = new org.apache.cloudstack.storage.feign.model.Lun.LocationVolume();
+                            locationVolume.setName(groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                            location.setVolume(locationVolume);
+                            cloneRequest.setLocation(location);
+                            org.apache.cloudstack.storage.feign.model.Lun.Clone clone = new org.apache.cloudstack.storage.feign.model.Lun.Clone();
+                            org.apache.cloudstack.storage.feign.model.Lun.Source source = new org.apache.cloudstack.storage.feign.model.Lun.Source();
+                            source.setUuid(sourceLunUuid);
+                            clone.setSource(source);
+                            cloneRequest.setClone(clone);
+                            cloneRequest.setIsOverride(Boolean.FALSE);
+                            jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
+                            cloneUuid = resolveLunUuid(storageStrategy, authHeader, groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME), cloneName);
+                        } else {
+                            throw new CloudRuntimeException("Unsupported protocol for VM snapshot clone: " + protocol);
+                        }
+                        if (jobResponse == null || jobResponse.getJob() == null) {
+                            throw new CloudRuntimeException("Failed to submit clone-backed VM snapshot for volume " + volumeId);
+                        }
+                        Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
+                        if (!jobSucceeded) {
+                            throw new CloudRuntimeException("Clone-backed VM snapshot job failed for volume " + volumeId);
+                        }
                         FlexVolSnapshotDetail detail = new FlexVolSnapshotDetail(
-                                flexVolUuid, snapshotUuid, snapshotNameBase, volumePath, groupInfo.poolId, protocol);
+                                flexVolUuid, cloneUuid, cloneName, volumePath, groupInfo.poolId, protocol);
                         createdSnapshots.add(detail);
                     }
 
-                    logger.info("takeVMSnapshot: ONTAP FlexVolume snapshot [{}] (uuid={}) on FlexVol [{}] completed in {} ms. Covers volumes: {}",
-                            snapshotNameBase, snapshotUuid, flexVolUuid,
+                    logger.info("takeVMSnapshot: Clone-backed VM snapshot [{}] on FlexVol [{}] completed in {} ms. Covers volumes: {}",
+                            snapshotNameBase, flexVolUuid,
                             TimeUnit.MILLISECONDS.convert(System.nanoTime() - startSnapshot, TimeUnit.NANOSECONDS),
                             groupInfo.volumeIds);
                 }
@@ -672,25 +693,14 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      * Format: {@code vmsnap_<vmSnapshotId>_<timestamp>}
      */
     String buildSnapshotName(VMSnapshot vmSnapshot) {
-        String name = "vmsnap_" + vmSnapshot.getId() + "_" + System.currentTimeMillis();
-        // ONTAP snapshot names: max 256 chars, must start with letter, only alphanumeric and underscores
-        if (name.length() > OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH) {
-            name = name.substring(0, OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH);
-        }
-        return name;
+        return OntapStorageUtils.getOntapCloneName(vmSnapshot.getName());
     }
 
-    /**
-     * Resolves the UUID of a newly created FlexVolume snapshot by name.
-     */
-    String resolveSnapshotUuid(SnapshotFeignClient client, String authHeader,
-                                        String flexVolUuid, String snapshotName) {
-        Map<String, Object> queryParams = new HashMap<>();
-        queryParams.put("name", snapshotName);
-        OntapResponse<FlexVolSnapshot> response = client.getSnapshots(authHeader, flexVolUuid, queryParams);
+    String resolveLunUuid(StorageStrategy strategy, String authHeader, String svmName, String lunName) {
+        OntapResponse<org.apache.cloudstack.storage.feign.model.Lun> response = strategy.getSanFeignClient()
+                .getLunResponse(authHeader, Map.of(OntapStorageConstants.SVM_DOT_NAME, svmName, OntapStorageConstants.NAME, lunName));
         if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
-            throw new CloudRuntimeException("Could not find FlexVolume snapshot [" + snapshotName +
-                    "] on FlexVol [" + flexVolUuid + "] after creation");
+            throw new CloudRuntimeException("Could not resolve LUN UUID for clone " + lunName);
         }
         return response.getRecords().get(0).getUuid();
     }
@@ -819,43 +829,28 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
             Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
             StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-            SnapshotFeignClient snapshotClient = storageStrategy.getSnapshotFeignClient();
-            String authHeader = storageStrategy.getAuthHeader();
-
-            // Get SVM name and FlexVolume name from pool details
-            String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
             String flexVolName = poolDetails.get(OntapStorageConstants.VOLUME_NAME);
-
-            if (svmName == null || svmName.isEmpty()) {
-                throw new CloudRuntimeException("SVM name not found in pool details for pool [" + detail.poolId + "]");
-            }
             if (flexVolName == null || flexVolName.isEmpty()) {
                 throw new CloudRuntimeException("FlexVolume name not found in pool details for pool [" + detail.poolId + "]");
             }
 
-            // The path must start with "/" for the ONTAP CLI API
-            String ontapFilePath = detail.volumePath.startsWith("/") ? detail.volumePath : "/" + detail.volumePath;
-
             logger.info("revertFlexVolSnapshots: Restoring volume [{}] from FlexVol snapshot [{}] on FlexVol [{}] (protocol={})",
-                    ontapFilePath, detail.snapshotName, flexVolName, detail.protocol);
-
-            // Use CLI-based restore API: POST /api/private/cli/volume/snapshot/restore-file
-            CliSnapshotRestoreRequest restoreRequest = new CliSnapshotRestoreRequest(
-                    svmName, flexVolName, detail.snapshotName, ontapFilePath);
-
-            JobResponse jobResponse = snapshotClient.restoreFileFromSnapshotCli(authHeader, restoreRequest);
+                    detail.volumePath, detail.snapshotName, flexVolName, detail.protocol);
+            String lunUuid = ProtocolType.ISCSI.name().equalsIgnoreCase(detail.protocol) ? detail.snapshotUuid : null;
+            JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
+                    detail.snapshotName, detail.flexVolUuid, detail.snapshotUuid, detail.volumePath, lunUuid, flexVolName);
 
             if (jobResponse != null && jobResponse.getJob() != null) {
                 Boolean success = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 60, 2000);
                 if (!success) {
                     throw new CloudRuntimeException("Snapshot file restore failed for volume path [" +
-                            ontapFilePath + "] from snapshot [" + detail.snapshotName +
+                            detail.volumePath + "] from snapshot [" + detail.snapshotName +
                             "] on FlexVol [" + flexVolName + "]");
                 }
             }
 
             logger.info("revertFlexVolSnapshots: Successfully restored volume [{}] from snapshot [{}] on FlexVol [{}]",
-                    ontapFilePath, detail.snapshotName, flexVolName);
+                    detail.volumePath, detail.snapshotName, flexVolName);
         }
     }
 

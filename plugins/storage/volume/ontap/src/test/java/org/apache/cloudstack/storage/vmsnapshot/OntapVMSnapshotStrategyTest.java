@@ -592,11 +592,11 @@ class OntapVMSnapshotStrategyTest {
     @Test
     void testBuildSnapshotName_Format() {
         VMSnapshotVO vmSnapshot = mock(VMSnapshotVO.class);
-        when(vmSnapshot.getId()).thenReturn(SNAPSHOT_ID);
+        when(vmSnapshot.getName()).thenReturn("My VM Snapshot #1");
 
         String name = strategy.buildSnapshotName(vmSnapshot);
 
-        assertEquals(true, name.startsWith("vmsnap_200_"));
+        assertEquals(true, name.startsWith("My_VM_Snapshot"));
         assertEquals(true, name.length() <= OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH);
     }
 

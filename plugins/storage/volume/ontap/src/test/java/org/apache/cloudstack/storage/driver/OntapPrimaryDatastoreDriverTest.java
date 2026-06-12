@@ -25,23 +25,31 @@ import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.dao.SnapshotDetailsDao;
+import com.cloud.storage.dao.SnapshotDetailsVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
+import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
+import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.response.JobResponse;
+import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.cloudstack.storage.to.SnapshotObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -71,6 +79,7 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -90,6 +99,9 @@ class OntapPrimaryDatastoreDriverTest {
     private VolumeDetailsDao volumeDetailsDao;
 
     @Mock
+    private SnapshotDetailsDao snapshotDetailsDao;
+
+    @Mock
     private DataStore dataStore;
 
     @Mock
@@ -106,6 +118,15 @@ class OntapPrimaryDatastoreDriverTest {
 
     @Mock
     private UnifiedSANStrategy sanStrategy;
+
+    @Mock
+    private StorageStrategy storageStrategy;
+
+    @Mock
+    private NASFeignClient nasFeignClient;
+
+    @Mock
+    private SnapshotInfo snapshotInfo;
 
     @Mock
     private AsyncCompletionCallback<CreateCmdResult> createCallback;
@@ -563,5 +584,92 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testCanProvideVolumeStats_ReturnsFalse() {
         assertFalse(driver.canProvideVolumeStats());
+    }
+
+    @Test
+    void testTakeSnapshot_NfsCloneSuccess() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
+        storagePoolDetails.put(OntapStorageConstants.SVM_NAME, "svm1");
+        storagePoolDetails.put(OntapStorageConstants.USERNAME, "admin");
+        storagePoolDetails.put(OntapStorageConstants.PASSWORD, "pass");
+        storagePoolDetails.put(OntapStorageConstants.STORAGE_IP, "10.0.0.1");
+        storagePoolDetails.put(OntapStorageConstants.SIZE, "1024");
+
+        when(snapshotInfo.getId()).thenReturn(500L);
+        when(snapshotInfo.getName()).thenReturn("UI Snapshot Name");
+        when(snapshotInfo.getBaseVolume()).thenReturn(volumeInfo);
+        SnapshotObjectTO snapshotObjectTO = mock(SnapshotObjectTO.class);
+        when(snapshotInfo.getTO()).thenReturn(snapshotObjectTO);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeVO.getId()).thenReturn(100L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(volumeVO.getPath()).thenReturn("vol-100.qcow2");
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(storageStrategy.getAuthHeader()).thenReturn("Basic auth");
+        when(storageStrategy.getNasFeignClient()).thenReturn(nasFeignClient);
+        JobResponse jobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-uuid-1");
+        jobResponse.setJob(job);
+        when(nasFeignClient.cloneFile(anyString(), any())).thenReturn(jobResponse);
+        when(storageStrategy.jobPollForSuccess("job-uuid-1", 30, 2000)).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(storageStrategy);
+            utilityMock.when(() -> OntapStorageUtils.getOntapCloneName("UI Snapshot Name"))
+                    .thenReturn("UI_Snapshot_Name");
+
+            driver.takeSnapshot(snapshotInfo, createCallback);
+
+            verify(nasFeignClient).cloneFile(anyString(), any());
+            verify(snapshotDetailsDao, atLeastOnce()).persist(any(SnapshotDetailsVO.class));
+            verify(createCallback).complete(any(CreateCmdResult.class));
+        }
+    }
+
+    @Test
+    void testRevertSnapshot_UsesCloneMetadata() {
+        when(snapshotInfo.getId()).thenReturn(500L);
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.BASE_ONTAP_FV_ID))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.BASE_ONTAP_FV_ID, "flexvol-uuid-1", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.ONTAP_CLONE_ID))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.ONTAP_CLONE_ID, "clone-lun-uuid-1", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.ONTAP_SNAP_NAME))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.ONTAP_SNAP_NAME, "UI Snapshot Name", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.ONTAP_CLONE_NAME))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.ONTAP_CLONE_NAME, "UI_Snapshot_Name", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.VOLUME_PATH))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.VOLUME_PATH, "dest-lun-1", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.PRIMARY_POOL_ID))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.PRIMARY_POOL_ID, "1", false));
+        when(snapshotDetailsDao.findDetail(500L, OntapStorageConstants.PROTOCOL))
+                .thenReturn(new SnapshotDetailsVO(500L, OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name(), false));
+
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        JobResponse jobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-uuid-2");
+        jobResponse.setJob(job);
+        when(storageStrategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(jobResponse);
+        when(storageStrategy.jobPollForSuccess("job-uuid-2", 60, 2000)).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(storageStrategy);
+
+            driver.revertSnapshot(snapshotInfo, snapshotInfo, commandCallback);
+
+            verify(storageStrategy).revertSnapshotForCloudStackVolume(
+                    eq("UI_Snapshot_Name"), eq("flexvol-uuid-1"), eq("clone-lun-uuid-1"),
+                    eq("dest-lun-1"), eq("clone-lun-uuid-1"), eq("flexvol1"));
+            verify(commandCallback).complete(any(CommandResult.class));
+        }
     }
 }

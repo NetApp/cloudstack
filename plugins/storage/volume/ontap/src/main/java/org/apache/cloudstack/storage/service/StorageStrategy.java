@@ -630,6 +630,10 @@ public abstract class StorageStrategy {
         return nasFeignClient;
     }
 
+    public SANFeignClient getSanFeignClient() {
+        return sanFeignClient;
+    }
+
     /**
      * Generates the Basic-auth header for ONTAP REST calls.
      */

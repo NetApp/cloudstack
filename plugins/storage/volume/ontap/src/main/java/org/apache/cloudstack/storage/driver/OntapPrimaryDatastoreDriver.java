@@ -55,8 +55,9 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
-import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
+import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.SANStrategy;
@@ -67,7 +68,6 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
@@ -639,7 +639,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      */
     @Override
     public void takeSnapshot(SnapshotInfo snapshot, AsyncCompletionCallback<CreateCmdResult> callback) {
-        logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: Creating FlexVolume snapshot for snapshot [{}]", snapshot.getId());
+        logger.info("OntapPrimaryDatastoreDriver.takeSnapshot: Creating clone-backed snapshot for snapshot [{}]", snapshot.getId());
         CreateCmdResult result;
 
         try {
@@ -665,64 +665,84 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-            SnapshotFeignClient snapshotClient = storageStrategy.getSnapshotFeignClient();
             String authHeader = storageStrategy.getAuthHeader();
 
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO) snapshot.getTO();
-
-            // Build snapshot name using volume name and snapshot UUID
-            String snapshotName = buildSnapshotName(volumeInfo.getName(), snapshot.getUuid());
-
-            // Resolve the volume path for storing in snapshot details (for revert operation)
+            String cloudStackSnapshotName = snapshot.getName();
+            String cloneName = OntapStorageUtils.getOntapCloneName(cloudStackSnapshotName);
             String volumePath = resolveVolumePathOnOntap(volumeVO, protocol, poolDetails);
-
-            // For iSCSI, retrieve LUN UUID for restore operations
+            String cloneId = null;
             String lunUuid = null;
-            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+            JobResponse jobResponse;
+
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
+                FileCloneRequest fileCloneRequest = new FileCloneRequest();
+                FileCloneRequest.VolumeRef volumeRef = new FileCloneRequest.VolumeRef();
+                volumeRef.setUuid(flexVolUuid);
+                volumeRef.setName(poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                fileCloneRequest.setVolume(volumeRef);
+                fileCloneRequest.setSourcePath(volumePath);
+                fileCloneRequest.setDestinationPath(cloneName);
+                fileCloneRequest.setIsOverride(Boolean.FALSE);
+                logger.info("takeSnapshot: Creating NFS file clone [{}] from source [{}] on FlexVol UUID [{}]",
+                        cloneName, volumePath, flexVolUuid);
+                jobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, fileCloneRequest);
+                cloneId = cloneName;
+            } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
                 VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeVO.getId(), OntapStorageConstants.LUN_DOT_UUID);
-                String lunUUID = lunDetail != null ? lunDetail.getValue() : null;
-                if (lunUUID == null) {
+                lunUuid = lunDetail != null ? lunDetail.getValue() : null;
+                if (lunUuid == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
+                Lun cloneRequest = new Lun();
+                cloneRequest.setName(cloneName);
+                Svm svm = new Svm();
+                svm.setName(poolDetails.get(OntapStorageConstants.SVM_NAME));
+                cloneRequest.setSvm(svm);
+                Lun.Location location = new Lun.Location();
+                Lun.LocationVolume locationVolume = new Lun.LocationVolume();
+                locationVolume.setName(poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                location.setVolume(locationVolume);
+                cloneRequest.setLocation(location);
+                Lun.Clone clone = new Lun.Clone();
+                Lun.Source source = new Lun.Source();
+                source.setUuid(lunUuid);
+                clone.setSource(source);
+                cloneRequest.setClone(clone);
+                cloneRequest.setIsOverride(Boolean.FALSE);
+                logger.info("takeSnapshot: Creating iSCSI LUN clone [{}] from source LUN UUID [{}]", cloneName, lunUuid);
+                jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
+            } else {
+                throw new CloudRuntimeException("Unsupported protocol for snapshot clone: " + protocol);
             }
 
-            // Create FlexVolume snapshot via ONTAP REST API
-            FlexVolSnapshot snapshotRequest = new FlexVolSnapshot(snapshotName,
-                    "CloudStack volume snapshot for volume " + volumeInfo.getName());
-
-            logger.info("takeSnapshot: Creating ONTAP FlexVolume snapshot [{}] on FlexVol UUID [{}] for volume [{}]",
-                    snapshotName, flexVolUuid, volumeVO.getId());
-
-            JobResponse jobResponse = snapshotClient.createSnapshot(authHeader, flexVolUuid, snapshotRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
-                throw new CloudRuntimeException("Failed to initiate FlexVolume snapshot on FlexVol UUID [" + flexVolUuid + "]");
+                throw new CloudRuntimeException("Failed to initiate clone-backed snapshot for volume " + volumeVO.getId());
             }
 
             // Poll for job completion
             Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
             if (!jobSucceeded) {
-                throw new CloudRuntimeException("FlexVolume snapshot job failed on FlexVol UUID [" + flexVolUuid + "]");
+                throw new CloudRuntimeException("Clone create job failed for snapshot " + cloudStackSnapshotName);
             }
 
-            // Retrieve the created snapshot UUID by name
-            String ontapSnapshotUuid = resolveSnapshotUuid(snapshotClient, authHeader, flexVolUuid, snapshotName);
-            if (ontapSnapshotUuid == null || ontapSnapshotUuid.isEmpty()) {
-                throw new CloudRuntimeException("Failed to resolve snapshot UUID for snapshot name [" + snapshotName + "]");
+            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+                cloneId = resolveLunUuidByName(storageStrategy, authHeader,
+                        poolDetails.get(OntapStorageConstants.SVM_NAME), cloneName);
             }
 
-            // Set snapshot path for CloudStack (format: snapshotName for identification)
-            snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_SNAP_ID + "=" + ontapSnapshotUuid);
+            snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_CLONE_NAME + "=" + cloneName);
 
             // Persist snapshot details for revert/delete operations
             updateSnapshotDetails(snapshot.getId(), volumeInfo.getId(), flexVolUuid,
-                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid);
+                    cloneId, cloudStackSnapshotName, cloneName, volumePath, volumeVO.getPoolId(), protocol, lunUuid);
 
             CreateObjectAnswer createObjectAnswer = new CreateObjectAnswer(snapshotObjectTo);
             result = new CreateCmdResult(null, createObjectAnswer);
             result.setResult(null);
 
-            logger.info("takeSnapshot: Successfully created FlexVolume snapshot [{}] (uuid={}) for volume [{}]",
-                    snapshotName, ontapSnapshotUuid, volumeVO.getId());
+            logger.info("takeSnapshot: Successfully created clone-backed snapshot [{}] (clone={}) for volume [{}]",
+                    cloudStackSnapshotName, cloneName, volumeVO.getId());
 
         } catch (Exception ex) {
             logger.error("takeSnapshot: Failed due to ", ex);
@@ -760,26 +780,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         throw new CloudRuntimeException("Unsupported protocol " + protocol);
     }
 
-    /**
-     * Resolves the ONTAP snapshot UUID by querying for the snapshot by name.
-     *
-     * @param snapshotClient The ONTAP snapshot Feign client
-     * @param authHeader     Authorization header
-     * @param flexVolUuid    FlexVolume UUID
-     * @param snapshotName   Name of the snapshot to find
-     * @return The UUID of the snapshot, or null if not found
-     */
-    private String resolveSnapshotUuid(SnapshotFeignClient snapshotClient, String authHeader,
-                                        String flexVolUuid, String snapshotName) {
-        Map<String, Object> queryParams = new HashMap<>();
-        queryParams.put("name", snapshotName);
-        queryParams.put("fields", "uuid,name");
-
-        OntapResponse<FlexVolSnapshot> response = snapshotClient.getSnapshots(authHeader, flexVolUuid, queryParams);
-        if (response != null && response.getRecords() != null && !response.getRecords().isEmpty()) {
-            return response.getRecords().get(0).getUuid();
+    private String resolveLunUuidByName(StorageStrategy storageStrategy, String authHeader, String svmName, String lunName) {
+        OntapResponse<Lun> lunResponse = storageStrategy.getSanFeignClient().getLunResponse(authHeader,
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, svmName, OntapStorageConstants.NAME, lunName));
+        if (lunResponse == null || lunResponse.getRecords() == null || lunResponse.getRecords().isEmpty()) {
+            throw new CloudRuntimeException("Failed to resolve LUN UUID for clone " + lunName);
         }
-        return null;
+        return lunResponse.getRecords().get(0).getUuid();
     }
 
     /**
@@ -814,16 +821,20 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             // Retrieve snapshot details stored during takeSnapshot
             String flexVolUuid = getSnapshotDetail(snapshotId, OntapStorageConstants.BASE_ONTAP_FV_ID);
-            String ontapSnapshotUuid = getSnapshotDetail(snapshotId, OntapStorageConstants.ONTAP_SNAP_ID);
+            String ontapCloneId = getSnapshotDetail(snapshotId, OntapStorageConstants.ONTAP_CLONE_ID);
             String snapshotName = getSnapshotDetail(snapshotId, OntapStorageConstants.ONTAP_SNAP_NAME);
+            String ontapCloneName = getSnapshotDetail(snapshotId, OntapStorageConstants.ONTAP_CLONE_NAME);
+            if (ontapCloneName == null) {
+                ontapCloneName = snapshotName;
+            }
             String volumePath = getSnapshotDetail(snapshotId, OntapStorageConstants.VOLUME_PATH);
             String poolIdStr = getSnapshotDetail(snapshotId, OntapStorageConstants.PRIMARY_POOL_ID);
             String protocol = getSnapshotDetail(snapshotId, OntapStorageConstants.PROTOCOL);
 
-            if (flexVolUuid == null || snapshotName == null || volumePath == null || poolIdStr == null) {
+            if (flexVolUuid == null || snapshotName == null || ontapCloneName == null || volumePath == null || poolIdStr == null) {
                 throw new CloudRuntimeException("Missing required snapshot details for snapshot " + snapshotId +
                         " (flexVolUuid=" + flexVolUuid + ", snapshotName=" + snapshotName +
-                        ", volumePath=" + volumePath + ", poolId=" + poolIdStr + ")");
+                        ", cloneName=" + ontapCloneName + ", volumePath=" + volumePath + ", poolId=" + poolIdStr + ")");
             }
 
             long poolId = Long.parseLong(poolIdStr);
@@ -840,12 +851,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             // Prepare protocol-specific parameters (lunUuid is only needed for backward compatibility)
             String lunUuid = null;
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-                lunUuid = getSnapshotDetail(snapshotId, OntapStorageConstants.LUN_DOT_UUID);
+                lunUuid = ontapCloneId;
             }
 
             // Delegate to strategy class for protocol-specific restore
             JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
-                    snapshotName, flexVolUuid, ontapSnapshotUuid, volumePath, lunUuid, flexVolName);
+                    ontapCloneName, flexVolUuid, ontapCloneId, volumePath, lunUuid, flexVolName);
 
             if (jobResponse == null || jobResponse.getJob() == null) {
                 throw new CloudRuntimeException("Failed to initiate restore from snapshot [" +
@@ -975,21 +986,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Builds a snapshot name with proper length constraints.
-     * Format: {@code <volumeName>-<snapshotUuid>}
-     */
-    private String buildSnapshotName(String volumeName, String snapshotUuid) {
-        String name = volumeName + "-" + snapshotUuid;
-        int maxLength = OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH;
-        int trimRequired = name.length() - maxLength;
-
-        if (trimRequired > 0) {
-            name = StringUtils.left(volumeName, volumeName.length() - trimRequired) + "-" + snapshotUuid;
-        }
-        return name;
-    }
-
-    /**
      * Persists snapshot metadata in snapshot_details table.
      *
      * @param csSnapshotId      CloudStack snapshot ID
@@ -1003,7 +999,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * @param lunUuid           LUN UUID (only for iSCSI, null for NFS)
      */
     private void updateSnapshotDetails(long csSnapshotId, long csVolumeId, String flexVolUuid,
-                                        String ontapSnapshotUuid, String snapshotName,
+                                        String ontapCloneId, String snapshotName, String ontapCloneName,
                                         String volumePath, long storagePoolId, String protocol,
                                         String lunUuid) {
         SnapshotDetailsVO snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
@@ -1015,11 +1011,19 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         snapshotDetailsDao.persist(snapshotDetail);
 
         snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.ONTAP_SNAP_ID, ontapSnapshotUuid, false);
+                OntapStorageConstants.ONTAP_SNAP_ID, ontapCloneId, false);
         snapshotDetailsDao.persist(snapshotDetail);
 
         snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
                 OntapStorageConstants.ONTAP_SNAP_NAME, snapshotName, false);
+        snapshotDetailsDao.persist(snapshotDetail);
+
+        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
+                OntapStorageConstants.ONTAP_CLONE_ID, ontapCloneId, false);
+        snapshotDetailsDao.persist(snapshotDetail);
+
+        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
+                OntapStorageConstants.ONTAP_CLONE_NAME, ontapCloneName, false);
         snapshotDetailsDao.persist(snapshotDetail);
 
         snapshotDetail = new SnapshotDetailsVO(csSnapshotId,

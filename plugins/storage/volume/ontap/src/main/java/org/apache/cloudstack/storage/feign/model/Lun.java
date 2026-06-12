@@ -86,6 +86,12 @@ public class Lun {
     @JsonProperty("clone")
     private Clone clone = null;
 
+    @JsonProperty("location")
+    private Location location = null;
+
+    @JsonProperty("is_override")
+    private Boolean isOverride = null;
+
     /**
      * The operating system type of the LUN.&lt;br/&gt; Required in POST when creating a LUN that is not a clone of another. Disallowed in POST when creating a LUN clone.
      */
@@ -260,6 +266,22 @@ public class Lun {
         this.clone = clone;
     }
 
+    public Location getLocation() {
+        return location;
+    }
+
+    public void setLocation(Location location) {
+        this.location = location;
+    }
+
+    public Boolean getIsOverride() {
+        return isOverride;
+    }
+
+    public void setIsOverride(Boolean isOverride) {
+        this.isOverride = isOverride;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -336,6 +358,32 @@ public class Lun {
         }
         public void setUuid(String uuid) {
             this.uuid = uuid;
+        }
+    }
+
+    public static class Location {
+        @JsonProperty("volume")
+        private LocationVolume volume = null;
+
+        public LocationVolume getVolume() {
+            return volume;
+        }
+
+        public void setVolume(LocationVolume volume) {
+            this.volume = volume;
+        }
+    }
+
+    public static class LocationVolume {
+        @JsonProperty("name")
+        private String name = null;
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
         }
     }
 }

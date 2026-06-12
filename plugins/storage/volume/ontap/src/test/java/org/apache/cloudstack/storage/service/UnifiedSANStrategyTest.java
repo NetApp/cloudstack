@@ -30,6 +30,7 @@ import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -59,6 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -1801,5 +1803,41 @@ class UnifiedSANStrategyTest {
             // Verify createLunMap was NOT called
             verify(sanFeignClient, never()).createLunMap(any(), anyBoolean(), any(LunMap.class));
         }
+    }
+
+    @Test
+    void testRevertSnapshotForCloudStackVolume_UsesLunCloneWithOverride() {
+        JobResponse jobResponse = new JobResponse();
+        org.apache.cloudstack.storage.feign.model.Job job = new org.apache.cloudstack.storage.feign.model.Job();
+        job.setUuid("job-uuid-1");
+        jobResponse.setJob(job);
+        when(sanFeignClient.cloneLun(eq(authHeader), any(Lun.class))).thenReturn(jobResponse);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+
+            JobResponse result = unifiedSANStrategy.revertSnapshotForCloudStackVolume(
+                    "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "clone-lun-uuid-1", "flexvol1");
+
+            assertNotNull(result);
+            verify(sanFeignClient).cloneLun(eq(authHeader), argThat(lun ->
+                    lun != null
+                            && Boolean.TRUE.equals(lun.getIsOverride())
+                            && "dest-lun-1".equals(lun.getName())
+                            && lun.getClone() != null
+                            && lun.getClone().getSource() != null
+                            && "clone-lun-uuid-1".equals(lun.getClone().getSource().getUuid())
+                            && lun.getLocation() != null
+                            && lun.getLocation().getVolume() != null
+                            && "flexvol1".equals(lun.getLocation().getVolume().getName())
+            ));
+        }
+    }
+
+    @Test
+    void testRevertSnapshotForCloudStackVolume_MissingLunUuid_Throws() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.revertSnapshotForCloudStackVolume(
+                "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", null, "flexvol1"));
     }
 }

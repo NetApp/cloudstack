@@ -29,7 +29,6 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -563,32 +562,39 @@ public class UnifiedSANStrategy extends SANStrategy {
     public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                           String snapshotUuid, String volumePath,
                                                           String lunUuid, String flexVolName) {
-        logger.trace("revertSnapshotForCloudStackVolume [iSCSI]: Restoring LUN [{}] from snapshot [{}] on FlexVol [{}]",
+        logger.trace("revertSnapshotForCloudStackVolume [iSCSI]: Reverting LUN [{}] from clone [{}] on FlexVol [{}]",
                 volumePath, snapshotName, flexVolName);
 
-        if (snapshotName == null || snapshotName.isEmpty()) {
-            throw new CloudRuntimeException("Snapshot name is required for iSCSI snapshot revert");
+        if (volumePath == null || volumePath.isEmpty()) {
+            throw new CloudRuntimeException("Destination LUN name is required for iSCSI snapshot revert");
         }
         if (flexVolName == null || flexVolName.isEmpty()) {
             throw new CloudRuntimeException("FlexVolume name is required for iSCSI snapshot revert");
         }
-        if (volumePath == null || volumePath.isEmpty()) {
-            throw new CloudRuntimeException("LUN path is required for iSCSI snapshot revert");
+        if (lunUuid == null || lunUuid.isEmpty()) {
+            throw new CloudRuntimeException("Source clone LUN UUID is required for iSCSI snapshot revert");
         }
 
         String authHeader = getAuthHeader();
-        String svmName = storage.getSvmName();
+        Lun revertCloneRequest = new Lun();
+        revertCloneRequest.setName(volumePath);
+        Svm svm = new Svm();
+        svm.setName(storage.getSvmName());
+        revertCloneRequest.setSvm(svm);
+        Lun.Location location = new Lun.Location();
+        Lun.LocationVolume locationVolume = new Lun.LocationVolume();
+        locationVolume.setName(flexVolName);
+        location.setVolume(locationVolume);
+        revertCloneRequest.setLocation(location);
+        Lun.Clone clone = new Lun.Clone();
+        Lun.Source source = new Lun.Source();
+        source.setUuid(lunUuid);
+        clone.setSource(source);
+        revertCloneRequest.setClone(clone);
+        revertCloneRequest.setIsOverride(Boolean.TRUE);
 
-        // Prepare the LUN path for ONTAP CLI API (ensure it starts with "/")
-        String ontapLunPath = volumePath.startsWith("/") ? volumePath : "/" + volumePath;
-
-        // Create CLI snapshot restore request
-        CliSnapshotRestoreRequest restoreRequest = new CliSnapshotRestoreRequest(
-                svmName, flexVolName, snapshotName, ontapLunPath);
-
-        logger.trace("revertSnapshotForCloudStackVolume: Calling CLI file restore API with vserver={}, volume={}, snapshot={}, path={}",
-                svmName, flexVolName, snapshotName, ontapLunPath);
-
-        return getSnapshotFeignClient().restoreFileFromSnapshotCli(authHeader, restoreRequest);
+        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: lun clone sourceUuid={} destinationLun={} isOverride=true",
+                lunUuid, volumePath);
+        return sanFeignClient.cloneLun(authHeader, revertCloneRequest);
     }
 }

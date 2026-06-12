@@ -154,4 +154,25 @@ public class OntapStorageUtils {
         return OntapStorageConstants.VOLUME_PATH_PREFIX + volName + OntapStorageConstants.SLASH + lunName;
     }
 
+    /**
+     * Uses CloudStack UI snapshot name as the preferred ONTAP clone name.
+     * If needed, normalizes just enough to satisfy ONTAP naming limits.
+     */
+    public static String getOntapCloneName(String snapshotName) {
+        if (snapshotName == null || snapshotName.trim().isEmpty()) {
+            throw new InvalidParameterValueException("Snapshot name cannot be null or empty");
+        }
+        String candidate = snapshotName.trim().replaceAll("[^a-zA-Z0-9_]", "_");
+        if (!Character.isLetter(candidate.charAt(0))) {
+            candidate = "s_" + candidate;
+        }
+        if (candidate.length() > OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH) {
+            candidate = candidate.substring(0, OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH);
+        }
+        if (!isValidName(candidate)) {
+            throw new InvalidParameterValueException("Invalid ONTAP clone name derived from snapshot name: " + snapshotName);
+        }
+        return candidate;
+    }
+
 }

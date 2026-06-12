@@ -18,31 +18,37 @@
  */
 package org.apache.cloudstack.storage.feign.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * Request body for the ONTAP Snapshot File Restore API.
- *
- * <p>ONTAP REST endpoint:
- * {@code POST /api/storage/volumes/{volume.uuid}/snapshots/{snapshot.uuid}/files/{file.path}/restore}</p>
- *
- * <p>This API restores a single file or LUN from a FlexVolume snapshot to a
- * specified destination path, without reverting the entire FlexVolume.</p>
- */
-@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class SnapshotFileRestoreRequest {
+public class FileCloneRequest {
+    @JsonProperty("volume")
+    private VolumeRef volume;
+
+    @JsonProperty("source_path")
+    private String sourcePath;
 
     @JsonProperty("destination_path")
     private String destinationPath;
 
-    public SnapshotFileRestoreRequest() {
+    @JsonProperty("is_override")
+    private Boolean isOverride;
+
+    public VolumeRef getVolume() {
+        return volume;
     }
 
-    public SnapshotFileRestoreRequest(String destinationPath) {
-        this.destinationPath = destinationPath;
+    public void setVolume(VolumeRef volume) {
+        this.volume = volume;
+    }
+
+    public String getSourcePath() {
+        return sourcePath;
+    }
+
+    public void setSourcePath(String sourcePath) {
+        this.sourcePath = sourcePath;
     }
 
     public String getDestinationPath() {
@@ -51,5 +57,38 @@ public class SnapshotFileRestoreRequest {
 
     public void setDestinationPath(String destinationPath) {
         this.destinationPath = destinationPath;
+    }
+
+    public Boolean getIsOverride() {
+        return isOverride;
+    }
+
+    public void setIsOverride(Boolean isOverride) {
+        this.isOverride = isOverride;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class VolumeRef {
+        @JsonProperty("name")
+        private String name;
+
+        @JsonProperty("uuid")
+        private String uuid;
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getUuid() {
+            return uuid;
+        }
+
+        public void setUuid(String uuid) {
+            this.uuid = uuid;
+        }
     }
 }

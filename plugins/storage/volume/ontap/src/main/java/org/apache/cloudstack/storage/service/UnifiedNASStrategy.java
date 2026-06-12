@@ -35,6 +35,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
+import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -42,7 +43,6 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.volume.VolumeObject;
@@ -454,32 +454,31 @@ public class UnifiedNASStrategy extends NASStrategy {
     public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                           String snapshotUuid, String volumePath,
                                                           String lunUuid, String flexVolName) {
-        logger.info("revertSnapshotForCloudStackVolume [NFS]: Restoring file [{}] from snapshot [{}] on FlexVol [{}]",
+        logger.info("revertSnapshotForCloudStackVolume [NFS]: Reverting file [{}] using clone [{}] on FlexVol [{}]",
                 volumePath, snapshotName, flexVolName);
 
         if (snapshotName == null || snapshotName.isEmpty()) {
-            throw new CloudRuntimeException("Snapshot name is required for NFS snapshot revert");
+            throw new CloudRuntimeException("Clone name is required for NFS snapshot revert");
         }
         if (volumePath == null || volumePath.isEmpty()) {
             throw new CloudRuntimeException("File path is required for NFS snapshot revert");
         }
-        if (flexVolName == null || flexVolName.isEmpty()) {
-            throw new CloudRuntimeException("FlexVolume name is required for NFS snapshot revert");
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume UUID is required for NFS snapshot revert");
         }
 
         String authHeader = getAuthHeader();
-        String svmName = storage.getSvmName();
+        FileCloneRequest fileCloneRequest = new FileCloneRequest();
+        FileCloneRequest.VolumeRef volumeRef = new FileCloneRequest.VolumeRef();
+        volumeRef.setUuid(flexVolUuid);
+        volumeRef.setName(flexVolName);
+        fileCloneRequest.setVolume(volumeRef);
+        fileCloneRequest.setSourcePath(snapshotName);
+        fileCloneRequest.setDestinationPath(volumePath);
+        fileCloneRequest.setIsOverride(Boolean.TRUE);
 
-        // Prepare the file path for ONTAP CLI API (ensure it starts with "/")
-        String ontapFilePath = volumePath.startsWith("/") ? volumePath : "/" + volumePath;
-
-        // Create CLI snapshot restore request
-        CliSnapshotRestoreRequest restoreRequest = new CliSnapshotRestoreRequest(
-                svmName, flexVolName, snapshotName, ontapFilePath);
-
-        logger.info("revertSnapshotForCloudStackVolume: Calling CLI file restore API with vserver={}, volume={}, snapshot={}, path={}",
-                svmName, flexVolName, snapshotName, ontapFilePath);
-
-        return getSnapshotFeignClient().restoreFileFromSnapshotCli(authHeader, restoreRequest);
+        logger.debug("revertSnapshotForCloudStackVolume [NFS]: file clone source={} destination={} isOverride=true",
+                snapshotName, volumePath);
+        return getNasFeignClient().cloneFile(authHeader, fileCloneRequest);
     }
 }

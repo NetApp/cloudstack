@@ -23,7 +23,6 @@ import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
-import org.apache.cloudstack.storage.feign.model.LunRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
@@ -41,6 +40,10 @@ public interface SANFeignClient {
     @RequestLine("POST /api/storage/luns?return_records={returnRecords}")
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<Lun> createLun(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, Lun lun);
+
+    @RequestLine("POST /api/storage/luns")
+    @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
+    JobResponse cloneLun(@Param("authHeader") String authHeader, Lun lun);
 
     @RequestLine("GET /api/storage/luns")
     @Headers({"Authorization: {authHeader}"})
@@ -90,24 +93,4 @@ public interface SANFeignClient {
     void deleteLunMap(@Param("authHeader") String authHeader,
                       @Param("lunUuid") String lunUUID,
                       @Param("igroupUuid") String igroupUUID);
-
-    // LUN Restore API
-    /**
-     * Restores a LUN from a FlexVolume snapshot.
-     *
-     * <p>ONTAP REST: {@code POST /api/storage/luns/{lun.uuid}/restore}</p>
-     *
-     * <p>This API restores the LUN data from a specified snapshot to a destination path.
-     * The LUN must exist and the snapshot must contain the LUN data.</p>
-     *
-     * @param authHeader  Basic auth header
-     * @param lunUuid     UUID of the LUN to restore
-     * @param request     Request body with snapshot name and destination path
-     * @return JobResponse containing the async job reference
-     */
-    @RequestLine("POST /api/storage/luns/{lunUuid}/restore")
-    @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
-    JobResponse restoreLun(@Param("authHeader") String authHeader,
-                           @Param("lunUuid") String lunUuid,
-                           LunRestoreRequest request);
 }

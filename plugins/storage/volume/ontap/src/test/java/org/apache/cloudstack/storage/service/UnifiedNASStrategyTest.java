@@ -37,6 +37,7 @@ import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
+import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
@@ -75,6 +76,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.argThat;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -581,5 +583,34 @@ public class UnifiedNASStrategyTest {
         assertThrows(CloudRuntimeException.class, () -> {
             strategy.deleteCloudStackVolume(cloudStackVolume);
         });
+    }
+
+    @Test
+    public void testRevertSnapshotForCloudStackVolume_UsesFileCloneWithOverride() {
+        JobResponse jobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-uuid-1");
+        jobResponse.setJob(job);
+        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(jobResponse);
+
+        JobResponse result = strategy.revertSnapshotForCloudStackVolume(
+                "clone-snap-1", "flexvol-uuid-1", "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1");
+
+        assertNotNull(result);
+        verify(nasFeignClient).cloneFile(anyString(), argThat(req ->
+                req != null
+                        && req.getIsOverride() != null
+                        && req.getIsOverride()
+                        && "clone-snap-1".equals(req.getSourcePath())
+                        && "vm-disk.qcow2".equals(req.getDestinationPath())
+                        && req.getVolume() != null
+                        && "flexvol-uuid-1".equals(req.getVolume().getUuid())
+                        && "flexvol1".equals(req.getVolume().getName())));
+    }
+
+    @Test
+    public void testRevertSnapshotForCloudStackVolume_MissingFlexVolUuid_Throws() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.revertSnapshotForCloudStackVolume(
+                "clone-snap-1", null, "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1"));
     }
 }
