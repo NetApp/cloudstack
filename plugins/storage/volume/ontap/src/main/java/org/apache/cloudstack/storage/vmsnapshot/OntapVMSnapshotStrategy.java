@@ -389,7 +389,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                     // Create one clone per CloudStack volume and persist detail for protocol-specific revert.
                     for (Long volumeId : groupInfo.volumeIds) {
                         String volumePath = resolveVolumePathOnOntap(volumeId, protocol, groupInfo.poolDetails);
-                        String cloneName = snapshotNameBase;
+                        String cloneName = buildPerVolumeCloneName(snapshotNameBase, vmSnapshot.getId(), volumeId);
                         String cloneUuid = cloneName;
                         if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
                             org.apache.cloudstack.storage.feign.model.FileCloneRequest cloneRequest = new org.apache.cloudstack.storage.feign.model.FileCloneRequest();
@@ -723,6 +723,14 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      */
     String buildSnapshotName(VMSnapshot vmSnapshot) {
         return OntapStorageUtils.getOntapCloneName(vmSnapshot.getName());
+    }
+
+    /**
+     * Builds a deterministic per-volume clone name for VM snapshot workflows.
+     * Keeps VM snapshot name as base while preventing collisions across ROOT/DATA volumes.
+     */
+    String buildPerVolumeCloneName(String snapshotNameBase, Long vmSnapshotId, Long volumeId) {
+        return OntapStorageUtils.getOntapCloneName(snapshotNameBase + "_s" + vmSnapshotId + "_v" + volumeId);
     }
 
     String resolveLunUuid(StorageStrategy strategy, String authHeader, String svmName, String lunName) {
