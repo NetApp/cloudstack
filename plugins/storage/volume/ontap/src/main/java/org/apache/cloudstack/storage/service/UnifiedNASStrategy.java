@@ -35,7 +35,6 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
-import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -468,17 +467,13 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
 
         String authHeader = getAuthHeader();
-        FileCloneRequest fileCloneRequest = new FileCloneRequest();
-        FileCloneRequest.VolumeRef volumeRef = new FileCloneRequest.VolumeRef();
-        volumeRef.setUuid(flexVolUuid);
-        volumeRef.setName(flexVolName);
-        fileCloneRequest.setVolume(volumeRef);
-        fileCloneRequest.setSourcePath(snapshotName);
-        fileCloneRequest.setDestinationPath(volumePath);
-        fileCloneRequest.setIsOverride(Boolean.TRUE);
+        FileInfo filePatchRequest = new FileInfo();
+        filePatchRequest.setPath(volumePath);
+        filePatchRequest.setTarget(snapshotName);
+        filePatchRequest.setOverwriteEnabled(Boolean.TRUE);
 
-        logger.debug("revertSnapshotForCloudStackVolume [NFS]: file clone source={} destination={} isOverride=true",
+        logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true",
                 snapshotName, volumePath);
-        return getNasFeignClient().cloneFile(authHeader, fileCloneRequest);
+        return getNasFeignClient().updateFile(authHeader, flexVolUuid, volumePath, true, filePatchRequest);
     }
 }

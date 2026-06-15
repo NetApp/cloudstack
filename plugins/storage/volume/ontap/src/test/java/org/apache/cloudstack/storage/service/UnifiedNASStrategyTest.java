@@ -37,7 +37,7 @@ import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
-import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
@@ -586,26 +586,22 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
-    public void testRevertSnapshotForCloudStackVolume_UsesFileCloneWithOverride() {
+    public void testRevertSnapshotForCloudStackVolume_UsesFilePatchWithOverwrite() {
         JobResponse jobResponse = new JobResponse();
         Job job = new Job();
         job.setUuid("job-uuid-1");
         jobResponse.setJob(job);
-        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(jobResponse);
+        when(nasFeignClient.updateFile(anyString(), anyString(), anyString(), eq(true), any(FileInfo.class))).thenReturn(jobResponse);
 
         JobResponse result = strategy.revertSnapshotForCloudStackVolume(
                 "clone-snap-1", "flexvol-uuid-1", "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1");
 
         assertNotNull(result);
-        verify(nasFeignClient).cloneFile(anyString(), argThat(req ->
+        verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("vm-disk.qcow2"), eq(true), argThat(req ->
                 req != null
-                        && req.getIsOverride() != null
-                        && req.getIsOverride()
-                        && "clone-snap-1".equals(req.getSourcePath())
-                        && "vm-disk.qcow2".equals(req.getDestinationPath())
-                        && req.getVolume() != null
-                        && "flexvol-uuid-1".equals(req.getVolume().getUuid())
-                        && "flexvol1".equals(req.getVolume().getName())));
+                        && Boolean.TRUE.equals(req.isOverwriteEnabled())
+                        && "clone-snap-1".equals(req.getTarget())
+                        && "vm-disk.qcow2".equals(req.getPath())));
     }
 
     @Test

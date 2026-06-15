@@ -337,20 +337,16 @@ class OntapVMSnapshotStrategyTest {
     }
 
     @Test
-    void testCanHandle_NonAllocated_HasLegacyStorageSnapshotDetails_AllOnOntap_ReturnsHighest() {
+    void testCanHandle_NonAllocated_HasLegacyStorageSnapshotDetails_AllOnOntap_ReturnsCantHandle() {
         setupAllVolumesOnOntap();
         VMSnapshotVO vmSnapshot = createMockVmSnapshot(VMSnapshot.State.Ready, VMSnapshot.Type.Disk);
 
-        // No FlexVol details
+        // Only clone-backed ONTAP details are supported now.
         when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT)).thenReturn(Collections.emptyList());
-        // Has legacy details
-        List<VMSnapshotDetailsVO> details = new ArrayList<>();
-        details.add(new VMSnapshotDetailsVO(SNAPSHOT_ID, "kvmStorageSnapshot", "123", true));
-        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot")).thenReturn(details);
 
         StrategyPriority result = strategy.canHandle(vmSnapshot);
 
-        assertEquals(StrategyPriority.HIGHEST, result);
+        assertEquals(StrategyPriority.CANT_HANDLE, result);
     }
 
     @Test
