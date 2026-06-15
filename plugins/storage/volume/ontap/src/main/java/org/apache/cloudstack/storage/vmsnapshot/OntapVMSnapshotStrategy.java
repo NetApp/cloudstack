@@ -407,23 +407,39 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             if (sourceLunUuid == null || sourceLunUuid.isEmpty()) {
                                 throw new CloudRuntimeException("Source LUN UUID missing for volume " + volumeId);
                             }
+                            if (volumePath == null || volumePath.isEmpty()) {
+                                throw new CloudRuntimeException("Source LUN path is missing for volume " + volumeId);
+                            }
+                            if (!volumePath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+                                throw new CloudRuntimeException("Invalid source LUN path (must start with " +
+                                        OntapStorageConstants.VOLUME_PATH_PREFIX + "): " + volumePath);
+                            }
                             String cloneLunPath = OntapStorageUtils.getLunName(
                                     groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                             if (!cloneLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
                                 throw new CloudRuntimeException("Invalid iSCSI clone LUN path generated: " + cloneLunPath);
                             }
+                            String svmName = groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME);
+                            String flexVolName = groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME);
+                            if (svmName == null || svmName.isEmpty()) {
+                                throw new CloudRuntimeException("SVM name is mandatory for iSCSI clone request");
+                            }
+                            if (flexVolName == null || flexVolName.isEmpty()) {
+                                throw new CloudRuntimeException("FlexVolume name is mandatory for iSCSI clone request");
+                            }
                             org.apache.cloudstack.storage.feign.model.Lun cloneRequest = new org.apache.cloudstack.storage.feign.model.Lun();
                             cloneRequest.setName(cloneLunPath);
                             org.apache.cloudstack.storage.feign.model.Svm svm = new org.apache.cloudstack.storage.feign.model.Svm();
-                            svm.setName(groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME));
+                            svm.setName(svmName);
                             cloneRequest.setSvm(svm);
                             org.apache.cloudstack.storage.feign.model.Lun.Location location = new org.apache.cloudstack.storage.feign.model.Lun.Location();
                             org.apache.cloudstack.storage.feign.model.Lun.LocationVolume locationVolume = new org.apache.cloudstack.storage.feign.model.Lun.LocationVolume();
-                            locationVolume.setName(groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                            locationVolume.setName(flexVolName);
                             location.setVolume(locationVolume);
                             cloneRequest.setLocation(location);
                             org.apache.cloudstack.storage.feign.model.Lun.Clone clone = new org.apache.cloudstack.storage.feign.model.Lun.Clone();
                             org.apache.cloudstack.storage.feign.model.Lun.Source source = new org.apache.cloudstack.storage.feign.model.Lun.Source();
+                            source.setName(volumePath);
                             source.setUuid(sourceLunUuid);
                             clone.setSource(source);
                             cloneRequest.setClone(clone);
@@ -431,7 +447,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             logger.info("CloneRequest: {}", cloneRequest);
                             jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
                             cloneUuid = resolveLunUuid(storageStrategy, authHeader,
-                                    groupInfo.poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);
+                                    svmName, cloneLunPath);
                         } else {
                             throw new CloudRuntimeException("Unsupported protocol for VM snapshot clone: " + protocol);
                         }

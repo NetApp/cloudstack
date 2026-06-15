@@ -702,23 +702,39 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (lunUuid == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
+                if (volumePath == null || volumePath.isEmpty()) {
+                    throw new CloudRuntimeException("Source LUN path is missing for iSCSI volume " + volumeVO.getId());
+                }
+                if (!volumePath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+                    throw new CloudRuntimeException("Invalid source LUN path (must start with " +
+                            OntapStorageConstants.VOLUME_PATH_PREFIX + "): " + volumePath);
+                }
                 cloneLunPath = OntapStorageUtils.getLunName(
                         poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
                 if (!cloneLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
                     throw new CloudRuntimeException("Invalid iSCSI clone LUN path generated: " + cloneLunPath);
                 }
+                String svmNameForClone = poolDetails.get(OntapStorageConstants.SVM_NAME);
+                String flexVolNameForClone = poolDetails.get(OntapStorageConstants.VOLUME_NAME);
+                if (svmNameForClone == null || svmNameForClone.isEmpty()) {
+                    throw new CloudRuntimeException("SVM name is mandatory for iSCSI clone request");
+                }
+                if (flexVolNameForClone == null || flexVolNameForClone.isEmpty()) {
+                    throw new CloudRuntimeException("FlexVolume name is mandatory for iSCSI clone request");
+                }
                 Lun cloneRequest = new Lun();
                 cloneRequest.setName(cloneLunPath);
                 Svm svm = new Svm();
-                svm.setName(poolDetails.get(OntapStorageConstants.SVM_NAME));
+                svm.setName(svmNameForClone);
                 cloneRequest.setSvm(svm);
                 Lun.Location location = new Lun.Location();
                 Lun.LocationVolume locationVolume = new Lun.LocationVolume();
-                locationVolume.setName(poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+                locationVolume.setName(flexVolNameForClone);
                 location.setVolume(locationVolume);
                 cloneRequest.setLocation(location);
                 Lun.Clone clone = new Lun.Clone();
                 Lun.Source source = new Lun.Source();
+                source.setName(volumePath);
                 source.setUuid(lunUuid);
                 clone.setSource(source);
                 cloneRequest.setClone(clone);
