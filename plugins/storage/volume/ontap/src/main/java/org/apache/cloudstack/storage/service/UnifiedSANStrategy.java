@@ -565,6 +565,9 @@ public class UnifiedSANStrategy extends SANStrategy {
         logger.trace("revertSnapshotForCloudStackVolume [iSCSI]: Reverting LUN [{}] from clone [{}] on FlexVol [{}]",
                 volumePath, snapshotName, flexVolName);
 
+        if (snapshotName == null || snapshotName.isEmpty()) {
+            throw new CloudRuntimeException("Source clone LUN name is required for iSCSI snapshot revert");
+        }
         if (volumePath == null || volumePath.isEmpty()) {
             throw new CloudRuntimeException("Destination LUN name is required for iSCSI snapshot revert");
         }
@@ -574,10 +577,25 @@ public class UnifiedSANStrategy extends SANStrategy {
         if (lunUuid == null || lunUuid.isEmpty()) {
             throw new CloudRuntimeException("Source clone LUN UUID is required for iSCSI snapshot revert");
         }
+        if (storage.getSvmName() == null || storage.getSvmName().isEmpty()) {
+            throw new CloudRuntimeException("SVM name is required for iSCSI snapshot revert");
+        }
+
+        String sourceLunPath = snapshotName.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)
+                ? snapshotName : OntapStorageUtils.getLunName(flexVolName, snapshotName);
+        String destinationLunPath = volumePath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)
+                ? volumePath : OntapStorageUtils.getLunName(flexVolName, volumePath);
+
+        if (!sourceLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+            throw new CloudRuntimeException("Invalid source LUN path for iSCSI snapshot revert: " + sourceLunPath);
+        }
+        if (!destinationLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+            throw new CloudRuntimeException("Invalid destination LUN path for iSCSI snapshot revert: " + destinationLunPath);
+        }
 
         String authHeader = getAuthHeader();
         Lun revertCloneRequest = new Lun();
-        revertCloneRequest.setName(volumePath);
+        revertCloneRequest.setName(destinationLunPath);
         Svm svm = new Svm();
         svm.setName(storage.getSvmName());
         revertCloneRequest.setSvm(svm);
@@ -588,13 +606,14 @@ public class UnifiedSANStrategy extends SANStrategy {
         revertCloneRequest.setLocation(location);
         Lun.Clone clone = new Lun.Clone();
         Lun.Source source = new Lun.Source();
+        source.setName(sourceLunPath);
         source.setUuid(lunUuid);
         clone.setSource(source);
         revertCloneRequest.setClone(clone);
         revertCloneRequest.setIsOverride(Boolean.TRUE);
 
-        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: lun clone sourceUuid={} destinationLun={} isOverride=true",
-                lunUuid, volumePath);
+        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: lun clone sourcePath={} sourceUuid={} destinationLun={} isOverride=true",
+                sourceLunPath, lunUuid, destinationLunPath);
         return sanFeignClient.cloneLun(authHeader, revertCloneRequest);
     }
 }

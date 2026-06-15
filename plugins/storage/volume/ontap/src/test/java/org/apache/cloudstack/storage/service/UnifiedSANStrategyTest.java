@@ -1816,6 +1816,10 @@ class UnifiedSANStrategyTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
+            utilityMock.when(() -> OntapStorageUtils.getLunName("flexvol1", "clone-snap-1"))
+                    .thenReturn("/vol/flexvol1/clone-snap-1");
+            utilityMock.when(() -> OntapStorageUtils.getLunName("flexvol1", "dest-lun-1"))
+                    .thenReturn("/vol/flexvol1/dest-lun-1");
 
             JobResponse result = unifiedSANStrategy.revertSnapshotForCloudStackVolume(
                     "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "clone-lun-uuid-1", "flexvol1");
@@ -1824,9 +1828,10 @@ class UnifiedSANStrategyTest {
             verify(sanFeignClient).cloneLun(eq(authHeader), argThat(lun ->
                     lun != null
                             && Boolean.TRUE.equals(lun.getIsOverride())
-                            && "dest-lun-1".equals(lun.getName())
+                            && "/vol/flexvol1/dest-lun-1".equals(lun.getName())
                             && lun.getClone() != null
                             && lun.getClone().getSource() != null
+                            && "/vol/flexvol1/clone-snap-1".equals(lun.getClone().getSource().getName())
                             && "clone-lun-uuid-1".equals(lun.getClone().getSource().getUuid())
                             && lun.getLocation() != null
                             && lun.getLocation().getVolume() != null
