@@ -472,8 +472,9 @@ public class UnifiedNASStrategy extends NASStrategy {
         FileInfo filePatchRequest = new FileInfo();
         filePatchRequest.setPath(snapshotName);
         filePatchRequest.setOverwriteEnabled(Boolean.TRUE);
+        filePatchRequest.setFillEnabled(Boolean.FALSE);
 
-        logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true",
+        logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true fill=false",
                 snapshotName, volumePath);
         return getNasFeignClient().updateFile(authHeader, flexVolUuid, volumePath, true, filePatchRequest);
     }

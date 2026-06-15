@@ -600,6 +600,7 @@ public class UnifiedNASStrategyTest {
         verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("vm-disk.qcow2"), eq(true), argThat(req ->
                 req != null
                         && Boolean.TRUE.equals(req.isOverwriteEnabled())
+                        && Boolean.FALSE.equals(req.isFillEnabled())
                         && "clone-snap-1".equals(req.getPath())
                         && req.getTarget() == null));
     }
