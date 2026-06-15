@@ -32,7 +32,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.StrategyPriority;
 import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -783,15 +782,22 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         try {
             Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
             StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-            SnapshotFeignClient client = storageStrategy.getSnapshotFeignClient();
             String authHeader = storageStrategy.getAuthHeader();
 
-            logger.info("rollbackFlexVolSnapshot: Rolling back FlexVol snapshot [{}] (uuid={}) on FlexVol [{}]",
-                    detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid);
-
-            JobResponse jobResponse = client.deleteSnapshot(authHeader, detail.flexVolUuid, detail.snapshotUuid);
-            if (jobResponse != null && jobResponse.getJob() != null) {
-                storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 2000);
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(detail.protocol)) {
+                logger.info("rollbackFlexVolSnapshot: Deleting NFS clone file [{}] on FlexVol [{}]",
+                        detail.snapshotName, detail.flexVolUuid);
+                storageStrategy.getNasFeignClient().deleteFile(authHeader, detail.flexVolUuid, detail.snapshotName);
+            } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(detail.protocol)) {
+                logger.info("rollbackFlexVolSnapshot: Deleting iSCSI clone LUN [{}] (uuid={})",
+                        detail.snapshotName, detail.snapshotUuid);
+                String cloneUuid = detail.snapshotUuid;
+                if (cloneUuid == null || cloneUuid.isEmpty()) {
+                    String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
+                    String cloneLunPath = OntapStorageUtils.getLunName(poolDetails.get(OntapStorageConstants.VOLUME_NAME), detail.snapshotName);
+                    cloneUuid = resolveLunUuid(storageStrategy, authHeader, svmName, cloneLunPath);
+                }
+                storageStrategy.getSanFeignClient().deleteLun(authHeader, cloneUuid, Map.of("allow_delete_while_mapped", "true"));
             }
         } catch (Exception e) {
             logger.error("rollbackFlexVolSnapshot: Rollback of FlexVol snapshot failed: {}", e.getMessage(), e);
@@ -817,24 +823,52 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             if (!deletedSnapshots.containsKey(dedupeKey)) {
                 Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
                 StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-                SnapshotFeignClient client = storageStrategy.getSnapshotFeignClient();
                 String authHeader = storageStrategy.getAuthHeader();
 
-                logger.info("deleteFlexVolSnapshots: Deleting ONTAP FlexVol snapshot [{}] (uuid={}) on FlexVol [{}]",
-                        detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid);
-
-                JobResponse jobResponse = client.deleteSnapshot(authHeader, detail.flexVolUuid, detail.snapshotUuid);
-                if (jobResponse != null && jobResponse.getJob() != null) {
-                    storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
+                try {
+                    if (ProtocolType.NFS3.name().equalsIgnoreCase(detail.protocol)) {
+                        logger.info("deleteFlexVolSnapshots: Deleting NFS clone file [{}] on FlexVol [{}]",
+                                detail.snapshotName, detail.flexVolUuid);
+                        storageStrategy.getNasFeignClient().deleteFile(authHeader, detail.flexVolUuid, detail.snapshotName);
+                    } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(detail.protocol)) {
+                        logger.info("deleteFlexVolSnapshots: Deleting iSCSI clone LUN [{}] (uuid={})",
+                                detail.snapshotName, detail.snapshotUuid);
+                        String cloneUuid = detail.snapshotUuid;
+                        if (cloneUuid == null || cloneUuid.isEmpty()) {
+                            String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
+                            String cloneLunPath = OntapStorageUtils.getLunName(poolDetails.get(OntapStorageConstants.VOLUME_NAME), detail.snapshotName);
+                            cloneUuid = resolveLunUuid(storageStrategy, authHeader, svmName, cloneLunPath);
+                        }
+                        storageStrategy.getSanFeignClient().deleteLun(authHeader, cloneUuid, Map.of("allow_delete_while_mapped", "true"));
+                    }
+                } catch (Exception e) {
+                    if (isSnapshotAlreadyMissing(e)) {
+                        logger.warn("deleteFlexVolSnapshots: Clone [{}] on FlexVol [{}] is already missing. " +
+                                "Treating as success.", detail.snapshotName, detail.flexVolUuid);
+                    } else {
+                        throw e;
+                    }
                 }
 
                 deletedSnapshots.put(dedupeKey, Boolean.TRUE);
-                logger.info("deleteFlexVolSnapshots: Deleted ONTAP FlexVol snapshot [{}] on FlexVol [{}]", detail.snapshotName, detail.flexVolUuid);
+                logger.info("deleteFlexVolSnapshots: Deleted clone [{}] on FlexVol [{}]", detail.snapshotName, detail.flexVolUuid);
             }
 
             // Always remove the DB detail row
             vmSnapshotDetailsDao.remove(detailVO.getId());
         }
+    }
+
+    private boolean isSnapshotAlreadyMissing(Exception e) {
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("entry doesn't exist")
+                || lower.contains("entry does not exist")
+                || lower.contains("not found")
+                || lower.contains("404");
     }
 
     /**

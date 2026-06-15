@@ -27,7 +27,6 @@ import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
-import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
@@ -70,7 +69,6 @@ public abstract class StorageStrategy {
     protected NetworkFeignClient networkFeignClient;
     protected SANFeignClient sanFeignClient;
     protected NASFeignClient nasFeignClient;
-    protected SnapshotFeignClient snapshotFeignClient;
 
     protected OntapStorage storage;
 
@@ -94,7 +92,6 @@ public abstract class StorageStrategy {
         this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
-        this.snapshotFeignClient = feignClientFactory.createClient(SnapshotFeignClient.class, baseURL);
     }
 
     // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
@@ -612,15 +609,6 @@ public abstract class StorageStrategy {
      * @return String containing logical unit number if mapping exists; otherwise null
      */
     abstract public String getLogicalAccess(Map<String, String> values);
-
-    // ── FlexVolume Snapshot accessors ────────────────────────────────────────
-
-    /**
-     * Returns the {@link SnapshotFeignClient} for ONTAP FlexVolume snapshot operations.
-     */
-    public SnapshotFeignClient getSnapshotFeignClient() {
-        return snapshotFeignClient;
-    }
 
     /**
      * Returns the {@link NASFeignClient} for ONTAP NAS file operations
