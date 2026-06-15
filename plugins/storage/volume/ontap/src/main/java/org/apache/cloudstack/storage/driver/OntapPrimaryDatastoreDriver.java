@@ -681,7 +681,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String volumePath = resolveVolumePathOnOntap(volumeVO, protocol, poolDetails);
             String cloneId = null;
             String lunUuid = null;
-            JobResponse jobResponse;
+            JobResponse nfsJobResponse = null;
 
             if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
                 FileCloneRequest fileCloneRequest = new FileCloneRequest();
@@ -694,7 +694,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 fileCloneRequest.setIsOverride(Boolean.FALSE);
                 logger.info("takeSnapshot: Creating NFS file clone [{}] from source [{}] on FlexVol UUID [{}]",
                         cloneName, volumePath, flexVolUuid);
-                jobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, fileCloneRequest);
+                nfsJobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, fileCloneRequest);
                 cloneId = cloneName;
             } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
                 VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeVO.getId(), OntapStorageConstants.LUN_DOT_UUID);
@@ -738,28 +738,28 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 source.setUuid(lunUuid);
                 clone.setSource(source);
                 cloneRequest.setClone(clone);
-                cloneRequest.setIsOverride(Boolean.FALSE);
                 logger.info("takeSnapshot: Creating iSCSI LUN clone [{}] from source LUN UUID [{}]", cloneName, lunUuid);
-                jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
+                OntapResponse<Lun> createCloneResponse = storageStrategy.getSanFeignClient().createLun(authHeader, true, cloneRequest);
+                if (createCloneResponse == null || createCloneResponse.getRecords() == null || createCloneResponse.getRecords().isEmpty()) {
+                    throw new CloudRuntimeException("Failed to create iSCSI clone LUN for volume " + volumeVO.getId());
+                }
+                cloneId = createCloneResponse.getRecords().get(0).getUuid();
+                if (cloneId == null || cloneId.isEmpty()) {
+                    cloneId = resolveLunUuidByName(storageStrategy, authHeader, svmNameForClone, cloneLunPath);
+                }
             } else {
                 throw new CloudRuntimeException("Unsupported protocol for snapshot clone: " + protocol);
             }
 
-            if (jobResponse == null || jobResponse.getJob() == null) {
-                throw new CloudRuntimeException("Failed to initiate clone-backed snapshot for volume " + volumeVO.getId());
-            }
-
-            // Poll for job completion
-            Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
-            if (!jobSucceeded) {
-                throw new CloudRuntimeException("Clone create job failed for snapshot " + cloudStackSnapshotName);
-            }
-
-            if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-                cloneLunPath = OntapStorageUtils.getLunName(
-                        poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
-                cloneId = resolveLunUuidByName(storageStrategy, authHeader,
-                        poolDetails.get(OntapStorageConstants.SVM_NAME), cloneLunPath);
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
+                if (nfsJobResponse == null || nfsJobResponse.getJob() == null) {
+                    throw new CloudRuntimeException("Failed to initiate clone-backed snapshot for volume " + volumeVO.getId());
+                }
+                // Poll for async NFS clone completion
+                Boolean jobSucceeded = storageStrategy.jobPollForSuccess(nfsJobResponse.getJob().getUuid(), 30, 2000);
+                if (!jobSucceeded) {
+                    throw new CloudRuntimeException("Clone create job failed for snapshot " + cloudStackSnapshotName);
+                }
             }
 
             snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_CLONE_NAME + "=" + cloneName);

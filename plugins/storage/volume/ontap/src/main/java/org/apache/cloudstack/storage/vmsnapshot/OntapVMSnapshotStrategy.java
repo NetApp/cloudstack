@@ -33,6 +33,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
+import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -390,7 +391,6 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                         String volumePath = resolveVolumePathOnOntap(volumeId, protocol, groupInfo.poolDetails);
                         String cloneName = snapshotNameBase;
                         String cloneUuid = cloneName;
-                        JobResponse jobResponse;
                         if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
                             org.apache.cloudstack.storage.feign.model.FileCloneRequest cloneRequest = new org.apache.cloudstack.storage.feign.model.FileCloneRequest();
                             org.apache.cloudstack.storage.feign.model.FileCloneRequest.VolumeRef volumeRef = new org.apache.cloudstack.storage.feign.model.FileCloneRequest.VolumeRef();
@@ -400,7 +400,14 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             cloneRequest.setSourcePath(volumePath);
                             cloneRequest.setDestinationPath(cloneName);
                             cloneRequest.setIsOverride(Boolean.FALSE);
-                            jobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, cloneRequest);
+                            JobResponse fileJobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, cloneRequest);
+                            if (fileJobResponse == null || fileJobResponse.getJob() == null) {
+                                throw new CloudRuntimeException("Failed to submit clone-backed VM snapshot for volume " + volumeId);
+                            }
+                            Boolean jobSucceeded = storageStrategy.jobPollForSuccess(fileJobResponse.getJob().getUuid(), 30, 2000);
+                            if (!jobSucceeded) {
+                                throw new CloudRuntimeException("Clone-backed VM snapshot job failed for volume " + volumeId);
+                            }
                         } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
                             VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
                             String sourceLunUuid = lunDetail != null ? lunDetail.getValue() : null;
@@ -444,18 +451,16 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             clone.setSource(source);
                             cloneRequest.setClone(clone);
                             logger.info("CloneRequest: {}", cloneRequest);
-                            jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
-                            cloneUuid = resolveLunUuid(storageStrategy, authHeader,
-                                    svmName, cloneLunPath);
+                            OntapResponse<Lun> createCloneResponse = storageStrategy.getSanFeignClient().createLun(authHeader, true, cloneRequest);
+                            if (createCloneResponse == null || createCloneResponse.getRecords() == null || createCloneResponse.getRecords().isEmpty()) {
+                                throw new CloudRuntimeException("Failed to create iSCSI clone LUN for volume " + volumeId);
+                            }
+                            cloneUuid = createCloneResponse.getRecords().get(0).getUuid();
+                            if (cloneUuid == null || cloneUuid.isEmpty()) {
+                                cloneUuid = resolveLunUuid(storageStrategy, authHeader, svmName, cloneLunPath);
+                            }
                         } else {
                             throw new CloudRuntimeException("Unsupported protocol for VM snapshot clone: " + protocol);
-                        }
-                        if (jobResponse == null || jobResponse.getJob() == null) {
-                            throw new CloudRuntimeException("Failed to submit clone-backed VM snapshot for volume " + volumeId);
-                        }
-                        Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
-                        if (!jobSucceeded) {
-                            throw new CloudRuntimeException("Clone-backed VM snapshot job failed for volume " + volumeId);
                         }
                         FlexVolSnapshotDetail detail = new FlexVolSnapshotDetail(
                                 flexVolUuid, cloneUuid, cloneName, volumePath, groupInfo.poolId, protocol);
