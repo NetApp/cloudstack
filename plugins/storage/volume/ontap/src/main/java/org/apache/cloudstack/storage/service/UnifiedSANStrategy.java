@@ -596,15 +596,8 @@ public class UnifiedSANStrategy extends SANStrategy {
         String authHeader = getAuthHeader();
         String destinationLunUuid = resolveLunUuidByName(authHeader, storage.getSvmName(), destinationLunPath);
         Lun revertCloneRequest = new Lun();
-        revertCloneRequest.setName(destinationLunPath);
-        Svm svm = new Svm();
-        svm.setName(storage.getSvmName());
-        revertCloneRequest.setSvm(svm);
-        Lun.Location location = new Lun.Location();
-        Lun.LocationVolume locationVolume = new Lun.LocationVolume();
-        locationVolume.setName(flexVolName);
-        location.setVolume(locationVolume);
-        revertCloneRequest.setLocation(location);
+        // PATCH /storage/luns/{uuid} rejects immutable destination attributes like svm.name.
+        // For restore, only provide clone source details and target the destination via UUID in URI.
         Lun.Clone clone = new Lun.Clone();
         Lun.Source source = new Lun.Source();
         source.setName(sourceLunPath);

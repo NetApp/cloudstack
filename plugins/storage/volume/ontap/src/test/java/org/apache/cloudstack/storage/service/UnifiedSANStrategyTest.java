@@ -1833,14 +1833,13 @@ class UnifiedSANStrategyTest {
             verify(sanFeignClient).updateLun(eq(authHeader), eq("dest-lun-uuid-1"), argThat(lun ->
                     lun != null
                             && lun.getIsOverride() == null
-                            && "/vol/flexvol1/dest-lun-1".equals(lun.getName())
+                            && lun.getName() == null
                             && lun.getClone() != null
                             && lun.getClone().getSource() != null
                             && "/vol/flexvol1/clone-snap-1".equals(lun.getClone().getSource().getName())
                             && "clone-lun-uuid-1".equals(lun.getClone().getSource().getUuid())
-                            && lun.getLocation() != null
-                            && lun.getLocation().getVolume() != null
-                            && "flexvol1".equals(lun.getLocation().getVolume().getName())
+                            && lun.getLocation() == null
+                            && lun.getSvm() == null
             ));
         }
     }
