@@ -1811,7 +1811,12 @@ class UnifiedSANStrategyTest {
         org.apache.cloudstack.storage.feign.model.Job job = new org.apache.cloudstack.storage.feign.model.Job();
         job.setUuid("job-uuid-1");
         jobResponse.setJob(job);
-        when(sanFeignClient.cloneLun(eq(authHeader), any(Lun.class))).thenReturn(jobResponse);
+        OntapResponse<Lun> destinationLunResponse = new OntapResponse<>();
+        Lun destinationLun = new Lun();
+        destinationLun.setUuid("dest-lun-uuid-1");
+        destinationLunResponse.setRecords(List.of(destinationLun));
+        when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(destinationLunResponse);
+        when(sanFeignClient.updateLun(eq(authHeader), eq("dest-lun-uuid-1"), any(Lun.class))).thenReturn(jobResponse);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
@@ -1825,7 +1830,7 @@ class UnifiedSANStrategyTest {
                     "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "clone-lun-uuid-1", "flexvol1");
 
             assertNotNull(result);
-            verify(sanFeignClient).cloneLun(eq(authHeader), argThat(lun ->
+            verify(sanFeignClient).updateLun(eq(authHeader), eq("dest-lun-uuid-1"), argThat(lun ->
                     lun != null
                             && Boolean.TRUE.equals(lun.getIsOverride())
                             && "/vol/flexvol1/dest-lun-1".equals(lun.getName())

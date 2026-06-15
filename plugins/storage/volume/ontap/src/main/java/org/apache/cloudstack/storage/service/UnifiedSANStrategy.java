@@ -594,6 +594,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
 
         String authHeader = getAuthHeader();
+        String destinationLunUuid = resolveLunUuidByName(authHeader, storage.getSvmName(), destinationLunPath);
         Lun revertCloneRequest = new Lun();
         revertCloneRequest.setName(destinationLunPath);
         Svm svm = new Svm();
@@ -612,8 +613,18 @@ public class UnifiedSANStrategy extends SANStrategy {
         revertCloneRequest.setClone(clone);
         revertCloneRequest.setIsOverride(Boolean.TRUE);
 
-        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: lun clone sourcePath={} sourceUuid={} destinationLun={} isOverride=true",
-                sourceLunPath, lunUuid, destinationLunPath);
-        return sanFeignClient.cloneLun(authHeader, revertCloneRequest);
+        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: patch lun destinationUuid={} sourcePath={} sourceUuid={} destinationLun={} isOverride=true",
+                destinationLunUuid, sourceLunPath, lunUuid, destinationLunPath);
+        return sanFeignClient.updateLun(authHeader, destinationLunUuid, revertCloneRequest);
+    }
+
+    private String resolveLunUuidByName(String authHeader, String svmName, String lunName) {
+        OntapResponse<Lun> response = sanFeignClient.getLunResponse(authHeader,
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, svmName, OntapStorageConstants.NAME, lunName));
+        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()
+                || response.getRecords().get(0).getUuid() == null || response.getRecords().get(0).getUuid().isEmpty()) {
+            throw new CloudRuntimeException("Failed to resolve destination LUN UUID for path: " + lunName);
+        }
+        return response.getRecords().get(0).getUuid();
     }
 }
