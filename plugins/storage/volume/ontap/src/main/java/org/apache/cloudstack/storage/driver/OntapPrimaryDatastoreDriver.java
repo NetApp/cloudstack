@@ -704,6 +704,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 }
                 cloneLunPath = OntapStorageUtils.getLunName(
                         poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
+                if (!cloneLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+                    throw new CloudRuntimeException("Invalid iSCSI clone LUN path generated: " + cloneLunPath);
+                }
                 Lun cloneRequest = new Lun();
                 cloneRequest.setName(cloneLunPath);
                 Svm svm = new Svm();

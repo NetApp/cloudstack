@@ -348,8 +348,6 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             // ── Group volumes by FlexVolume UUID ──
             Map<String, FlexVolGroupInfo> flexVolGroups = groupVolumesByFlexVol(volumeTOs);
 
-            logger.info("takeVMSnapshot: VM [{}] has {} volumes across {} unique FlexVolume(s)",
-                    userVm.getInstanceName(), volumeTOs.size(), flexVolGroups.size());
 
             // ── Step 1: Freeze the VM (only if quiescing is requested AND VM is running) ──
             if (shouldFreezeThaw) {
@@ -411,6 +409,9 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             }
                             String cloneLunPath = OntapStorageUtils.getLunName(
                                     groupInfo.poolDetails.get(OntapStorageConstants.VOLUME_NAME), cloneName);
+                            if (!cloneLunPath.startsWith(OntapStorageConstants.VOLUME_PATH_PREFIX)) {
+                                throw new CloudRuntimeException("Invalid iSCSI clone LUN path generated: " + cloneLunPath);
+                            }
                             org.apache.cloudstack.storage.feign.model.Lun cloneRequest = new org.apache.cloudstack.storage.feign.model.Lun();
                             cloneRequest.setName(cloneLunPath);
                             org.apache.cloudstack.storage.feign.model.Svm svm = new org.apache.cloudstack.storage.feign.model.Svm();
