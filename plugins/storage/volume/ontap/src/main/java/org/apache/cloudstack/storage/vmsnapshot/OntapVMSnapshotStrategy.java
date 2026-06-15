@@ -443,7 +443,6 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             source.setUuid(sourceLunUuid);
                             clone.setSource(source);
                             cloneRequest.setClone(clone);
-                            cloneRequest.setIsOverride(Boolean.FALSE);
                             logger.info("CloneRequest: {}", cloneRequest);
                             jobResponse = storageStrategy.getSanFeignClient().cloneLun(authHeader, cloneRequest);
                             cloneUuid = resolveLunUuid(storageStrategy, authHeader,
@@ -518,7 +517,11 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         } catch (AgentUnavailableException e) {
             logger.error("takeVMSnapshot: ONTAP VM Snapshot [{}] failed, agent unavailable: {}", vmSnapshot.getName(), e.getMessage());
             throw new CloudRuntimeException("Creating Instance Snapshot: " + vmSnapshot.getName() + " failed: " + e.getMessage());
-        } finally {
+        } catch (Exception e) {
+            logger.error("takeVMSnapshot: ONTAP VM Snapshot [{}] failed, with exception: {}", vmSnapshot.getName(), e.getMessage());
+            throw new CloudRuntimeException("Creating Instance Snapshot: " + vmSnapshot.getName() + " failed: " + e.getMessage());
+        }
+         finally {
             if (!result) {
                 // Rollback all FlexVolume snapshots created so far (deduplicate by FlexVol+Snapshot)
                 Map<String, Boolean> rolledBack = new HashMap<>();
