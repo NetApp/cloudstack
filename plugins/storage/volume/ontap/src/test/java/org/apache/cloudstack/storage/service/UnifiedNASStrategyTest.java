@@ -586,7 +586,7 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
-    public void testRevertSnapshotForCloudStackVolume_UsesFilePatchWithOverwrite() {
+    public void testRevertSnapshotForCloudStackVolume_UsesFilePatchWithoutTarget() {
         JobResponse jobResponse = new JobResponse();
         Job job = new Job();
         job.setUuid("job-uuid-1");
@@ -600,8 +600,8 @@ public class UnifiedNASStrategyTest {
         verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("vm-disk.qcow2"), eq(true), argThat(req ->
                 req != null
                         && Boolean.TRUE.equals(req.isOverwriteEnabled())
-                        && "clone-snap-1".equals(req.getTarget())
-                        && "vm-disk.qcow2".equals(req.getPath())));
+                        && "clone-snap-1".equals(req.getPath())
+                        && req.getTarget() == null));
     }
 
     @Test

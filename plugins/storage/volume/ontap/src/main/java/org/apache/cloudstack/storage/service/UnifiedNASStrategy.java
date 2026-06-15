@@ -467,9 +467,10 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
 
         String authHeader = getAuthHeader();
+        // Keep PATCH-based revert. ONTAP in this environment rejects "target", so send
+        // only accepted fields and use "path" to carry source clone file reference.
         FileInfo filePatchRequest = new FileInfo();
-        filePatchRequest.setPath(volumePath);
-        filePatchRequest.setTarget(snapshotName);
+        filePatchRequest.setPath(snapshotName);
         filePatchRequest.setOverwriteEnabled(Boolean.TRUE);
 
         logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true",
