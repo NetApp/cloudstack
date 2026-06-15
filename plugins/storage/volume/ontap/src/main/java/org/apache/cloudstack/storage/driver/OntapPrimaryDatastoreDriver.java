@@ -688,7 +688,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 fileCloneRequest.setVolume(volumeRef);
                 fileCloneRequest.setSourcePath(volumePath);
                 fileCloneRequest.setDestinationPath(cloneName);
-                fileCloneRequest.setIsOverride(Boolean.FALSE);
                 logger.info("takeSnapshot: Creating NFS file clone [{}] from source [{}] on FlexVol UUID [{}]",
                         cloneName, volumePath, flexVolUuid);
                 nfsJobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, fileCloneRequest);

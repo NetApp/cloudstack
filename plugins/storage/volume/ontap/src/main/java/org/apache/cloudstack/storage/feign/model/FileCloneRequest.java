@@ -32,9 +32,6 @@ public class FileCloneRequest {
     @JsonProperty("destination_path")
     private String destinationPath;
 
-    @JsonProperty("is_override")
-    private Boolean isOverride;
-
     public VolumeRef getVolume() {
         return volume;
     }
@@ -57,14 +54,6 @@ public class FileCloneRequest {
 
     public void setDestinationPath(String destinationPath) {
         this.destinationPath = destinationPath;
-    }
-
-    public Boolean getIsOverride() {
-        return isOverride;
-    }
-
-    public void setIsOverride(Boolean isOverride) {
-        this.isOverride = isOverride;
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

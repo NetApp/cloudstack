@@ -393,7 +393,6 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                             cloneRequest.setVolume(volumeRef);
                             cloneRequest.setSourcePath(volumePath);
                             cloneRequest.setDestinationPath(cloneName);
-                            cloneRequest.setIsOverride(Boolean.FALSE);
                             JobResponse fileJobResponse = storageStrategy.getNasFeignClient().cloneFile(authHeader, cloneRequest);
                             if (fileJobResponse == null || fileJobResponse.getJob() == null) {
                                 throw new CloudRuntimeException("Failed to submit clone-backed VM snapshot for volume " + volumeId);
@@ -639,7 +638,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                     userVm.getUuid(), vmSnapshotTO, volumeTOs, guestOS.getDisplayName());
 
             // Revert clone-backed snapshot artifacts per volume:
-            //  - NFS: cloneFile(source=clone, destination=live file, isOverride=true)
+            //  - NFS: patch file(source=clone, destination=live file, overwrite=true)
             //  - iSCSI: patch LUN (clone.source=clone LUN, destination=live LUN)
             List<VMSnapshotDetailsVO> cloneDetails = vmSnapshotDetailsDao.findDetails(vmSnapshot.getId(), OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT);
             if (CollectionUtils.isNotEmpty(cloneDetails)) {
