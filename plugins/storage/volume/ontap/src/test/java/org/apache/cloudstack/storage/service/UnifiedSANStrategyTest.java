@@ -1806,7 +1806,7 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testRevertSnapshotForCloudStackVolume_UsesLunCloneWithOverride() {
+    void testRevertSnapshotForCloudStackVolume_UsesLunPatchWithCloneSource() {
         JobResponse jobResponse = new JobResponse();
         org.apache.cloudstack.storage.feign.model.Job job = new org.apache.cloudstack.storage.feign.model.Job();
         job.setUuid("job-uuid-1");
@@ -1832,7 +1832,7 @@ class UnifiedSANStrategyTest {
             assertNotNull(result);
             verify(sanFeignClient).updateLun(eq(authHeader), eq("dest-lun-uuid-1"), argThat(lun ->
                     lun != null
-                            && Boolean.TRUE.equals(lun.getIsOverride())
+                            && lun.getIsOverride() == null
                             && "/vol/flexvol1/dest-lun-1".equals(lun.getName())
                             && lun.getClone() != null
                             && lun.getClone().getSource() != null

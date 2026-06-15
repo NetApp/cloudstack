@@ -611,9 +611,8 @@ public class UnifiedSANStrategy extends SANStrategy {
         source.setUuid(lunUuid);
         clone.setSource(source);
         revertCloneRequest.setClone(clone);
-        revertCloneRequest.setIsOverride(Boolean.TRUE);
 
-        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: patch lun destinationUuid={} sourcePath={} sourceUuid={} destinationLun={} isOverride=true",
+        logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: patch lun destinationUuid={} sourcePath={} sourceUuid={} destinationLun={}",
                 destinationLunUuid, sourceLunPath, lunUuid, destinationLunPath);
         return sanFeignClient.updateLun(authHeader, destinationLunUuid, revertCloneRequest);
     }
