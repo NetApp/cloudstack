@@ -447,10 +447,10 @@ public class UnifiedNASStrategy extends NASStrategy {
      * @param volumePath    The file path within the FlexVolume
      * @param lunUuid       Not used for NFS (null)
      * @param flexVolName   The FlexVolume name (required for CLI API)
-     * @return JobResponse for the async restore operation
+     * @return void
      */
     @Override
-    public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
+    public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                           String snapshotUuid, String volumePath,
                                                           String lunUuid, String flexVolName) {
         logger.info("revertSnapshotForCloudStackVolume [NFS]: Reverting file [{}] using clone [{}] on FlexVol [{}]",
@@ -477,6 +477,6 @@ public class UnifiedNASStrategy extends NASStrategy {
         logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true fill=false",
                 snapshotName, volumePath);
         getNasFeignClient().updateFile(authHeader, flexVolUuid, volumePath, true, filePatchRequest);
-        return null;
+
     }
 }

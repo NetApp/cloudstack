@@ -144,8 +144,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid, String snapshotUuid, String volumePath, String lunUuid, String flexVolName) {
-            return null;
+        public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid, String snapshotUuid, String volumePath, String lunUuid, String flexVolName) {
         }
 
         @Override

@@ -914,20 +914,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             // Delegate to strategy class for protocol-specific restore
-            JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
+            storageStrategy.revertSnapshotForCloudStackVolume(
                     ontapCloneName, flexVolUuid, ontapCloneId, volumePath, lunUuid, flexVolName);
 
-            if (jobResponse == null || jobResponse.getJob() == null) {
-                throw new CloudRuntimeException("Failed to initiate restore from snapshot [" +
-                        ontapCloneName + "]");
-            }
 
-            // Poll for job completion (use longer timeout for large LUNs/files)
-            Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 60, 2000);
-            if (!jobSucceeded) {
-                throw new CloudRuntimeException("Restore job failed for snapshot [" +
-                        ontapCloneName + "]");
-            }
+            logger.info("revertSnapshot: iSCSI restore for [{}] completed without async job response; treating as synchronous success", volumePath);
+
+            callback.complete(result);
 
             logger.info("revertSnapshot: Successfully restored {} [{}] from clone [{}]",
                     ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) ? "LUN" : "file",

@@ -588,7 +588,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             DeleteVMSnapshotCommand deleteSnapshotCommand = new DeleteVMSnapshotCommand(vmInstanceName, vmSnapshotTO,
                     volumeTOs, guestOS.getDisplayName());
 
-            // Check for FlexVolume snapshots (new approach)
+            // Check for FlexVolume snapshots
             List<VMSnapshotDetailsVO> flexVolDetails = vmSnapshotDetailsDao.findDetails(vmSnapshot.getId(), OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT);
             if (CollectionUtils.isNotEmpty(flexVolDetails)) {
                 deleteFlexVolSnapshots(flexVolDetails);
@@ -888,16 +888,13 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             logger.info("revertCloneBackedSnapshots: Reverting volume [{}] using clone source [{}] on FlexVol [{}] (protocol={})",
                     detail.volumePath, detail.snapshotName, flexVolName, detail.protocol);
             String lunUuid = ProtocolType.ISCSI.name().equalsIgnoreCase(detail.protocol) ? detail.snapshotUuid : null;
-            JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
-                    detail.snapshotName, detail.flexVolUuid, detail.snapshotUuid, detail.volumePath, lunUuid, flexVolName);
-
-            if (jobResponse != null && jobResponse.getJob() != null) {
-                Boolean success = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 60, 2000);
-                if (!success) {
-                    throw new CloudRuntimeException("Clone-backed revert failed for volume path [" +
-                            detail.volumePath + "] from clone [" + detail.snapshotName +
-                            "] on FlexVol [" + flexVolName + "]");
-                }
+            try {
+                storageStrategy.revertSnapshotForCloudStackVolume(
+                        detail.snapshotName, detail.flexVolUuid, detail.snapshotUuid, detail.volumePath, lunUuid, flexVolName);
+            } catch (Exception e) {
+                logger.error("revertCloneBackedSnapshots: Revert of FlexVol snapshot failed: {}", e.getMessage(), e);
+                throw new CloudRuntimeException("Failed to revert volume [" + detail.volumePath + "] from clone [" +
+                        detail.snapshotName + "] on FlexVol [" + flexVolName + "]: " + e.getMessage(), e);
             }
 
             logger.info("revertCloneBackedSnapshots: Successfully reverted volume [{}] from clone [{}] on FlexVol [{}]",

@@ -29,7 +29,6 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
-import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -556,10 +555,10 @@ public class UnifiedSANStrategy extends SANStrategy {
      * @param volumePath    The LUN name (used to construct the path)
      * @param lunUuid       The LUN UUID (not used in CLI API, kept for interface consistency)
      * @param flexVolName   The FlexVolume name (required for CLI API)
-     * @return JobResponse for the async restore operation
+     * @return void
      */
     @Override
-    public JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
+    public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                           String snapshotUuid, String volumePath,
                                                           String lunUuid, String flexVolName) {
         logger.trace("revertSnapshotForCloudStackVolume [iSCSI]: Reverting LUN [{}] from clone [{}] on FlexVol [{}]",
@@ -608,7 +607,6 @@ public class UnifiedSANStrategy extends SANStrategy {
         logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: patch lun destinationUuid={} sourcePath={} sourceUuid={} destinationLun={}",
                 destinationLunUuid, sourceLunPath, lunUuid, destinationLunPath);
         sanFeignClient.updateLun(authHeader, destinationLunUuid, revertCloneRequest);
-        return null;
     }
 
     private String resolveLunUuidByName(String authHeader, String svmName, String lunName) {

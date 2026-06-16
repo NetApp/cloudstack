@@ -540,9 +540,9 @@ public abstract class StorageStrategy {
      * @param volumePath       The path of the file/LUN within the FlexVolume
      * @param lunUuid          The LUN UUID (only for iSCSI, null for NFS)
      * @param flexVolName      The FlexVolume name (only for iSCSI, for constructing destination path)
-     * @return JobResponse for the async restore operation
+     * @return void
      */
-    public abstract JobResponse revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
+    public abstract void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                                    String snapshotUuid, String volumePath,
                                                                    String lunUuid, String flexVolName);
 
