@@ -657,13 +657,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        JobResponse jobResponse = new JobResponse();
-        Job job = new Job();
-        job.setUuid("job-uuid-2");
-        jobResponse.setJob(job);
-        when(storageStrategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-                .thenReturn(jobResponse);
-        when(storageStrategy.jobPollForSuccess("job-uuid-2", 60, 2000)).thenReturn(true);
+        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -698,13 +692,7 @@ class OntapPrimaryDatastoreDriverTest {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        JobResponse jobResponse = new JobResponse();
-        Job job = new Job();
-        job.setUuid("job-uuid-legacy");
-        jobResponse.setJob(job);
-        when(storageStrategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-                .thenReturn(jobResponse);
-        when(storageStrategy.jobPollForSuccess("job-uuid-legacy", 60, 2000)).thenReturn(true);
+        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
