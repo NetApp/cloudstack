@@ -917,10 +917,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             storageStrategy.revertSnapshotForCloudStackVolume(
                     ontapCloneName, flexVolUuid, ontapCloneId, volumePath, lunUuid, flexVolName);
 
-
-            logger.info("revertSnapshot: iSCSI restore for [{}] completed without async job response; treating as synchronous success", volumePath);
-
-            callback.complete(result);
+            logger.info("revertSnapshot: {} restore for [{}] completed using synchronous PATCH semantics",
+                    ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) ? "iSCSI" : "NFS", volumePath);
 
             logger.info("revertSnapshot: Successfully restored {} [{}] from clone [{}]",
                     ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) ? "LUN" : "file",
