@@ -48,11 +48,11 @@ public interface NASFeignClient {
 
     @RequestLine("PATCH /api/storage/volumes/{volumeUuid}/files/{path}?return_records={returnRecords}")
     @Headers({"Authorization: {authHeader}"})
-    JobResponse updateFile(@Param("authHeader") String authHeader,
-                           @Param("volumeUuid") String volumeUUID,
-                           @Param("path") String filePath,
-                           @Param("returnRecords") boolean returnRecords,
-                           FileInfo fileInfo);
+    void updateFile(@Param("authHeader") String authHeader,
+                    @Param("volumeUuid") String volumeUUID,
+                    @Param("path") String filePath,
+                    @Param("returnRecords") boolean returnRecords,
+                    FileInfo fileInfo);
 
     @RequestLine("POST /api/storage/volumes/{volumeUuid}/files/{path}")
     @Headers({"Authorization: {authHeader}"})

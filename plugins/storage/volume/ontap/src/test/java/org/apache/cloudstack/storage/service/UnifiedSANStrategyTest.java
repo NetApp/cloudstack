@@ -30,7 +30,6 @@ import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
-import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -1807,16 +1806,11 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testRevertSnapshotForCloudStackVolume_UsesLunPatchWithCloneSource() {
-        JobResponse jobResponse = new JobResponse();
-        org.apache.cloudstack.storage.feign.model.Job job = new org.apache.cloudstack.storage.feign.model.Job();
-        job.setUuid("job-uuid-1");
-        jobResponse.setJob(job);
         OntapResponse<Lun> destinationLunResponse = new OntapResponse<>();
         Lun destinationLun = new Lun();
         destinationLun.setUuid("dest-lun-uuid-1");
         destinationLunResponse.setRecords(List.of(destinationLun));
         when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(destinationLunResponse);
-        when(sanFeignClient.updateLun(eq(authHeader), eq("dest-lun-uuid-1"), any(Lun.class))).thenReturn(jobResponse);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
@@ -1826,10 +1820,9 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.getLunName("flexvol1", "dest-lun-1"))
                     .thenReturn("/vol/flexvol1/dest-lun-1");
 
-            JobResponse result = unifiedSANStrategy.revertSnapshotForCloudStackVolume(
+            unifiedSANStrategy.revertSnapshotForCloudStackVolume(
                     "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "clone-lun-uuid-1", "flexvol1");
 
-            assertNotNull(result);
             verify(sanFeignClient).updateLun(eq(authHeader), eq("dest-lun-uuid-1"), argThat(lun ->
                     lun != null
                             && lun.getIsOverride() == null

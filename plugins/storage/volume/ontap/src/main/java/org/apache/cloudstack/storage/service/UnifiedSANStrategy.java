@@ -607,7 +607,8 @@ public class UnifiedSANStrategy extends SANStrategy {
 
         logger.debug("revertSnapshotForCloudStackVolume [iSCSI]: patch lun destinationUuid={} sourcePath={} sourceUuid={} destinationLun={}",
                 destinationLunUuid, sourceLunPath, lunUuid, destinationLunPath);
-        return sanFeignClient.updateLun(authHeader, destinationLunUuid, revertCloneRequest);
+        sanFeignClient.updateLun(authHeader, destinationLunUuid, revertCloneRequest);
+        return null;
     }
 
     private String resolveLunUuidByName(String authHeader, String svmName, String lunName) {

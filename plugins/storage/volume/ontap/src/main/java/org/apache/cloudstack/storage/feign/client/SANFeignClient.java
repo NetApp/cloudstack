@@ -55,7 +55,7 @@ public interface SANFeignClient {
 
     @RequestLine("PATCH /api/storage/luns/{uuid}")
     @Headers({"Authorization: {authHeader}"})
-    JobResponse updateLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, Lun lun);
+    void updateLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, Lun lun);
 
     @RequestLine("DELETE /api/storage/luns/{uuid}")
     @Headers({"Authorization: {authHeader}"})
