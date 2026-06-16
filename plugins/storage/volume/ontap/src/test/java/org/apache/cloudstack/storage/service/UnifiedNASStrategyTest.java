@@ -588,11 +588,11 @@ public class UnifiedNASStrategyTest {
     public void testRevertSnapshotForCloudStackVolume_UsesFilePatchWithoutTarget() {
         strategy.revertSnapshotForCloudStackVolume(
                 "clone-snap-1", "flexvol-uuid-1", "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1");
-        verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("vm-disk.qcow2"), eq(true), argThat(req ->
+        verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("clone-snap-1"), eq(true), argThat(req ->
                 req != null
                         && Boolean.TRUE.equals(req.isOverwriteEnabled())
                         && Boolean.FALSE.equals(req.isFillEnabled())
-                        && "clone-snap-1".equals(req.getPath())
+                        && "vm-disk.qcow2".equals(req.getPath())
                         && req.getTarget() == null));
     }
 

@@ -467,16 +467,16 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
 
         String authHeader = getAuthHeader();
-        // Keep PATCH-based revert. ONTAP in this environment rejects "target", so send
-        // only accepted fields and use "path" to carry source clone file reference.
+        // Keep PATCH-based revert. ONTAP in this environment rejects "target"; use the
+        // URL path as source clone file and body "path" as destination live file.
         FileInfo filePatchRequest = new FileInfo();
-        filePatchRequest.setPath(snapshotName);
+        filePatchRequest.setPath(volumePath);
         filePatchRequest.setOverwriteEnabled(Boolean.TRUE);
         filePatchRequest.setFillEnabled(Boolean.FALSE);
 
         logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true fill=false",
                 snapshotName, volumePath);
-        getNasFeignClient().updateFile(authHeader, flexVolUuid, volumePath, true, filePatchRequest);
+        getNasFeignClient().updateFile(authHeader, flexVolUuid, snapshotName, true, filePatchRequest);
 
     }
 }
