@@ -42,10 +42,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
-import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.response.JobResponse;
-import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -64,7 +61,6 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static com.cloud.agent.api.to.DataObjectType.SNAPSHOT;
@@ -79,6 +75,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -616,14 +613,8 @@ class OntapPrimaryDatastoreDriverTest {
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        when(storageStrategy.getAuthHeader()).thenReturn("Basic auth");
-        when(storageStrategy.getNasFeignClient()).thenReturn(nasFeignClient);
-        JobResponse jobResponse = new JobResponse();
-        Job job = new Job();
-        job.setUuid("job-uuid-1");
-        jobResponse.setJob(job);
-        when(nasFeignClient.cloneFile(anyString(), any())).thenReturn(jobResponse);
-        when(storageStrategy.jobPollForSuccess("job-uuid-1", 30, 2000)).thenReturn(true);
+        when(storageStrategy.createSnapshotClone(eq("flexvol-uuid-1"), eq("flexvol1"),
+                eq("vol-100.qcow2"), eq("UI_Snapshot_Name"), isNull())).thenReturn("UI_Snapshot_Name");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -633,7 +624,8 @@ class OntapPrimaryDatastoreDriverTest {
 
             driver.takeSnapshot(snapshotInfo, createCallback);
 
-            verify(nasFeignClient).cloneFile(anyString(), any());
+            verify(storageStrategy).createSnapshotClone(eq("flexvol-uuid-1"), eq("flexvol1"),
+                    eq("vol-100.qcow2"), eq("UI_Snapshot_Name"), isNull());
             verify(snapshotDetailsDao, atLeastOnce()).persist(any(SnapshotDetailsVO.class));
             verify(createCallback).complete(any(CreateCmdResult.class));
         }
@@ -657,7 +649,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -667,7 +659,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             verify(storageStrategy).revertSnapshotForCloudStackVolume(
                     eq("UI_Snapshot_Name"), eq("flexvol-uuid-1"), eq("clone-lun-uuid-1"),
-                    eq("dest-lun-1"), eq("clone-lun-uuid-1"), eq("flexvol1"));
+                    eq("dest-lun-1"), eq("flexvol1"));
             verify(commandCallback).complete(any(CommandResult.class));
         }
     }
@@ -692,7 +684,7 @@ class OntapPrimaryDatastoreDriverTest {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doNothing().when(storageStrategy).revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), anyString());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -702,7 +694,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             verify(storageStrategy).revertSnapshotForCloudStackVolume(
                     eq("Legacy_UI_Snapshot"), eq("flexvol-uuid-1"), eq("clone-lun-uuid-2"),
-                    eq("dest-lun-1"), eq("clone-lun-uuid-2"), eq("flexvol1"));
+                    eq("dest-lun-1"), eq("flexvol1"));
             verify(commandCallback).complete(any(CommandResult.class));
         }
     }
@@ -724,8 +716,7 @@ class OntapPrimaryDatastoreDriverTest {
                 .thenReturn(new SnapshotDetailsVO(700L, OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name(), false));
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        when(storageStrategy.getAuthHeader()).thenReturn("Basic auth");
-        when(storageStrategy.getNasFeignClient()).thenReturn(nasFeignClient);
+        doNothing().when(storageStrategy).deleteSnapshotClone("flexvol-uuid-nfs", null, "clone-file-nfs.qcow2", "clone-id-nfs");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -733,7 +724,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             driver.deleteAsync(dataStore, snapshotInfo, commandCallback);
 
-            verify(nasFeignClient).deleteFile("Basic auth", "flexvol-uuid-nfs", "clone-file-nfs.qcow2");
+            verify(storageStrategy).deleteSnapshotClone("flexvol-uuid-nfs", null, "clone-file-nfs.qcow2", "clone-id-nfs");
             ArgumentCaptor<CommandResult> resultCaptor = ArgumentCaptor.forClass(CommandResult.class);
             verify(commandCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
@@ -759,25 +750,14 @@ class OntapPrimaryDatastoreDriverTest {
                 .thenReturn(new SnapshotDetailsVO(701L, OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name(), false));
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        when(storageStrategy.getAuthHeader()).thenReturn("Basic auth");
-        when(storageStrategy.getSanFeignClient()).thenReturn(sanFeignClient);
-
-        OntapResponse<Lun> lunResponse = new OntapResponse<>();
-        Lun lun = new Lun();
-        lun.setUuid("resolved-clone-uuid");
-        lunResponse.setRecords(List.of(lun));
-        when(sanFeignClient.getLunResponse(eq("Basic auth"), any())).thenReturn(lunResponse);
+        doNothing().when(storageStrategy).deleteSnapshotClone("flexvol-uuid-iscsi", "flexvol1", "clone-lun-name", null);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(storageStrategy);
-            utilityMock.when(() -> OntapStorageUtils.getLunName("flexvol1", "clone-lun-name"))
-                    .thenReturn("/vol/flexvol1/clone-lun-name");
-
             driver.deleteAsync(dataStore, snapshotInfo, commandCallback);
 
-            verify(sanFeignClient).deleteLun(eq("Basic auth"), eq("resolved-clone-uuid"),
-                    argThat(map -> "true".equals(map.get("allow_delete_while_mapped"))));
+            verify(storageStrategy).deleteSnapshotClone("flexvol-uuid-iscsi", "flexvol1", "clone-lun-name", null);
             ArgumentCaptor<CommandResult> resultCaptor = ArgumentCaptor.forClass(CommandResult.class);
             verify(commandCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());

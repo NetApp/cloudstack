@@ -535,8 +535,8 @@ class OntapVMSnapshotStrategyTest {
     @Test
     void testFlexVolSnapshotDetail_ParseAndToString_NewFormat() {
         String value = "flexvol-uuid-1::snap-uuid-1::vmsnap_200_1234567890::root-disk.qcow2::401::NFS3";
-        OntapVMSnapshotStrategy.FlexVolSnapshotDetail detail =
-                OntapVMSnapshotStrategy.FlexVolSnapshotDetail.parse(value);
+        OntapVMSnapshotStrategy.CSVolSnapshotDetail detail =
+                OntapVMSnapshotStrategy.CSVolSnapshotDetail.parse(value);
 
         assertEquals("flexvol-uuid-1", detail.flexVolUuid);
         assertEquals("snap-uuid-1", detail.snapshotUuid);
@@ -551,8 +551,8 @@ class OntapVMSnapshotStrategyTest {
     void testFlexVolSnapshotDetail_ParseLegacy4FieldFormat() {
         // Legacy format without volumePath and protocol
         String value = "flexvol-uuid-1::snap-uuid-1::vmsnap_200_1234567890::401";
-        OntapVMSnapshotStrategy.FlexVolSnapshotDetail detail =
-                OntapVMSnapshotStrategy.FlexVolSnapshotDetail.parse(value);
+        OntapVMSnapshotStrategy.CSVolSnapshotDetail detail =
+                OntapVMSnapshotStrategy.CSVolSnapshotDetail.parse(value);
 
         assertEquals("flexvol-uuid-1", detail.flexVolUuid);
         assertEquals("snap-uuid-1", detail.snapshotUuid);
@@ -565,20 +565,20 @@ class OntapVMSnapshotStrategyTest {
     @Test
     void testFlexVolSnapshotDetail_ParseInvalidFormat_ThrowsException() {
         assertThrows(CloudRuntimeException.class,
-                () -> OntapVMSnapshotStrategy.FlexVolSnapshotDetail.parse("invalid-format"));
+                () -> OntapVMSnapshotStrategy.CSVolSnapshotDetail.parse("invalid-format"));
     }
 
     @Test
     void testFlexVolSnapshotDetail_ParseTooFewParts_ThrowsException() {
         assertThrows(CloudRuntimeException.class,
-                () -> OntapVMSnapshotStrategy.FlexVolSnapshotDetail.parse("a::b::c"));
+                () -> OntapVMSnapshotStrategy.CSVolSnapshotDetail.parse("a::b::c"));
     }
 
     @Test
     void testFlexVolSnapshotDetail_Parse5Parts_ThrowsException() {
         // 5 parts is neither legacy (4) nor current (6) format
         assertThrows(CloudRuntimeException.class,
-                () -> OntapVMSnapshotStrategy.FlexVolSnapshotDetail.parse("a::b::c::d::e"));
+                () -> OntapVMSnapshotStrategy.CSVolSnapshotDetail.parse("a::b::c::d::e"));
     }
 
     // ══════════════════════════════════════════════════════════════════════════

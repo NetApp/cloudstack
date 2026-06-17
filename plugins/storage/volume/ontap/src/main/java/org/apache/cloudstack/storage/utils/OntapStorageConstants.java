@@ -108,6 +108,9 @@ public class OntapStorageConstants {
     public static final String FILE_PATH = "file_path";
     public static final int MAX_SNAPSHOT_NAME_LENGTH = 256;
 
-    /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
-    public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";
+    /** vm_snapshot_details key for ONTAP clone-backed VM snapshot volume entries. */
+    public static final String ONTAP_CLONE_SNAPSHOT_DETAIL = "ontapFlexVolSnapshot";
+    /** @deprecated Use {@link #ONTAP_CLONE_SNAPSHOT_DETAIL}. Kept for compatibility. */
+    @Deprecated
+    public static final String ONTAP_FLEXVOL_SNAPSHOT = ONTAP_CLONE_SNAPSHOT_DETAIL;
 }

@@ -1821,7 +1821,7 @@ class UnifiedSANStrategyTest {
                     .thenReturn("/vol/flexvol1/dest-lun-1");
 
             unifiedSANStrategy.revertSnapshotForCloudStackVolume(
-                    "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "clone-lun-uuid-1", "flexvol1");
+                    "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", "flexvol1");
 
             verify(sanFeignClient).updateLun(eq(authHeader), eq("dest-lun-uuid-1"), argThat(lun ->
                     lun != null
@@ -1838,8 +1838,8 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testRevertSnapshotForCloudStackVolume_MissingLunUuid_Throws() {
+    void testRevertSnapshotForCloudStackVolume_MissingSnapshotUuid_Throws() {
         assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.revertSnapshotForCloudStackVolume(
-                "clone-snap-1", "flexvol-uuid-1", "clone-lun-uuid-1", "dest-lun-1", null, "flexvol1"));
+                "clone-snap-1", "flexvol-uuid-1", null, "dest-lun-1", "flexvol1"));
     }
 }

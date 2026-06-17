@@ -144,7 +144,16 @@ public class StorageStrategyTest {
         }
 
         @Override
-        public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid, String snapshotUuid, String volumePath, String lunUuid, String flexVolName) {
+        public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid, String snapshotUuid, String volumePath, String flexVolName) {
+        }
+
+        @Override
+        public String createSnapshotClone(String flexVolUuid, String flexVolName, String sourcePath, String cloneName, String sourceObjectUuid) {
+            return null;
+        }
+
+        @Override
+        public void deleteSnapshotClone(String flexVolUuid, String flexVolName, String cloneName, String cloneObjectUuid) {
         }
 
         @Override

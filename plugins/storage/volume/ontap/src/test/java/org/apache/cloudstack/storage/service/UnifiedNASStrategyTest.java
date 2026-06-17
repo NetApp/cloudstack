@@ -138,6 +138,9 @@ public class UnifiedNASStrategyTest {
     }
 
     private class TestableUnifiedNASStrategy extends UnifiedNASStrategy {
+        private boolean jobPollResult = true;
+        private String lastPolledJobUuid;
+
         public TestableUnifiedNASStrategy(OntapStorage ontapStorage,
                                           NASFeignClient nasFeignClient,
                                           VolumeFeignClient volumeFeignClient,
@@ -165,6 +168,12 @@ public class UnifiedNASStrategyTest {
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 throw new RuntimeException("Failed to inject parent mocked client: " + fieldName, e);
             }
+        }
+
+        @Override
+        public Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInMilliSecs) {
+            this.lastPolledJobUuid = jobUUID;
+            return jobPollResult;
         }
     }
 
@@ -585,20 +594,28 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
-    public void testRevertSnapshotForCloudStackVolume_UsesFilePatchWithoutTarget() {
+    public void testRevertSnapshotForCloudStackVolume_UsesCloneFileRestore() {
+        JobResponse cloneJobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-uuid-1");
+        cloneJobResponse.setJob(job);
+        when(nasFeignClient.cloneFile(anyString(), any())).thenReturn(cloneJobResponse);
+
         strategy.revertSnapshotForCloudStackVolume(
-                "clone-snap-1", "flexvol-uuid-1", "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1");
-        verify(nasFeignClient).updateFile(anyString(), eq("flexvol-uuid-1"), eq("clone-snap-1"), eq(true), argThat(req ->
+                "clone-snap-1", "flexvol-uuid-1", "snap-uuid-1", "vm-disk.qcow2", "flexvol1");
+        verify(nasFeignClient).cloneFile(anyString(), argThat(req ->
                 req != null
-                        && Boolean.TRUE.equals(req.isOverwriteEnabled())
-                        && Boolean.FALSE.equals(req.isFillEnabled())
-                        && "vm-disk.qcow2".equals(req.getPath())
-                        && req.getTarget() == null));
+                        && "clone-snap-1".equals(req.getSourcePath())
+                        && "vm-disk.qcow2".equals(req.getDestinationPath())
+                        && req.getVolume() != null
+                        && "flexvol-uuid-1".equals(req.getVolume().getUuid())
+                        && "flexvol1".equals(req.getVolume().getName())));
+        assertEquals("job-uuid-1", strategy.lastPolledJobUuid);
     }
 
     @Test
     public void testRevertSnapshotForCloudStackVolume_MissingFlexVolUuid_Throws() {
         assertThrows(CloudRuntimeException.class, () -> strategy.revertSnapshotForCloudStackVolume(
-                "clone-snap-1", null, "snap-uuid-1", "vm-disk.qcow2", null, "flexvol1"));
+                "clone-snap-1", null, "snap-uuid-1", "vm-disk.qcow2", "flexvol1"));
     }
 }

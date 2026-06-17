@@ -524,27 +524,51 @@ public abstract class StorageStrategy {
     abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
     /**
-     * Reverts a CloudStack volume to a snapshot using protocol-specific ONTAP APIs.
+     * Reverts a CloudStack volume from a clone artifact using protocol-specific ONTAP APIs.
      *
-     * <p>This method encapsulates the snapshot revert behavior based on protocol:</p>
+     * <p>This method encapsulates clone-based restore behavior based on protocol:</p>
      * <ul>
-     *   <li><b>iSCSI/FC:</b> Uses {@code POST /api/storage/luns/{lun.uuid}/restore}
-     *       to restore LUN data from the FlexVolume snapshot.</li>
-     *   <li><b>NFS:</b> Uses {@code POST /api/storage/volumes/{vol.uuid}/snapshots/{snap.uuid}/files/{path}/restore}
-     *       to restore a single file from the FlexVolume snapshot.</li>
+     *   <li><b>iSCSI/FC:</b> restores destination LUN data from a source clone LUN.</li>
+     *   <li><b>NFS:</b> restores destination file data from a source clone file.</li>
      * </ul>
      *
-     * @param snapshotName     The ONTAP FlexVolume snapshot name
-     * @param flexVolUuid      The FlexVolume UUID containing the snapshot
-     * @param snapshotUuid     The ONTAP snapshot UUID (used for NFS file restore)
-     * @param volumePath       The path of the file/LUN within the FlexVolume
-     * @param lunUuid          The LUN UUID (only for iSCSI, null for NFS)
+     * @param snapshotName     The ONTAP source clone name/path token
+     * @param flexVolUuid      The FlexVolume UUID containing the source clone
+     * @param snapshotUuid     The ONTAP clone artifact UUID (used by SAN restore, ignored by NAS)
+     * @param volumePath       The destination file/LUN path in the FlexVolume
      * @param flexVolName      The FlexVolume name (only for iSCSI, for constructing destination path)
      * @return void
      */
     public abstract void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                                    String snapshotUuid, String volumePath,
-                                                                   String lunUuid, String flexVolName);
+                                                                   String flexVolName);
+
+    /**
+     * Creates a protocol-specific clone artifact used to represent a snapshot point.
+     *
+     * <p>Implementations own all protocol-specific ONTAP interactions including any
+     * required async job polling.</p>
+     *
+     * @param flexVolUuid        FlexVolume UUID that contains the source object
+     * @param flexVolName        FlexVolume name for path construction when needed
+     * @param sourcePath         source file/LUN path
+     * @param cloneName          destination clone name/path token
+     * @param sourceObjectUuid   source object UUID (required by SAN, ignored by NAS)
+     * @return clone artifact UUID (or stable clone identifier for NAS)
+     */
+    public abstract String createSnapshotClone(String flexVolUuid, String flexVolName, String sourcePath,
+                                               String cloneName, String sourceObjectUuid);
+
+    /**
+     * Deletes a protocol-specific clone artifact created for snapshot workflows.
+     *
+     * @param flexVolUuid      FlexVolume UUID containing the clone
+     * @param flexVolName      FlexVolume name for path construction when needed
+     * @param cloneName        clone name/path token
+     * @param cloneObjectUuid  clone UUID (required by SAN, ignored by NAS)
+     */
+    public abstract void deleteSnapshotClone(String flexVolUuid, String flexVolName, String cloneName,
+                                             String cloneObjectUuid);
 
 
     /**

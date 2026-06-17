@@ -34,6 +34,7 @@ import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
+import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Nas;
@@ -433,26 +434,16 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     /**
-     * Reverts a file to a snapshot using the ONTAP CLI-based snapshot file restore API.
+     * Reverts an NFS file from clone artifact data.
      *
-     * <p>ONTAP REST API (CLI passthrough):
-     * {@code POST /api/private/cli/volume/snapshot/restore-file}</p>
-     *
-     * <p>This method uses the CLI native API which is more reliable and works
-     * consistently for both NFS files and iSCSI LUNs.</p>
-     *
-     * @param snapshotName  The ONTAP FlexVolume snapshot name
-     * @param flexVolUuid   The FlexVolume UUID (not used in CLI API, kept for interface consistency)
-     * @param snapshotUuid  The ONTAP snapshot UUID (not used in CLI API, kept for interface consistency)
-     * @param volumePath    The file path within the FlexVolume
-     * @param lunUuid       Not used for NFS (null)
-     * @param flexVolName   The FlexVolume name (required for CLI API)
-     * @return void
+     * <p>The source clone file is copied back into the destination live file path.
+     * If destination already exists, this method uses a temporary backup path to
+     * preserve rollback safety.</p>
      */
     @Override
     public void revertSnapshotForCloudStackVolume(String snapshotName, String flexVolUuid,
                                                           String snapshotUuid, String volumePath,
-                                                          String lunUuid, String flexVolName) {
+                                                          String flexVolName) {
         logger.info("revertSnapshotForCloudStackVolume [NFS]: Reverting file [{}] using clone [{}] on FlexVol [{}]",
                 volumePath, snapshotName, flexVolName);
 
@@ -467,16 +458,135 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
 
         String authHeader = getAuthHeader();
-        // Keep PATCH-based revert. ONTAP in this environment rejects "target"; use the
-        // URL path as source clone file and body "path" as destination live file.
-        FileInfo filePatchRequest = new FileInfo();
-        filePatchRequest.setPath(volumePath);
-        filePatchRequest.setOverwriteEnabled(Boolean.TRUE);
-        filePatchRequest.setFillEnabled(Boolean.FALSE);
+        FileCloneRequest cloneRequest = new FileCloneRequest();
+        FileCloneRequest.VolumeRef volumeRef = new FileCloneRequest.VolumeRef();
+        volumeRef.setUuid(flexVolUuid);
+        volumeRef.setName(flexVolName);
+        cloneRequest.setVolume(volumeRef);
+        cloneRequest.setSourcePath(snapshotName);
+        cloneRequest.setDestinationPath(volumePath);
 
-        logger.debug("revertSnapshotForCloudStackVolume [NFS]: patch file source={} destination={} overwrite=true fill=false",
-                snapshotName, volumePath);
-        getNasFeignClient().updateFile(authHeader, flexVolUuid, snapshotName, true, filePatchRequest);
+        try {
+            logger.debug("revertSnapshotForCloudStackVolume [NFS]: clone file source={} destination={}",
+                    snapshotName, volumePath);
+            JobResponse cloneJobResponse = getNasFeignClient().cloneFile(authHeader, cloneRequest);
+            if (cloneJobResponse == null || cloneJobResponse.getJob() == null ||
+                    cloneJobResponse.getJob().getUuid() == null || cloneJobResponse.getJob().getUuid().isEmpty()) {
+                throw new CloudRuntimeException(String.format(
+                        "cloneFile did not return a valid job response for source [%s] and destination [%s]",
+                        snapshotName, volumePath));
+            }
+            String cloneJobUuid = cloneJobResponse.getJob().getUuid();
+            Boolean jobSucceeded = jobPollForSuccess(cloneJobUuid, 30, 2000);
+            if (jobSucceeded == null || !jobSucceeded) {
+                throw new CloudRuntimeException(String.format(
+                        "cloneFile job [%s] failed for source [%s] and destination [%s]",
+                        cloneJobUuid, snapshotName, volumePath));
+            }
+        } catch (FeignException cloneEx) {
+            if (!isFileAlreadyExistsConflict(cloneEx)) {
+                throw cloneEx;
+            }
 
+            String backupPath = volumePath + ".pre_revert_" + System.currentTimeMillis();
+            logger.info("revertSnapshotForCloudStackVolume [NFS]: Destination [{}] exists, using backup path [{}] for safe restore",
+                    volumePath, backupPath);
+
+            FileInfo renameToBackup = new FileInfo();
+            renameToBackup.setPath(backupPath);
+            getNasFeignClient().updateFile(authHeader, flexVolUuid, volumePath, true, renameToBackup);
+
+            try {
+                JobResponse cloneJobResponse = getNasFeignClient().cloneFile(authHeader, cloneRequest);
+                if (cloneJobResponse == null || cloneJobResponse.getJob() == null ||
+                        cloneJobResponse.getJob().getUuid() == null || cloneJobResponse.getJob().getUuid().isEmpty()) {
+                    throw new CloudRuntimeException(String.format(
+                            "cloneFile did not return a valid job response for source [%s] and destination [%s]",
+                            snapshotName, volumePath));
+                }
+                String cloneJobUuid = cloneJobResponse.getJob().getUuid();
+                Boolean jobSucceeded = jobPollForSuccess(cloneJobUuid, 30, 2000);
+                if (jobSucceeded == null || !jobSucceeded) {
+                    throw new CloudRuntimeException(String.format(
+                            "cloneFile job [%s] failed for source [%s] and destination [%s]",
+                            cloneJobUuid, snapshotName, volumePath));
+                }
+                try {
+                    getNasFeignClient().deleteFile(authHeader, flexVolUuid, backupPath);
+                } catch (Exception cleanupEx) {
+                    logger.warn("revertSnapshotForCloudStackVolume [NFS]: Backup cleanup failed for [{}]: {}",
+                            backupPath, cleanupEx.getMessage());
+                }
+            } catch (Exception restoreEx) {
+                try {
+                    FileInfo rollbackRename = new FileInfo();
+                    rollbackRename.setPath(volumePath);
+                    getNasFeignClient().updateFile(authHeader, flexVolUuid, backupPath, true, rollbackRename);
+                } catch (Exception rollbackEx) {
+                    logger.error("revertSnapshotForCloudStackVolume [NFS]: Failed to roll back backup rename [{}] -> [{}]: {}",
+                            backupPath, volumePath, rollbackEx.getMessage(), rollbackEx);
+                }
+                throw restoreEx;
+            }
+        }
+
+    }
+
+    @Override
+    public String createSnapshotClone(String flexVolUuid, String flexVolName, String sourcePath,
+                                      String cloneName, String sourceObjectUuid) {
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume UUID is required for NFS snapshot clone create");
+        }
+        if (sourcePath == null || sourcePath.isEmpty()) {
+            throw new CloudRuntimeException("Source file path is required for NFS snapshot clone create");
+        }
+        if (cloneName == null || cloneName.isEmpty()) {
+            throw new CloudRuntimeException("Clone file name is required for NFS snapshot clone create");
+        }
+
+        FileCloneRequest fileCloneRequest = new FileCloneRequest();
+        FileCloneRequest.VolumeRef volumeRef = new FileCloneRequest.VolumeRef();
+        volumeRef.setUuid(flexVolUuid);
+        volumeRef.setName(flexVolName);
+        fileCloneRequest.setVolume(volumeRef);
+        fileCloneRequest.setSourcePath(sourcePath);
+        fileCloneRequest.setDestinationPath(cloneName);
+
+        JobResponse jobResponse = getNasFeignClient().cloneFile(getAuthHeader(), fileCloneRequest);
+        if (jobResponse == null || jobResponse.getJob() == null ||
+                jobResponse.getJob().getUuid() == null || jobResponse.getJob().getUuid().isEmpty()) {
+            throw new CloudRuntimeException("Failed to initiate NFS clone create for " + cloneName);
+        }
+        Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
+        if (jobSucceeded == null || !jobSucceeded) {
+            throw new CloudRuntimeException("NFS clone create job failed for " + cloneName);
+        }
+        return cloneName;
+    }
+
+    @Override
+    public void deleteSnapshotClone(String flexVolUuid, String flexVolName, String cloneName, String cloneObjectUuid) {
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume UUID is required for NFS snapshot clone delete");
+        }
+        if (cloneName == null || cloneName.isEmpty()) {
+            throw new CloudRuntimeException("Clone file name is required for NFS snapshot clone delete");
+        }
+        getNasFeignClient().deleteFile(getAuthHeader(), flexVolUuid, cloneName);
+    }
+
+    private boolean isFileAlreadyExistsConflict(FeignException e) {
+        if (e.status() == 409) {
+            return true;
+        }
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("already exists")
+                || lower.contains("entry exists")
+                || lower.contains("duplicate");
     }
 }
