@@ -19,19 +19,21 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.agent.api.Answer;
-import com.cloud.host.HostVO;
-import com.cloud.storage.Storage;
-import com.cloud.storage.VolumeVO;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.utils.exception.CloudRuntimeException;
-import feign.FeignException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.inject.Inject;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
 import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
@@ -42,19 +44,22 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
-import org.apache.cloudstack.storage.volume.VolumeObject;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.cloudstack.storage.volume.VolumeObject;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import com.cloud.agent.api.Answer;
+import com.cloud.host.HostVO;
+import com.cloud.storage.Storage;
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.VolumeDao;
+import com.cloud.utils.exception.CloudRuntimeException;
+
+import feign.FeignException;
 
 public class UnifiedNASStrategy extends NASStrategy {
     private static final Logger logger = LogManager.getLogger(UnifiedNASStrategy.class);
@@ -191,7 +196,114 @@ public class UnifiedNASStrategy extends NASStrategy {
 
     @Override
     public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
-        return null;
+        if (accessGroup == null) {
+            throw new CloudRuntimeException("Invalid accessGroup object - accessGroup is null");
+        }
+        if (accessGroup.getStoragePoolId() == null) {
+            throw new CloudRuntimeException("Invalid accessGroup object - storagePoolId is null");
+        }
+        if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
+            throw new CloudRuntimeException("Invalid accessGroup object - hostsToConnect is null or empty");
+        }
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
+        String exportPolicyId = details.get(OntapStorageConstants.EXPORT_POLICY_ID);
+
+        // No policy exists yet (e.g. pool was created before any eligible hosts came up), create it now.
+        if (exportPolicyId == null || exportPolicyId.isEmpty()) {
+            logger.info("updateAccessGroup: No export policy found for pool {}. Creating one now.", accessGroup.getStoragePoolId());
+            return createAccessGroup(accessGroup);
+        }
+
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            ExportPolicy existingPolicy = nasFeignClient.getExportPolicyById(authHeader, exportPolicyId);
+            if (existingPolicy == null) {
+                throw new CloudRuntimeException("Failed to fetch existing export policy with id: " + exportPolicyId);
+            }
+
+            List<ExportRule> rules = existingPolicy.getRules();
+            if (rules == null || rules.isEmpty()) {
+                rules = new ArrayList<>();
+                ExportRule newRule = new ExportRule();
+                newRule.setProtocols(List.of(ExportRule.ProtocolsEnum.NFS3));
+                newRule.setRoRule(List.of("sys"));
+                newRule.setRwRule(List.of("sys"));
+                newRule.setSuperuser(List.of("sys"));
+                newRule.setClients(new ArrayList<>());
+                rules.add(newRule);
+            }
+
+            ExportRule exportRule = rules.get(0);
+            List<ExportRule.ExportClient> exportClients = exportRule.getClients();
+            if (exportClients == null) {
+                exportClients = new ArrayList<>();
+                exportRule.setClients(exportClients);
+            }
+
+            Set<String> hostMatches = new HashSet<>();
+            for (HostVO host : accessGroup.getHostsToConnect()) {
+                String hostStorageIp = host.getStorageIpAddress();
+                String ip = (hostStorageIp != null && !hostStorageIp.isEmpty()) ? hostStorageIp : host.getPrivateIpAddress();
+                if (ip == null || ip.isEmpty()) {
+                    logger.warn("updateAccessGroup: Host {} has no storage/private IP, skipping export rule update", host.getName());
+                    continue;
+                }
+                hostMatches.add(ip + "/32");
+            }
+
+            if (hostMatches.isEmpty()) {
+                accessGroup.setPolicy(existingPolicy);
+                return accessGroup;
+            }
+
+            boolean updated = false;
+            if (AccessGroup.HostRuleAction.REMOVE.equals(accessGroup.getHostRuleAction())) {
+                updated = exportClients.removeIf(c -> c != null && c.getMatch() != null && hostMatches.contains(c.getMatch()));
+                if (!updated) {
+                    logger.info("updateAccessGroup: No matching host IPs found in export policy {} for removal", existingPolicy.getName());
+                }
+            } else {
+                Set<String> existingMatches = new HashSet<>();
+                for (ExportRule.ExportClient exportClient : exportClients) {
+                    if (exportClient != null && exportClient.getMatch() != null) {
+                        existingMatches.add(exportClient.getMatch());
+                    }
+                }
+
+                for (String match : hostMatches) {
+                    if (existingMatches.add(match)) {
+                        ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
+                        exportClient.setMatch(match);
+                        exportClients.add(exportClient);
+                        updated = true;
+                    }
+                }
+            }
+
+            if (!updated) {
+                if (!AccessGroup.HostRuleAction.REMOVE.equals(accessGroup.getHostRuleAction())) {
+                    logger.info("updateAccessGroup: No new host IPs to add to export policy {}", existingPolicy.getName());
+                }
+            }
+
+            if (!updated) {
+                accessGroup.setPolicy(existingPolicy);
+                return accessGroup;
+            }
+
+            ExportPolicy updateRequest = new ExportPolicy();
+            updateRequest.setRules(rules);
+            nasFeignClient.updateExportPolicy(authHeader, exportPolicyId, updateRequest);
+
+            existingPolicy.setRules(rules);
+            accessGroup.setPolicy(existingPolicy);
+            logger.info("updateAccessGroup: Successfully updated export policy {} with new host client rules", existingPolicy.getName());
+            return accessGroup;
+        } catch (Exception e) {
+            logger.error("updateAccessGroup: Failed to update export policy for pool {}", accessGroup.getStoragePoolId(), e);
+            throw new CloudRuntimeException("Failed to update export policy for NFS host connection: " + e.getMessage(), e);
+        }
     }
 
     @Override
