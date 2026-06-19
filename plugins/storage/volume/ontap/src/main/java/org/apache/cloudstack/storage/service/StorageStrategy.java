@@ -263,7 +263,7 @@ public abstract class StorageStrategy {
         volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
         volumeRequest.setNas(nas);
-        //volumeRequest.setGuarantee(new Volume.Guarantee(Volume.Guarantee.TypeEnum.NONE));
+        volumeRequest.setGuarantee(new Volume.Guarantee(Volume.Guarantee.TypeEnum.NONE));
         try {
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {
