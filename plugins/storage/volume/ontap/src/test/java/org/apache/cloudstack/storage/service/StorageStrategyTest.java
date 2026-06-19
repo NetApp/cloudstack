@@ -405,6 +405,20 @@ public class StorageStrategyTest {
         assertTrue(ex.getMessage().contains("No SVM found"));
     }
 
+    @Test
+    public void testConnect_invalidCredentials() {
+        // Setup - ONTAP rejects the supplied username/password with HTTP 401 Unauthorized.
+        when(svmFeignClient.getSvmResponse(anyMap(), anyString()))
+                .thenThrow(mock(FeignException.Unauthorized.class));
+
+        // Execute & Verify - connect() must surface a clear "invalid credentials" error.
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
+        assertTrue(ex.getMessage().contains("Authentication failed: Invalid credentials"),
+                "Expected an authentication failure message but got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("Please verify the username and password"),
+                "Expected the message to prompt verifying username/password but got: " + ex.getMessage());
+    }
+
     // ========== createStorageVolume() Tests ==========
 
     @Test
