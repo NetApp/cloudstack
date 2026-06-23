@@ -105,6 +105,9 @@ public class OntapStorageConstants {
     public static final String ONTAP_SNAP_SIZE = "ontap_snap_size";
     public static final String FILE_PATH = "file_path";
     public static final int MAX_SNAPSHOT_NAME_LENGTH = 64;
+    public static final String ONTAP_TEMP_CG_PREFIX = "cs-temp-cg-";
+    public static final int ONTAP_CG_JOB_MAX_RETRIES = 60;
+    public static final int ONTAP_CG_JOB_POLL_INTERVAL_MS = 2000;
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";

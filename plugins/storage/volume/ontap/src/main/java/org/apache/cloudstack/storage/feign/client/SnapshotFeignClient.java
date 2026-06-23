@@ -181,4 +181,96 @@ public interface SnapshotFeignClient {
     @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
     JobResponse restoreFileFromSnapshotCli(@Param("authHeader") String authHeader,
                                            CliSnapshotRestoreRequest request);
+
+    /**
+     * Creates a consistency group.
+     *
+     * <p>ONTAP REST: {@code POST /api/application/consistency-groups}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param request consistency group create request body
+     * @return JobResponse containing the async job reference
+     */
+    @RequestLine("POST /api/application/consistency-groups")
+    @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
+    JobResponse createConsistencyGroup(@Param("authHeader") String authHeader,
+                                       Map<String, Object> request);
+
+    /**
+     * Lists consistency groups.
+     *
+     * <p>ONTAP REST: {@code GET /api/application/consistency-groups}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param queryParams Optional query parameters
+     * @return Paginated consistency group records
+     */
+    @RequestLine("GET /api/application/consistency-groups")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Map<String, Object>> getConsistencyGroups(@Param("authHeader") String authHeader,
+                                                            @QueryMap Map<String, Object> queryParams);
+
+    /**
+     * Creates (starts) a consistency group snapshot.
+     *
+     * <p>ONTAP REST: {@code POST /api/application/consistency-groups/{cgUuid}/snapshots}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param cgUuid consistency group UUID
+     * @param request snapshot start request body
+     * @return JobResponse containing the async job reference
+     */
+    @RequestLine("POST /api/application/consistency-groups/{cgUuid}/snapshots")
+    @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
+    JobResponse createConsistencyGroupSnapshot(@Param("authHeader") String authHeader,
+                                               @Param("cgUuid") String cgUuid,
+                                               Map<String, Object> request);
+
+    /**
+     * Lists snapshots for a consistency group.
+     *
+     * <p>ONTAP REST: {@code GET /api/application/consistency-groups/{cgUuid}/snapshots}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param cgUuid consistency group UUID
+     * @param queryParams Optional query parameters
+     * @return Paginated consistency group snapshot records
+     */
+    @RequestLine("GET /api/application/consistency-groups/{cgUuid}/snapshots")
+    @Headers({"Authorization: {authHeader}"})
+    OntapResponse<Map<String, Object>> getConsistencyGroupSnapshots(@Param("authHeader") String authHeader,
+                                                                    @Param("cgUuid") String cgUuid,
+                                                                    @QueryMap Map<String, Object> queryParams);
+
+    /**
+     * Commits a started consistency group snapshot.
+     *
+     * <p>ONTAP REST: {@code PATCH /api/application/consistency-groups/{cgUuid}/snapshots/{snapshotUuid}}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param cgUuid consistency group UUID
+     * @param snapshotUuid consistency group snapshot UUID
+     * @param request commit request body
+     * @return JobResponse containing the async job reference
+     */
+    @RequestLine("PATCH /api/application/consistency-groups/{cgUuid}/snapshots/{snapshotUuid}")
+    @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
+    JobResponse commitConsistencyGroupSnapshot(@Param("authHeader") String authHeader,
+                                               @Param("cgUuid") String cgUuid,
+                                               @Param("snapshotUuid") String snapshotUuid,
+                                               Map<String, Object> request);
+
+    /**
+     * Deletes a consistency group.
+     *
+     * <p>ONTAP REST: {@code DELETE /api/application/consistency-groups/{cgUuid}}</p>
+     *
+     * @param authHeader Basic auth header
+     * @param cgUuid consistency group UUID
+     * @return JobResponse containing the async job reference
+     */
+    @RequestLine("DELETE /api/application/consistency-groups/{cgUuid}")
+    @Headers({"Authorization: {authHeader}"})
+    JobResponse deleteConsistencyGroup(@Param("authHeader") String authHeader,
+                                       @Param("cgUuid") String cgUuid);
 }

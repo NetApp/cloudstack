@@ -67,7 +67,6 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
@@ -670,8 +669,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             SnapshotObjectTO snapshotObjectTo = (SnapshotObjectTO) snapshot.getTO();
 
-            // Build snapshot name using volume name and snapshot UUID
-            String snapshotName = buildSnapshotName(volumeInfo.getName(), snapshot.getUuid());
+            // Preserve CloudStack UI snapshot name with stable uniqueness suffix.
+            String snapshotName = buildSnapshotName(snapshot.getName(), snapshot.getId());
 
             // Resolve the volume path for storing in snapshot details (for revert operation)
             String volumePath = resolveVolumePathOnOntap(volumeVO, protocol, poolDetails);
@@ -975,18 +974,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Builds a snapshot name with proper length constraints.
-     * Format: {@code <volumeName>-<snapshotUuid>}
+     * Builds an ONTAP-safe snapshot name from the CloudStack UI name with uniqueness suffix.
      */
-    private String buildSnapshotName(String volumeName, String snapshotUuid) {
-        String name = volumeName + "-" + snapshotUuid;
-        int maxLength = OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH;
-        int trimRequired = name.length() - maxLength;
-
-        if (trimRequired > 0) {
-            name = StringUtils.left(volumeName, volumeName.length() - trimRequired) + "-" + snapshotUuid;
-        }
-        return name;
+    private String buildSnapshotName(String cloudStackSnapshotName, long snapshotId) {
+        return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, "cs" + snapshotId);
     }
 
     /**

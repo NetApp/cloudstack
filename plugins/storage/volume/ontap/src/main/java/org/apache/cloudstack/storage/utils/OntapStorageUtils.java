@@ -154,4 +154,46 @@ public class OntapStorageUtils {
         return OntapStorageConstants.VOLUME_PATH_PREFIX + volName + OntapStorageConstants.SLASH + lunName;
     }
 
+    /**
+     * Builds an ONTAP-safe name token from user-provided snapshot text.
+     */
+    public static String getOntapCloneName(String cloudStackSnapshotName) {
+        if (cloudStackSnapshotName == null || cloudStackSnapshotName.trim().isEmpty()) {
+            throw new InvalidParameterValueException("Snapshot name cannot be null or blank");
+        }
+        String normalized = cloudStackSnapshotName.replaceAll("[^a-zA-Z0-9_]", "_");
+        if (normalized.isEmpty()) {
+            normalized = "snapshot";
+        }
+        if (!Character.isLetter(normalized.charAt(0))) {
+            normalized = "s_" + normalized;
+        }
+        if (normalized.length() > OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH) {
+            normalized = normalized.substring(0, OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH);
+        }
+        return normalized;
+    }
+
+    /**
+     * Builds an ONTAP-safe snapshot name that preserves the CloudStack UI snapshot name
+     * and appends a uniqueness suffix.
+     */
+    public static String buildOntapSnapshotName(String cloudStackSnapshotName, String uniquenessSuffix) {
+        String normalizedBase = (cloudStackSnapshotName == null || cloudStackSnapshotName.trim().isEmpty())
+                ? "snapshot"
+                : getOntapCloneName(cloudStackSnapshotName);
+        String suffix = (uniquenessSuffix == null || uniquenessSuffix.isEmpty())
+                ? ""
+                : "_" + uniquenessSuffix.replaceAll("[^a-zA-Z0-9_]", "_");
+        int maxLength = OntapStorageConstants.MAX_SNAPSHOT_NAME_LENGTH;
+        int maxBaseLength = maxLength - suffix.length();
+        if (maxBaseLength <= 0) {
+            return normalizedBase.substring(0, maxLength);
+        }
+        if (normalizedBase.length() > maxBaseLength) {
+            normalizedBase = normalizedBase.substring(0, maxBaseLength);
+        }
+        return normalizedBase + suffix;
+    }
+
 }
