@@ -204,16 +204,17 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
     /**
      * Builds the heartbeat (event-id 0) description as a JSON object carrying the CloudStack and
-     * ONTAP versions, the management-server operating system, plus the ONTAP cluster UUID. Example:
-     * {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":"4.23.0.0",
-     * "os":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1","clusterUuid":"..."}}
+     * ONTAP versions, the management-server operating system platform, plus the ONTAP cluster UUID.
+     * Example: {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":
+     * "4.23.0.0","platform":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1",
+     * "clusterUuid":"..."}}
      */
     private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion,
             String clusterUuid) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("message", "CloudStack connected to ONTAP cluster");
         payload.put("cloudstackVersion", defaultUnknown(cloudStackVersion));
-        payload.put("os", getOperatingSystem());
+        payload.put("platform", getOperatingSystem());
         payload.put("ontapVersion", defaultUnknown(ontapVersion));
         payload.put("clusterUuid", defaultUnknown(clusterUuid));
         return toJson(payload);
