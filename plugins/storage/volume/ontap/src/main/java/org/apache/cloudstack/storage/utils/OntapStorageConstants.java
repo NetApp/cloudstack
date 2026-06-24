@@ -90,6 +90,7 @@ public class OntapStorageConstants {
     public static final String SEMICOLON = ";";
     public static final String COMMA = ",";
     public static final String HYPHEN = "-";
+    public static final String DOT = ".";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
@@ -135,4 +136,20 @@ public class OntapStorageConstants {
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";
+
+    // ASUP (AutoSupport) / EMS telemetry
+    /** EMS category reported in the AutoSupport message. */
+    public static final String ASUP_CATEGORY = "provisioning";
+    /** EMS severity reported in the AutoSupport message. */
+    public static final String ASUP_SEVERITY = "notice";
+    /** event-source prefix identifying the CloudStack ONTAP plugin in EMS logs. */
+    public static final String ASUP_EVENT_SOURCE = "CloudStack ONTAP plugin";
+    /** event-id used for the periodic CloudStack-to-cluster heartbeat message. */
+    public static final String ASUP_EVENT_ID_HEARTBEAT = "0";
+    /** event-id used for the periodic storage-pool backing-volume message. */
+    public static final String ASUP_EVENT_ID_POOL = "1";
+    /** Fallback value used when a piece of telemetry cannot be resolved. */
+    public static final String ASUP_UNKNOWN = "unknown";
+    /** GlobalLock name ensuring a single management server emits ASUP per cycle. */
+    public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
 }
