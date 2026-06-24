@@ -491,6 +491,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             (Note: on ONTAP/NFS shared storage the volume state remains 'Ready';
             attachment is signalled by virtualmachineid being populated)
           - ONTAP: FlexVol remains online
+          - ONTAP: NFS3 volume data file created in FlexVol after attach (lazy creation)
           - VM remains 'Running'
         """
         if self.__class__.vm is None:
@@ -537,6 +538,17 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.assertEqual(
             ontap_vol.get("state"), "online",
             "ONTAP FlexVol should be 'online' after attach"
+        )
+
+        # ONTAP: NFS3 uses lazy file creation — the volume data file is
+        # materialised on the FlexVol only when CloudStack calls createAsync
+        # during attachVolume.  Verify that the file now exists.
+        files = self.ontap.list_files_in_volume(pool.name)
+        vol_file = next((f for f in files if vol.id in f), None)
+        self.assertIsNotNone(
+            vol_file,
+            "No data file matching volume UUID '%s' found in FlexVol '%s' "
+            "after attach; files present: %s" % (vol.id, pool.name, files)
         )
 
     # ------------------------------------------------------------------
@@ -666,6 +678,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
           - Volume no longer lists the VM's ID
           - VM remains 'Running'
           - ONTAP: FlexVol remains online
+          - ONTAP: NFS3 volume data file persists in FlexVol after detach
         """
         if self.__class__.vm is None:
             self.skipTest("VM not deployed — test_03 was skipped (no ready template)")
@@ -723,6 +736,16 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "ONTAP FlexVol should be 'online' after detach"
         )
 
+        # ONTAP: NFS3 volume data file must still exist after detach — the file
+        # is only removed when deleteVolume is called, not on detach.
+        files = self.ontap.list_files_in_volume(pool.name)
+        vol_file = next((f for f in files if vol.id in f), None)
+        self.assertIsNotNone(
+            vol_file,
+            "Volume data file for '%s' should persist in FlexVol '%s' after "
+            "detach; files present: %s" % (vol.id, pool.name, files)
+        )
+
     # ------------------------------------------------------------------
     # Step 08 - Destroy VM, delete volume, delete pool
     # ------------------------------------------------------------------
@@ -735,6 +758,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         Verifies:
           - VM is destroyed/expunged from CloudStack
           - Volume is deleted from CloudStack
+          - ONTAP: NFS3 volume data file removed from FlexVol after deleteVolume
           - Pool is removed from CloudStack
           - ONTAP: FlexVol is deleted after pool removal
           - ONTAP: Export policy is removed after pool removal
@@ -766,10 +790,23 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
         # Delete the ONTAP data volume
         if vol is not None:
+            vol_id = vol.id
             cmd = deleteVolumeAPI.deleteVolumeCmd()
-            cmd.id = vol.id
+            cmd.id = vol_id
             self.apiClient.deleteVolume(cmd)
             self.__class__.volume = None
+
+            # ONTAP: NFS3 volume data file must be removed from the FlexVol
+            # after deleteVolume (CloudStack/libvirt deletes the file from the
+            # NFS mount as part of the destroy workflow).
+            files = self.ontap.list_files_in_volume(pool_name)
+            vol_file = next((f for f in files if vol_id in f), None)
+            self.assertIsNone(
+                vol_file,
+                "Volume data file for '%s' should be gone from FlexVol '%s' "
+                "after deleteVolume; files still present: %s"
+                % (vol_id, pool_name, files)
+            )
 
         # Enter maintenance then delete the pool
         maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()

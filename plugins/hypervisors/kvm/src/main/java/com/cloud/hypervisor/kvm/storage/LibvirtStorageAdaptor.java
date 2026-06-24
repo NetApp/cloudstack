@@ -950,8 +950,6 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
 
     @Override
     public boolean deleteStoragePool(String uuid, Map<String, String> details) {
-        logger.debug("[deleteStoragePool] details overload called for pool {}, delegating to deleteStoragePool(uuid)",
-                uuid);
         return deleteStoragePool(uuid);
     }
 

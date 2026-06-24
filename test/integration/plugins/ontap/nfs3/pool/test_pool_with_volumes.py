@@ -18,18 +18,6 @@
 """
 NFS3 pool lifecycle tests with a CloudStack volume present throughout.
 
-Covers the TDS (section 10) scenarios that require a data volume to already
-exist on the pool during pool state transitions:
-
-  TDS Approach-1 SN 11-12 — Disable pool WITH volumes
-  TDS Approach-1 SN 15-16 — Enable pool WITH volumes
-  TDS Approach-1 SN 19-20 — Enter maintenance WITH volumes
-  TDS Approach-1 SN 21-22 — Cancel maintenance WITH volumes (fix confirmed)
-  TDS Negative   SN 5-6   — Delete pool that has volumes; forced=False rejected
-
-Note: TDS SN 7-8 (force-delete NFS3 pool after manual volume deletion) is
-already covered by test_ontap_create_primary_storage_nfs3.py test_07/test_08.
-
 Tests are numbered test_01 ... test_07 and must run in that order.  Each step
 builds on the shared state established by the previous step.
 
@@ -360,8 +348,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
     @attr(tags=["nfs3_with_volumes"], required_hardware=True)
     def test_02_disable_pool_volume_survives(self):
         """
-        Disable the pool while a CloudStack data volume exists on it.
-        Covers TDS Approach-1 SN 11 (iSCSI) and SN 12 (NFS3):
+        Disable the pool while a CloudStack data volume exists on it:
           - Pool should no longer be available for scheduling new CS volumes
           - The existing CS volume should continue to exist (not deleted)
           - ONTAP: FlexVol remains online; export policy unchanged
@@ -412,8 +399,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
     @attr(tags=["nfs3_with_volumes"], required_hardware=True)
     def test_03_enable_pool_volume_intact(self):
         """
-        Re-enable the pool while a CloudStack data volume exists on it.
-        Covers TDS Approach-1 SN 15 (iSCSI) and SN 16 (NFS3):
+        Re-enable the pool while a CloudStack data volume exists on it:
           - Pool state transitions back to Up
           - The existing CS volume is still accessible
           - ONTAP: FlexVol remains online; export policy unchanged
@@ -464,8 +450,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
     @attr(tags=["nfs3_with_volumes"], required_hardware=True)
     def test_04_enter_maintenance_volume_present(self):
         """
-        Enter maintenance mode while a CloudStack data volume exists on the pool.
-        Covers TDS Approach-1 SN 19 (iSCSI) and SN 20 (NFS3):
+        Enter maintenance mode while a CloudStack data volume exists on the pool:
           - Pool transitions to Maintenance state
           - Existing CS volume remains in CloudStack
           - ONTAP: FlexVol stays online (maintenance is a CS-only state)
@@ -517,8 +502,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
     @attr(tags=["nfs3_with_volumes"], required_hardware=True)
     def test_05_cancel_maintenance_with_volume(self):
         """
-        Cancel maintenance mode while a CloudStack data volume exists on the pool.
-        Covers TDS Approach-1 SN 21 (iSCSI) and SN 22 (NFS3):
+        Cancel maintenance mode while a CloudStack data volume exists on the pool:
           - cancelStorageMaintenance succeeds (KVM/NFS3 fix confirmed)
           - Pool returns to Up state
           - Existing CS volume is still present in CloudStack
@@ -578,8 +562,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
         """
         Enter maintenance mode then attempt to delete the pool (forced=False)
         while a CloudStack volume still exists on it.  The operation must be
-        rejected.
-        Covers TDS Negative Scenarios SN 5 (iSCSI) and SN 6 (NFS3):
+        rejected:
           - CloudstackAPIException is raised with an appropriate error
           - Pool remains in Maintenance state
           - CS volume still exists

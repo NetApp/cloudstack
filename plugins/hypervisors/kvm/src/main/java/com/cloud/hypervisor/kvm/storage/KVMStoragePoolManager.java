@@ -457,11 +457,8 @@ public class KVMStoragePoolManager {
 
     public boolean deleteStoragePool(StoragePoolType type, String uuid, Map<String, String> details) {
         StorageAdaptor adaptor = getStorageAdaptor(type);
-        logger.debug("[deleteStoragePool] calling adaptor.deleteStoragePool for pool {} (type={})", uuid, type);
         boolean deleteStatus = adaptor.deleteStoragePool(uuid, details);
-        logger.debug("[deleteStoragePool] adaptor.deleteStoragePool returned {} for pool {}", deleteStatus, uuid);
         if (type == StoragePoolType.NetworkFilesystem) {
-            logger.debug("[deleteStoragePool] calling haMonitor.removeStoragePool for NFS pool {}", uuid);
             _haMonitor.removeStoragePool(uuid);
         }
         synchronized (_storagePools) {

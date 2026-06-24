@@ -197,6 +197,39 @@ class OntapRestClient:
         return [r for r in data.get("records", [])
                 if r.get("lun", {}).get("name", "").startswith(prefix)]
 
+    # -- NFS file helpers ----------------------------------------------------
+
+    def list_files_in_volume(self, vol_name, path="/"):
+        """Return a list of file names at ``path`` inside the named FlexVol.
+
+        Uses the ONTAP REST file-system API:
+          GET /api/storage/volumes/{uuid}/files/{url_encoded_path}
+
+        The path must appear in the URL (not as a query parameter).  The root
+        directory is represented as ``%2F``.
+
+        Returns an empty list if the volume does not exist, the path is empty,
+        or the request fails.
+        """
+        vol = self.get_volume(vol_name)
+        if not vol:
+            return []
+        vol_uuid = vol.get("uuid", "")
+        if not vol_uuid:
+            return []
+        # URL-encode the path component (/ → %2F) and embed it in the URL.
+        from urllib.parse import quote
+        encoded_path = quote(path, safe="")
+        try:
+            resp = self._get(
+                "/storage/volumes/%s/files/%s" % (vol_uuid, encoded_path),
+                params={"fields": "name,type", "max_records": "500"}
+            )
+        except Exception:
+            return []
+        return [r.get("name", "") for r in resp.get("records", [])
+                if r.get("name") not in (".", "..")]
+
 
 # ---------------------------------------------------------------------------
 # Base test class

@@ -40,7 +40,7 @@ Prerequisites:
 Running:
   nosetests --with-marvin \\
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
-      test/integration/plugins/ontap/test_ontap_create_primary_storage_nfs3.py -v
+      test/integration/plugins/ontap/nfs3/pool/test_pool_lifecycle.py -v
 
 Note: Tests 01-06 share class-level state (sequential).  Running a single test
 with -m "test_NN" will invoke setUpClass but the guard assertion will fail
@@ -476,18 +476,6 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
     def test_05_cancel_maintenance_mode(self):
         """
         Cancel maintenance mode and verify the pool returns to Up.
-
-        cancelStorageMaintenance sends ModifyStoragePoolCommand(add=True) to the
-        KVM agent, which calls createStoragePool() with details that include
-        nfsMountOptions=vers=3.  The agent rebuilds the libvirt pool XML with the
-        xmlns:fs namespace extension and mounts the NFS share with vers=3.
-
-        Fix confirmed — LibvirtStorageAdaptor now correctly handles the case
-        where a stale-active libvirt pool entry lingers at the mount point after
-        sp.destroy() during enter-maintenance.  The fix:
-          1. Detects a stale-active pool (isActive==1 but mountpoint -q fails)
-             and destroys it before re-creating.
-          2. Retries createNetfsStoragePool once after 5 s on LibvirtException.
 
         Verifies:
           - CloudStack reports pool state Up
