@@ -19,9 +19,12 @@
 
 package org.apache.cloudstack.storage.asup;
 
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.net.NetUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
@@ -30,6 +33,7 @@ import org.apache.cloudstack.poll.BackgroundPollTask;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.EmsApplicationLog;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
@@ -39,8 +43,12 @@ import org.apache.commons.lang3.StringUtils;
 
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Periodic ASUP (AutoSupport) telemetry pusher for the NetApp ONTAP plugin.
@@ -74,10 +82,15 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     /** Default interval (in seconds) used when the configured value is missing or invalid. */
     private static final int ASUP_DEFAULT_INTERVAL_SECONDS = 3600;
 
+    /** Serializes the structured event-description payloads to JSON. */
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @Inject
     private PrimaryDataStoreDao storagePoolDao;
     @Inject
     private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject
+    private VolumeDao volumeDao;
     @Inject
     private BackgroundPollManager backgroundPollManager;
 
@@ -120,8 +133,12 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             String computerName = getComputerName();
             logger.debug("ONTAP ASUP: pushing telemetry for {} pool(s) [CloudStack version={}]",
                     pools.size(), cloudStackVersion);
+            // Tracks clusters that have already received a heartbeat this cycle, so that multiple
+            // pools backed by the same ONTAP cluster emit only a single heartbeat (event-id 0),
+            // while each distinct cluster still gets its own heartbeat per cycle.
+            Set<String> clustersHeartbeated = new HashSet<>();
             for (StoragePoolVO pool : pools) {
-                pushAsupForPool(pool, cloudStackVersion, computerName);
+                pushAsupForPool(pool, cloudStackVersion, computerName, clustersHeartbeated);
             }
         } finally {
             lock.unlock();
@@ -130,9 +147,16 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
     /**
      * Pushes the heartbeat (event-id 0) and pool (event-id 1) ASUP messages for a single pool.
-     * Best-effort: any failure is logged and swallowed.
+     *
+     * <p>The heartbeat is emitted at most once per distinct ONTAP cluster per cycle: the cluster's
+     * UUID (or its storage IP when the UUID is unavailable) is recorded in {@code clustersHeartbeated},
+     * and subsequent pools backed by the same cluster skip the heartbeat. The pool mapping message
+     * is always emitted, once per pool.</p>
+     *
+     * <p>Best-effort: any failure is logged and swallowed.</p>
      */
-    protected void pushAsupForPool(StoragePoolVO pool, String cloudStackVersion, String computerName) {
+    protected void pushAsupForPool(StoragePoolVO pool, String cloudStackVersion, String computerName,
+            Set<String> clustersHeartbeated) {
         try {
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(pool.getId());
             if (details == null || details.isEmpty()) {
@@ -141,21 +165,33 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             }
 
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-            String ontapVersion = strategy.getClusterVersion();
-
-            // event-id 0: CloudStack -> ONTAP cluster heartbeat (versions)
+            // Fetch the ONTAP cluster once and reuse its identity (uuid, name) and version
+            // for both messages, avoiding extra REST round-trips.
+            Cluster cluster = strategy.getClusterInfo();
+            String ontapVersion = strategy.extractClusterVersion(cluster);
+            String clusterUuid = cluster != null ? cluster.getUuid() : null;
+            String clusterName = cluster != null ? cluster.getName() : null;
             String appVersion = buildAppVersion(cloudStackVersion, ontapVersion);
-            EmsApplicationLog heartbeat = buildBaseMessage(computerName, appVersion);
-            heartbeat.setEventId(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT);
-            heartbeat.setEventDescription(String.format(
-                    "CloudStack connected to ONTAP cluster (CloudStack version=%s, ONTAP version=%s)",
-                    cloudStackVersion, defaultUnknown(ontapVersion)));
-            strategy.sendAsupMessage(heartbeat);
 
-            // event-id 1: CloudStack storage pool -> backing ONTAP volume mapping
+            // event-id 0: CloudStack -> ONTAP cluster heartbeat (versions), emitted once per cluster.
+            // Key on the cluster UUID; fall back to the storage IP if the UUID is unavailable.
+            String clusterKey = StringUtils.isNotBlank(clusterUuid) ? clusterUuid
+                    : details.get(OntapStorageConstants.STORAGE_IP);
+            if (clusterKey == null || clustersHeartbeated.add(clusterKey)) {
+                EmsApplicationLog heartbeat = buildBaseMessage(computerName, appVersion);
+                heartbeat.setEventId(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT);
+                heartbeat.setEventDescription(
+                        buildHeartbeatDescription(cloudStackVersion, ontapVersion, clusterUuid));
+                strategy.sendAsupMessage(heartbeat);
+            } else {
+                logger.debug("ONTAP ASUP: heartbeat already sent this cycle for cluster [{}]; skipping for pool [{}]",
+                        defaultUnknown(clusterName), pool.getId());
+            }
+
+            // event-id 1: CloudStack storage pool -> backing ONTAP volume mapping, once per pool.
             EmsApplicationLog poolMessage = buildBaseMessage(computerName, appVersion);
             poolMessage.setEventId(OntapStorageConstants.ASUP_EVENT_ID_POOL);
-            poolMessage.setEventDescription(buildPoolDescription(pool, details));
+            poolMessage.setEventDescription(buildPoolDescription(pool, details, clusterUuid));
             strategy.sendAsupMessage(poolMessage);
 
             logger.debug("ONTAP ASUP: pushed telemetry for pool [{}] (ONTAP version={})",
@@ -167,20 +203,81 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Builds the minimal pool->backing-volume description (NFS and iSCSI), reading the values
-     * persisted in storage_pool_details at pool creation time.
+     * Builds the heartbeat (event-id 0) description as a JSON object carrying the CloudStack and
+     * ONTAP versions, the management-server operating system, plus the ONTAP cluster UUID. Example:
+     * {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":"4.23.0.0",
+     * "os":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1","clusterUuid":"..."}}
      */
-    private String buildPoolDescription(StoragePoolVO pool, Map<String, String> details) {
-        String protocol = defaultUnknown(details.get(OntapStorageConstants.PROTOCOL));
-        String svmName = defaultUnknown(details.get(OntapStorageConstants.SVM_NAME));
-        String ontapVolumeUuid = defaultUnknown(details.get(OntapStorageConstants.VOLUME_UUID));
-        String ontapVolumeName = defaultUnknown(details.get(OntapStorageConstants.VOLUME_NAME));
-        return String.format(
-                "CloudStack storage pool backed by ONTAP volume "
-                        + "{poolId=%d, poolUuid=%s, poolName=%s, protocol=%s, svm=%s, "
-                        + "ontapVolumeUuid=%s, ontapVolumeName=%s}",
-                pool.getId(), defaultUnknown(pool.getUuid()), defaultUnknown(pool.getName()),
-                protocol, svmName, ontapVolumeUuid, ontapVolumeName);
+    private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion,
+            String clusterUuid) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message", "CloudStack connected to ONTAP cluster");
+        payload.put("cloudstackVersion", defaultUnknown(cloudStackVersion));
+        payload.put("os", getOperatingSystem());
+        payload.put("ontapVersion", defaultUnknown(ontapVersion));
+        payload.put("clusterUuid", defaultUnknown(clusterUuid));
+        return toJson(payload);
+    }
+
+    /**
+     * Builds the minimal pool->backing-volume description (NFS and iSCSI) as a JSON object,
+     * reading the values persisted in storage_pool_details at pool creation time and including the
+     * ONTAP cluster UUID plus pool usage (VM count, disk count, total disk size in bytes). Example:
+     * {@code {"message":"CloudStack storage pool backed by ONTAP volume","poolId":1,
+     * "poolUuid":"...","poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
+     * "ontapVolumeUuid":"...","vmCount":12,"diskCount":30,"totalDiskSizeBytes":322122547200}}
+     */
+    private String buildPoolDescription(StoragePoolVO pool, Map<String, String> details,
+            String clusterUuid) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message", "CloudStack storage pool backed by ONTAP volume");
+        payload.put("poolId", pool.getId());
+        payload.put("poolUuid", defaultUnknown(pool.getUuid()));
+        payload.put("poolName", defaultUnknown(pool.getName()));
+        payload.put("protocol", defaultUnknown(details.get(OntapStorageConstants.PROTOCOL)));
+        payload.put("clusterUuid", defaultUnknown(clusterUuid));
+        payload.put("svm", defaultUnknown(details.get(OntapStorageConstants.SVM_NAME)));
+        payload.put("ontapVolumeUuid", defaultUnknown(details.get(OntapStorageConstants.VOLUME_UUID)));
+        addPoolUsage(pool, payload);
+        return toJson(payload);
+    }
+
+    /**
+     * Computes pool usage from CloudStack's volume records and adds it to the payload:
+     * <ul>
+     *     <li>{@code vmCount} - number of distinct VMs with at least one disk on the pool</li>
+     *     <li>{@code diskCount} - number of (non-destroyed) CloudStack volumes on the pool</li>
+     *     <li>{@code totalDiskSizeBytes} - sum of those volumes' sizes, in bytes</li>
+     * </ul>
+     * Best-effort: any failure leaves the usage fields out and never breaks telemetry.
+     */
+    private void addPoolUsage(StoragePoolVO pool, Map<String, Object> payload) {
+        try {
+            List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId());
+            long diskCount = volumes.size();
+            long totalDiskSizeBytes = volumes.stream()
+                    .mapToLong(v -> v.getSize() != null ? v.getSize() : 0L).sum();
+            long vmCount = volumes.stream().map(VolumeVO::getInstanceId)
+                    .filter(Objects::nonNull).distinct().count();
+            payload.put("vmCount", vmCount);
+            payload.put("diskCount", diskCount);
+            payload.put("totalDiskSizeBytes", totalDiskSizeBytes);
+        } catch (Exception e) {
+            logger.warn("ONTAP ASUP: failed to compute usage for pool [{}]: {}", pool.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Serializes a payload map to a JSON string. Falls back to the map's {@code toString()} if
+     * serialization unexpectedly fails, so telemetry is still emitted (best-effort).
+     */
+    private String toJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            logger.warn("ONTAP ASUP: failed to serialize event description to JSON: {}", e.getMessage());
+            return String.valueOf(payload);
+        }
     }
 
     /** Builds the common EMS message envelope shared by all ASUP messages. */
@@ -216,6 +313,27 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     protected String getComputerName() {
         String hostName = NetUtils.getCanonicalHostName();
         return StringUtils.isBlank(hostName) ? OntapStorageConstants.ASUP_UNKNOWN : hostName;
+    }
+
+    /**
+     * Resolves the management server operating system (name, version and architecture) from JVM
+     * system properties, e.g. {@code "Linux 5.15.0-91-generic (amd64)"}. Falls back to "unknown".
+     */
+    protected String getOperatingSystem() {
+        String osName = System.getProperty("os.name");
+        String osVersion = System.getProperty("os.version");
+        String osArch = System.getProperty("os.arch");
+        if (StringUtils.isBlank(osName)) {
+            return OntapStorageConstants.ASUP_UNKNOWN;
+        }
+        StringBuilder sb = new StringBuilder(osName);
+        if (StringUtils.isNotBlank(osVersion)) {
+            sb.append(' ').append(osVersion);
+        }
+        if (StringUtils.isNotBlank(osArch)) {
+            sb.append(" (").append(osArch).append(')');
+        }
+        return sb.toString();
     }
 
     private String defaultUnknown(String value) {
