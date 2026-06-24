@@ -753,7 +753,7 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
 
     /**
      * Thread-safe increment storage pool usage refcount
-     *
+     * 
      * @param uuid UUID of the storage pool to increment the count
      */
     private void incStoragePoolRefCount(String uuid) {
@@ -763,7 +763,7 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
     /**
      * Thread-safe decrement storage pool usage refcount for the given uuid and
      * return if storage pool still in use.
-     *
+     * 
      * @param uuid UUID of the storage pool to decrement the count
      * @return true if the storage pool is still used, else false.
      */
@@ -1432,7 +1432,7 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
          * destination
          * qemu-img will exit with the error that the destination already exists.
          * So for RBD we don't create the image, but let qemu-img do that for us.
-         *
+         * 
          * We then create a KVMPhysicalDisk object that we can return
          */
 
@@ -1663,9 +1663,9 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
          * destination
          * qemu-img will exit with the error that the destination already exists.
          * So for RBD we don't create the image, but let qemu-img do that for us.
-         *
+         * 
          * We then create a KVMPhysicalDisk object that we can return
-         *
+         * 
          * It is however very unlikely that the destPool will be RBD, since it isn't
          * supported
          * for Secondary Storage
