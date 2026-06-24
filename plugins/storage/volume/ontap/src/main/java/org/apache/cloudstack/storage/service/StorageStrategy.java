@@ -117,38 +117,56 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Fetches the ONTAP cluster version (e.g. "9.14.1") for ASUP telemetry.
+     * Fetches the full ONTAP {@link Cluster} object (name, uuid, version) in a single REST call,
+     * for ASUP telemetry. Best-effort: returns {@code null} if it cannot be retrieved, and callers
+     * must never fail a storage operation because of it.
      *
-     * <p>Uses the cluster REST API and returns the {@code version.full} string when present,
-     * otherwise a "generation.major.minor" composition. Returns {@code null} if the version
-     * cannot be determined; callers should treat a null/blank result as best-effort telemetry
-     * and never fail a storage operation because of it.</p>
+     * @return the ONTAP {@link Cluster}, or {@code null} if it cannot be resolved
+     */
+    public Cluster getClusterInfo() {
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            return clusterFeignClient.getCluster(authHeader, true);
+        } catch (Exception e) {
+            logger.warn("getClusterInfo: failed to fetch ONTAP cluster info for storage IP {}: {}",
+                    storage.getStorageIP(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extracts a clean, parser-friendly ONTAP version string from a {@link Cluster}.
+     *
+     * <p>Prefers the compact "generation.major.minor" numeric form (e.g. "9.17.1"), which avoids
+     * the colon/date noise in {@code version.full}. Falls back to the verbose {@code version.full}
+     * banner only when the numeric fields are unavailable.</p>
+     *
+     * @param cluster the cluster (may be {@code null})
+     * @return the ONTAP version string, or {@code null} if it cannot be resolved
+     */
+    public String extractClusterVersion(Cluster cluster) {
+        if (cluster == null || cluster.getVersion() == null) {
+            return null;
+        }
+        Version version = cluster.getVersion();
+        if (version.getGeneration() != null && version.getMajor() != null && version.getMinor() != null) {
+            return version.getGeneration() + OntapStorageConstants.DOT + version.getMajor()
+                    + OntapStorageConstants.DOT + version.getMinor();
+        }
+        if (version.getFull() != null && !version.getFull().isEmpty()) {
+            return version.getFull();
+        }
+        return null;
+    }
+
+    /**
+     * Fetches the ONTAP cluster version (e.g. "9.17.1") for ASUP telemetry. Convenience wrapper
+     * around {@link #getClusterInfo()} and {@link #extractClusterVersion(Cluster)}.
      *
      * @return the ONTAP cluster version string, or {@code null} if it cannot be resolved
      */
     public String getClusterVersion() {
-        try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            Cluster cluster = clusterFeignClient.getCluster(authHeader, true);
-            if (cluster == null || cluster.getVersion() == null) {
-                logger.warn("getClusterVersion: ONTAP cluster version unavailable for storage IP {}", storage.getStorageIP());
-                return null;
-            }
-            Version version = cluster.getVersion();
-            if (version.getFull() != null && !version.getFull().isEmpty()) {
-                return version.getFull();
-            }
-            if (version.getGeneration() != null && version.getMajor() != null && version.getMinor() != null) {
-                return version.getGeneration() + OntapStorageConstants.DOT + version.getMajor()
-                        + OntapStorageConstants.DOT + version.getMinor();
-            }
-            logger.warn("getClusterVersion: ONTAP cluster version fields are empty for storage IP {}", storage.getStorageIP());
-            return null;
-        } catch (Exception e) {
-            logger.warn("getClusterVersion: failed to fetch ONTAP cluster version for storage IP {}: {}",
-                    storage.getStorageIP(), e.getMessage());
-            return null;
-        }
+        return extractClusterVersion(getClusterInfo());
     }
 
     /**
