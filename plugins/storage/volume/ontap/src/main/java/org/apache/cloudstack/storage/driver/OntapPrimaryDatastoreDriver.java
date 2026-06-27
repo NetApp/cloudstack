@@ -97,6 +97,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Map<String, String> mapCapabilities = new HashMap<>();
         mapCapabilities.put(DataStoreCapabilities.STORAGE_SYSTEM_SNAPSHOT.toString(), Boolean.TRUE.toString());
         mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        mapCapabilities.put(DataStoreCapabilities.CAN_REVERT_VOLUME_TO_SNAPSHOT.toString(), Boolean.TRUE.toString());
         return mapCapabilities;
     }
 
@@ -683,6 +684,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (lunUUID == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
+                lunUuid = lunUUID;
             }
 
             // Create FlexVolume snapshot via ONTAP REST API
@@ -788,15 +790,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * specific file (NFS) or LUN (iSCSI) from the FlexVolume snapshot directly
      * via ONTAP REST API, without involving the hypervisor agent.</p>
      *
-     * <p><b>Protocol-specific handling (delegated to strategy classes):</b></p>
-     * <ul>
-     *   <li><b>NFS (UnifiedNASStrategy):</b> Uses the single-file restore API:
-     *       {@code POST /api/storage/volumes/{volume_uuid}/snapshots/{snapshot_uuid}/files/{file_path}/restore}
-     *       Restores the QCOW2 file from the FlexVolume snapshot to its original location.</li>
-     *   <li><b>iSCSI (UnifiedSANStrategy):</b> Uses the LUN restore API:
-     *       {@code POST /api/storage/luns/{lun.uuid}/restore}
-     *       Restores the LUN data from the snapshot to the specified destination path.</li>
-     * </ul>
+     * <p>Both NFS and iSCSI delegate to CLI-based SFSR:
+     * {@code POST /api/private/cli/volume/snapshot/restore-file}</p>
      */
     @Override
     public void revertSnapshot(SnapshotInfo snapshotOnImageStore, SnapshotInfo snapshotOnPrimaryStore,
@@ -846,17 +841,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
                     snapshotName, flexVolUuid, ontapSnapshotUuid, volumePath, lunUuid, flexVolName);
 
-            if (jobResponse == null || jobResponse.getJob() == null) {
-                throw new CloudRuntimeException("Failed to initiate restore from snapshot [" +
-                        snapshotName + "]");
-            }
-
-            // Poll for job completion (use longer timeout for large LUNs/files)
-            Boolean jobSucceeded = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 60, 2000);
-            if (!jobSucceeded) {
-                throw new CloudRuntimeException("Restore job failed for snapshot [" +
-                        snapshotName + "]");
-            }
+            storageStrategy.executeCliSfsrRestore(jobResponse, "revert snapshot [" + snapshotName + "]");
 
             logger.info("revertSnapshot: Successfully restored {} [{}] from snapshot [{}]",
                     ProtocolType.ISCSI.name().equalsIgnoreCase(protocol) ? "LUN" : "file",

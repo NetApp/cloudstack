@@ -108,6 +108,8 @@ public class OntapStorageConstants {
     public static final String ONTAP_TEMP_CG_PREFIX = "cs-temp-cg-";
     public static final int ONTAP_CG_JOB_MAX_RETRIES = 60;
     public static final int ONTAP_CG_JOB_POLL_INTERVAL_MS = 2000;
+    public static final int ONTAP_SFSR_JOB_MAX_RETRIES = 60;
+    public static final int ONTAP_SFSR_JOB_POLL_INTERVAL_MS = 2000;
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";

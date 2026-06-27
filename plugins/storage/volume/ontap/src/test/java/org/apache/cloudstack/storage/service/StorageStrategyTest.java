@@ -823,4 +823,47 @@ public class StorageStrategyTest {
         when(volumeFeignClient.getVolume(anyString(), anyMap()))
                 .thenReturn(volumeResponse);
     }
+
+    // ========== pollJobIfPresent / executeCliSfsrRestore Tests ==========
+
+    @Test
+    void testPollJobIfPresent_NoJob_DoesNotPoll() {
+        storageStrategy.pollJobIfPresent(null, "test operation");
+        storageStrategy.pollJobIfPresent(new JobResponse(), "test operation");
+        verify(jobFeignClient, times(0)).getJobByUUID(anyString(), anyString());
+    }
+
+    @Test
+    void testPollJobIfPresent_WithJob_PollsUntilSuccess() {
+        Job job = new Job();
+        job.setUuid("sfsr-job-1");
+        JobResponse response = new JobResponse();
+        response.setJob(job);
+
+        Job completedJob = new Job();
+        completedJob.setUuid("sfsr-job-1");
+        completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
+        when(jobFeignClient.getJobByUUID(anyString(), eq("sfsr-job-1"))).thenReturn(completedJob);
+
+        storageStrategy.executeCliSfsrRestore(response, "CLI SFSR restore");
+
+        verify(jobFeignClient, atLeastOnce()).getJobByUUID(anyString(), eq("sfsr-job-1"));
+    }
+
+    @Test
+    void testPollJobIfPresent_JobFailure_ThrowsCloudRuntimeException() {
+        Job job = new Job();
+        job.setUuid("sfsr-job-fail");
+        JobResponse response = new JobResponse();
+        response.setJob(job);
+
+        Job failedJob = new Job();
+        failedJob.setUuid("sfsr-job-fail");
+        failedJob.setState(OntapStorageConstants.JOB_FAILURE);
+        failedJob.setMessage("restore failed");
+        when(jobFeignClient.getJobByUUID(anyString(), eq("sfsr-job-fail"))).thenReturn(failedJob);
+
+        assertThrows(CloudRuntimeException.class,
+                () -> storageStrategy.executeCliSfsrRestore(response, "CLI SFSR restore"));
+    }
 }

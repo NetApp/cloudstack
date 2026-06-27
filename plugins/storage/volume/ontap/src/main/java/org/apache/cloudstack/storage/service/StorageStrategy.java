@@ -527,15 +527,13 @@ public abstract class StorageStrategy {
     abstract public CloudStackVolume getCloudStackVolume(Map<String, String> cloudStackVolumeMap);
 
     /**
-     * Reverts a CloudStack volume to a snapshot using protocol-specific ONTAP APIs.
+     * Reverts a CloudStack volume to a snapshot using ONTAP CLI-based Single File Snap Restore (SFSR).
      *
-     * <p>This method encapsulates the snapshot revert behavior based on protocol:</p>
-     * <ul>
-     *   <li><b>iSCSI/FC:</b> Uses {@code POST /api/storage/luns/{lun.uuid}/restore}
-     *       to restore LUN data from the FlexVolume snapshot.</li>
-     *   <li><b>NFS:</b> Uses {@code POST /api/storage/volumes/{vol.uuid}/snapshots/{snap.uuid}/files/{path}/restore}
-     *       to restore a single file from the FlexVolume snapshot.</li>
-     * </ul>
+     * <p>Both NFS and iSCSI use the CLI passthrough API:
+     * {@code POST /api/private/cli/volume/snapshot/restore-file}</p>
+     *
+     * <p>Callers should invoke {@link #executeCliSfsrRestore(JobResponse, String)} after this
+     * method returns to poll the async job when present, or treat a missing job as synchronous success.</p>
      *
      * @param snapshotName     The ONTAP FlexVolume snapshot name
      * @param flexVolUuid      The FlexVolume UUID containing the snapshot
@@ -680,5 +678,46 @@ public abstract class StorageStrategy {
             throw new RuntimeException(e);
         }
         return true;
+    }
+
+    /**
+     * Polls an ONTAP async job when the API response includes a job reference.
+     *
+     * <p>When no job is returned (common for CLI passthrough SFSR on synchronous completion),
+     * the operation is treated as successful after HTTP 2xx.</p>
+     *
+     * @param response       ONTAP job response (may be null or without a job)
+     * @param operationName  label for logging and error messages
+     */
+    public void pollJobIfPresent(JobResponse response, String operationName) {
+        pollJobIfPresent(response, operationName,
+                OntapStorageConstants.ONTAP_CG_JOB_MAX_RETRIES,
+                OntapStorageConstants.ONTAP_CG_JOB_POLL_INTERVAL_MS);
+    }
+
+    /**
+     * Polls an ONTAP async job when present, using caller-supplied retry settings.
+     */
+    public void pollJobIfPresent(JobResponse response, String operationName,
+                                 int maxRetries, int pollIntervalMs) {
+        if (response == null || response.getJob() == null || response.getJob().getUuid() == null) {
+            logger.debug("pollJobIfPresent: No async job returned for operation [{}], continuing without polling",
+                    operationName);
+            return;
+        }
+        Boolean success = jobPollForSuccess(response.getJob().getUuid(), maxRetries, pollIntervalMs);
+        if (!Boolean.TRUE.equals(success)) {
+            throw new CloudRuntimeException("ONTAP operation failed: " + operationName);
+        }
+    }
+
+    /**
+     * Completes CLI-based SFSR ({@code restore-file}) orchestration: poll job when returned,
+     * otherwise accept synchronous success.
+     */
+    public void executeCliSfsrRestore(JobResponse response, String operationName) {
+        pollJobIfPresent(response, operationName,
+                OntapStorageConstants.ONTAP_SFSR_JOB_MAX_RETRIES,
+                OntapStorageConstants.ONTAP_SFSR_JOB_POLL_INTERVAL_MS);
     }
 }

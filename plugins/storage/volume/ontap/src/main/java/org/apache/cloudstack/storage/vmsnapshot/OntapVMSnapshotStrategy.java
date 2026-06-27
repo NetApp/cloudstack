@@ -35,7 +35,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -811,7 +810,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         payload.put("volumes", volumeRefs);
 
         JobResponse response = client.createConsistencyGroup(authHeader, payload);
-        pollJobIfPresent(storageStrategy, response, "create temporary consistency group " + cgName);
+        storageStrategy.pollJobIfPresent(response, "create temporary consistency group " + cgName);
 
         String cgUuid = resolveConsistencyGroupUuidByName(client, authHeader, cgName);
         if (cgUuid == null || cgUuid.isEmpty()) {
@@ -829,7 +828,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         payload.put("name", snapshotName);
         payload.put("action", "start");
         JobResponse response = client.createConsistencyGroupSnapshot(authHeader, cgUuid, payload);
-        pollJobIfPresent(storageStrategy, response, "start CG snapshot " + snapshotName + " for " + cgUuid);
+        storageStrategy.pollJobIfPresent(response, "start CG snapshot " + snapshotName + " for " + cgUuid);
     }
 
     /**
@@ -840,7 +839,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("action", "commit");
         JobResponse response = client.commitConsistencyGroupSnapshot(authHeader, cgUuid, snapshotUuid, payload);
-        pollJobIfPresent(storageStrategy, response, "commit CG snapshot " + snapshotUuid + " for " + cgUuid);
+        storageStrategy.pollJobIfPresent(response, "commit CG snapshot " + snapshotUuid + " for " + cgUuid);
     }
 
     /**
@@ -849,7 +848,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     void deleteTemporaryConsistencyGroup(SnapshotFeignClient client, StorageStrategy storageStrategy,
                                          String authHeader, String cgUuid) {
         JobResponse response = client.deleteConsistencyGroup(authHeader, cgUuid);
-        pollJobIfPresent(storageStrategy, response, "delete temporary consistency group " + cgUuid);
+        storageStrategy.pollJobIfPresent(response, "delete temporary consistency group " + cgUuid);
     }
 
     /**
@@ -885,23 +884,6 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                     snapshotName + "] in CG [" + cgUuid + "]");
         }
         return snapshotUuid;
-    }
-
-    /**
-     * Polls ONTAP job only when the endpoint returns a job reference.
-     */
-    void pollJobIfPresent(StorageStrategy storageStrategy, JobResponse response, String operationName) {
-        if (response == null || response.getJob() == null || response.getJob().getUuid() == null) {
-            logger.debug("pollJobIfPresent: No async job returned for operation [{}], continuing without polling", operationName);
-            return;
-        }
-        Boolean success = storageStrategy.jobPollForSuccess(
-                response.getJob().getUuid(),
-                OntapStorageConstants.ONTAP_CG_JOB_MAX_RETRIES,
-                OntapStorageConstants.ONTAP_CG_JOB_POLL_INTERVAL_MS);
-        if (!Boolean.TRUE.equals(success)) {
-            throw new CloudRuntimeException("ONTAP operation failed: " + operationName);
-        }
     }
 
     private String getStringField(Map<String, Object> record, String key) {
@@ -1036,40 +1018,23 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
             Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
             StorageStrategy storageStrategy = resolveStorageStrategy(poolDetails);
-            SnapshotFeignClient snapshotClient = storageStrategy.getSnapshotFeignClient();
-            String authHeader = storageStrategy.getAuthHeader();
 
-            // Get SVM name and FlexVolume name from pool details
-            String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
             String flexVolName = poolDetails.get(OntapStorageConstants.VOLUME_NAME);
-
-            if (svmName == null || svmName.isEmpty()) {
-                throw new CloudRuntimeException("SVM name not found in pool details for pool [" + detail.poolId + "]");
-            }
             if (flexVolName == null || flexVolName.isEmpty()) {
                 throw new CloudRuntimeException("FlexVolume name not found in pool details for pool [" + detail.poolId + "]");
             }
 
-            // The path must start with "/" for the ONTAP CLI API
             String ontapFilePath = detail.volumePath.startsWith("/") ? detail.volumePath : "/" + detail.volumePath;
 
             logger.info("revertFlexVolSnapshots: Restoring volume [{}] from FlexVol snapshot [{}] on FlexVol [{}] (protocol={})",
                     ontapFilePath, detail.snapshotName, flexVolName, detail.protocol);
 
-            // Use CLI-based restore API: POST /api/private/cli/volume/snapshot/restore-file
-            CliSnapshotRestoreRequest restoreRequest = new CliSnapshotRestoreRequest(
-                    svmName, flexVolName, detail.snapshotName, ontapFilePath);
+            JobResponse jobResponse = storageStrategy.revertSnapshotForCloudStackVolume(
+                    detail.snapshotName, detail.flexVolUuid, detail.snapshotUuid,
+                    detail.volumePath, null, flexVolName);
 
-            JobResponse jobResponse = snapshotClient.restoreFileFromSnapshotCli(authHeader, restoreRequest);
-
-            if (jobResponse != null && jobResponse.getJob() != null) {
-                Boolean success = storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 60, 2000);
-                if (!success) {
-                    throw new CloudRuntimeException("Snapshot file restore failed for volume path [" +
-                            ontapFilePath + "] from snapshot [" + detail.snapshotName +
-                            "] on FlexVol [" + flexVolName + "]");
-                }
-            }
+            storageStrategy.executeCliSfsrRestore(jobResponse,
+                    "VM snapshot file restore for path [" + ontapFilePath + "] from snapshot [" + detail.snapshotName + "]");
 
             logger.info("revertFlexVolSnapshots: Successfully restored volume [{}] from snapshot [{}] on FlexVol [{}]",
                     ontapFilePath, detail.snapshotName, flexVolName);
