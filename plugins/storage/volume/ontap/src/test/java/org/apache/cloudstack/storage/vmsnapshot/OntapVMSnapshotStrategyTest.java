@@ -573,6 +573,12 @@ class OntapVMSnapshotStrategyTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> svm = (Map<String, Object>) payload.get("svm");
         assertEquals("vs0", svm.get("name"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> volumes = (List<Map<String, Object>>) payload.get("volumes");
+        assertEquals(2, volumes.size());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> provisioningOptions = (Map<String, Object>) volumes.get(0).get("provisioning_options");
+        assertEquals(OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD, provisioningOptions.get("action"));
     }
 
     @Test

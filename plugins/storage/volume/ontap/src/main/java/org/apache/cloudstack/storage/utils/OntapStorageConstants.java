@@ -106,6 +106,8 @@ public class OntapStorageConstants {
     public static final String FILE_PATH = "file_path";
     public static final int MAX_SNAPSHOT_NAME_LENGTH = 64;
     public static final String ONTAP_TEMP_CG_PREFIX = "cs-temp-cg-";
+    /** ONTAP CG API: action required when referencing existing FlexVols in a consistency group. */
+    public static final String CG_VOLUME_PROVISIONING_ACTION_ADD = "add";
     public static final int ONTAP_CG_JOB_MAX_RETRIES = 60;
     public static final int ONTAP_CG_JOB_POLL_INTERVAL_MS = 2000;
     public static final int ONTAP_SFSR_JOB_MAX_RETRIES = 60;

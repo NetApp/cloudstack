@@ -826,8 +826,12 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
         List<Map<String, Object>> volumeRefs = new ArrayList<>();
         for (String flexVolUuid : flexVolUuids) {
+            Map<String, Object> provisioningOptions = new LinkedHashMap<>();
+            provisioningOptions.put("action", OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD);
+
             Map<String, Object> volumeRef = new LinkedHashMap<>();
             volumeRef.put("uuid", flexVolUuid);
+            volumeRef.put("provisioning_options", provisioningOptions);
             volumeRefs.add(volumeRef);
         }
 
