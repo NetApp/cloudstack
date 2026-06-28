@@ -63,6 +63,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -234,6 +235,29 @@ public class StorageStrategyTest {
         // Verify
         assertTrue(result, "connect() should return true on success");
         verify(svmFeignClient, times(1)).getSvmResponse(anyMap(), anyString());
+    }
+
+    @Test
+    public void testConnect_operationsOnly_skipsAggregateValidation() {
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        svm.setState(OntapStorageConstants.RUNNING);
+        svm.setNfsEnabled(true);
+
+        Aggregate aggregate = new Aggregate();
+        aggregate.setName("aggr1");
+        aggregate.setUuid("aggr-uuid-1");
+        svm.setAggregates(List.of(aggregate));
+
+        OntapResponse<Svm> svmResponse = new OntapResponse<>();
+        svmResponse.setRecords(List.of(svm));
+
+        when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
+
+        boolean result = storageStrategy.connect(false);
+
+        assertTrue(result);
+        verify(aggregateFeignClient, never()).getAggregateByUUID(anyString(), anyString());
     }
 
     @Test

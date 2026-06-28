@@ -119,7 +119,16 @@ public class OntapStorageUtils {
         }
     }
 
+    /**
+     * Returns a connected {@link StorageStrategy} for operations on an existing pool (snapshots,
+     * delete, revert, grant/revoke). Does not require aggregate free space for the full pool size.
+     */
     public static StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details) {
+        return getStrategyByStoragePoolDetails(details, false);
+    }
+
+    public static StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details,
+            boolean validateAggregatesForVolumeCreation) {
         if (details == null || details.isEmpty()) {
             logger.error("getStrategyByStoragePoolDetails: Storage pool details are null or empty");
             throw new CloudRuntimeException("Storage pool details are null or empty");
@@ -129,7 +138,7 @@ public class OntapStorageUtils {
                 details.get(OntapStorageConstants.STORAGE_IP), details.get(OntapStorageConstants.SVM_NAME), Long.parseLong(details.get(OntapStorageConstants.SIZE)),
                 ProtocolType.valueOf(protocol));
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
+        boolean isValid = storageStrategy.connect(validateAggregatesForVolumeCreation);
         if (isValid) {
             logger.info("Connection to Ontap SVM [{}] successful", details.get(OntapStorageConstants.SVM_NAME));
             return storageStrategy;

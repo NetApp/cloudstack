@@ -97,10 +97,26 @@ public abstract class StorageStrategy {
         this.snapshotFeignClient = feignClientFactory.createClient(SnapshotFeignClient.class, baseURL);
     }
 
-    // Connect method to validate ONTAP cluster, credentials, protocol, and SVM
+    /**
+     * Validates ONTAP cluster reachability, credentials, SVM state, protocol, and aggregate capacity
+     * for new FlexVol creation (primary pool provisioning).
+     */
     public boolean connect() {
+        return connect(true);
+    }
+
+    /**
+     * Validates ONTAP cluster reachability and SVM/protocol settings.
+     *
+     * <p>Aggregate free-space checks apply only when {@code validateAggregatesForVolumeCreation} is
+     * {@code true} (pool provisioning). Snapshot, delete, revert, and grant/revoke paths must use
+     * {@code false} — they operate on an existing FlexVol and must not compare aggregate space to
+     * the full pool capacity stored in pool details.</p>
+     */
+    public boolean connect(boolean validateAggregatesForVolumeCreation) {
         logger.info("Attempting to connect to ONTAP cluster at " + storage.getStorageIP() + " and validate SVM " +
-                storage.getSvmName() + ", protocol " + storage.getProtocol());
+                storage.getSvmName() + ", protocol " + storage.getProtocol()
+                + (validateAggregatesForVolumeCreation ? " (with aggregate validation)" : " (operations only)"));
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         String svmName = storage.getSvmName();
         try {
@@ -130,41 +146,51 @@ public abstract class StorageStrategy {
                 logger.error("ISCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("ISCSI protocol is not enabled on SVM " + svmName);
             }
-            List<Aggregate> aggrs = svm.getAggregates();
-            if (aggrs == null || aggrs.isEmpty()) {
-                logger.error("No aggregates are assigned to SVM " + svmName);
-                throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
-            }
-            for (Aggregate aggr : aggrs) {
-                logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
-                Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
-                if (aggrResp == null) {
-                    logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
-                    break;
-                }
-                if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
-                    logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
-                    continue;
-                } else if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null ||
-                        aggrResp.getAvailableBlockStorageSpace() <= storage.getSize().doubleValue()) {
-                    logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
-                    continue;
-                }
-                logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
-                this.aggregates = List.of(aggr);
-                break;
-            }
-            if (this.aggregates == null || this.aggregates.isEmpty()) {
-                logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
-                throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+
+            if (validateAggregatesForVolumeCreation) {
+                validateAndSelectAggregatesForVolumeCreation(authHeader, svmName, svm.getAggregates());
+            } else {
+                logger.debug("Skipping aggregate capacity validation — not required for existing-volume operations");
             }
 
             logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
+        } catch (CloudRuntimeException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
         }
         return true;
+    }
+
+    private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {
+        if (aggrs == null || aggrs.isEmpty()) {
+            logger.error("No aggregates are assigned to SVM " + svmName);
+            throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
+        }
+        for (Aggregate aggr : aggrs) {
+            logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
+            Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
+            if (aggrResp == null) {
+                logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
+                break;
+            }
+            if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
+                logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
+                continue;
+            } else if (aggrResp.getSpace() == null || aggrResp.getAvailableBlockStorageSpace() == null ||
+                    aggrResp.getAvailableBlockStorageSpace() <= storage.getSize().doubleValue()) {
+                logger.warn("Aggregate " + aggr.getName() + " does not have sufficient available space. Skipping this aggregate.");
+                continue;
+            }
+            logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
+            this.aggregates = List.of(aggr);
+            break;
+        }
+        if (this.aggregates == null || this.aggregates.isEmpty()) {
+            logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+            throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
+        }
     }
 
     // Common methods like create/delete etc., should be here
