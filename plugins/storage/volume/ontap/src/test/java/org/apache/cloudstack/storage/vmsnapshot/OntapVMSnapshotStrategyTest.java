@@ -551,6 +551,44 @@ class OntapVMSnapshotStrategyTest {
                 () -> strategy.groupVolumesByFlexVol(Collections.singletonList(volumeTO1)));
     }
 
+    @Test
+    void testCreateTemporaryConsistencyGroup_includesSvmName() {
+        SnapshotFeignClient client = mock(SnapshotFeignClient.class);
+        StorageStrategy storageStrategy = mock(StorageStrategy.class);
+        when(client.createConsistencyGroup(any(), any())).thenReturn(createJobResponse("job-cg-create"));
+        OntapResponse<Map<String, Object>> cgResponse = new OntapResponse<>();
+        Map<String, Object> cgRecord = new HashMap<>();
+        cgRecord.put("uuid", "cg-uuid-1");
+        cgResponse.setRecords(Collections.singletonList(cgRecord));
+        when(client.getConsistencyGroups(any(), any())).thenReturn(cgResponse);
+
+        String cgUuid = strategy.createTemporaryConsistencyGroup(client, storageStrategy, "auth",
+                "cg-name", "vs0", java.util.Set.of("flexvol-uuid-1", "flexvol-uuid-2"));
+
+        assertEquals("cg-uuid-1", cgUuid);
+        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor = org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(client).createConsistencyGroup(eq("auth"), payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertEquals("cg-name", payload.get("name"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> svm = (Map<String, Object>) payload.get("svm");
+        assertEquals("vs0", svm.get("name"));
+    }
+
+    @Test
+    void testResolveConsistencyGroupSvmName_rejectsDifferentSvms() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = new HashMap<>();
+        Map<String, String> poolDetails1 = new HashMap<>();
+        poolDetails1.put(OntapStorageConstants.SVM_NAME, "vs0");
+        groups.put("flexvol-uuid-1", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails1, POOL_ID_1));
+
+        Map<String, String> poolDetails2 = new HashMap<>();
+        poolDetails2.put(OntapStorageConstants.SVM_NAME, "vs1");
+        groups.put("flexvol-uuid-2", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails2, POOL_ID_2));
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.resolveConsistencyGroupSvmName(groups));
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // Tests: FlexVolSnapshotDetail parse/toString
     // ══════════════════════════════════════════════════════════════════════════
