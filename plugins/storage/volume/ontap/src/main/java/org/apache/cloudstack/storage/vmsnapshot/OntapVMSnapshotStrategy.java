@@ -969,19 +969,16 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             if (!deletedSnapshots.containsKey(dedupeKey)) {
                 Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
                 StorageStrategy storageStrategy = resolveStorageStrategy(poolDetails);
-                SnapshotFeignClient client = storageStrategy.getSnapshotFeignClient();
-                String authHeader = storageStrategy.getAuthHeader();
 
                 logger.info("deleteFlexVolSnapshots: Deleting ONTAP FlexVol snapshot [{}] (uuid={}) on FlexVol [{}]",
                         detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid);
 
-                JobResponse jobResponse = client.deleteSnapshot(authHeader, detail.flexVolUuid, detail.snapshotUuid);
-                if (jobResponse != null && jobResponse.getJob() != null) {
-                    storageStrategy.jobPollForSuccess(jobResponse.getJob().getUuid(), 30, 2000);
-                }
+                storageStrategy.deleteFlexVolSnapshotForCloudStackVolume(
+                        detail.flexVolUuid, detail.snapshotUuid, detail.snapshotName);
 
                 deletedSnapshots.put(dedupeKey, Boolean.TRUE);
-                logger.info("deleteFlexVolSnapshots: Deleted ONTAP FlexVol snapshot [{}] on FlexVol [{}]", detail.snapshotName, detail.flexVolUuid);
+                logger.info("deleteFlexVolSnapshots: Deleted ONTAP FlexVol snapshot [{}] on FlexVol [{}]",
+                        detail.snapshotName, detail.flexVolUuid);
             }
 
             // Always remove the DB detail row

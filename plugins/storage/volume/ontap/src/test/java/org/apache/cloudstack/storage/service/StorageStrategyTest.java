@@ -24,6 +24,7 @@ import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
+import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
@@ -88,6 +89,9 @@ public class StorageStrategyTest {
     @Mock
     private SANFeignClient sanFeignClient;
 
+    @Mock
+    private SnapshotFeignClient snapshotFeignClient;
+
     private TestableStorageStrategy storageStrategy;
 
     // Concrete implementation for testing abstract class
@@ -98,7 +102,8 @@ public class StorageStrategyTest {
                                        SvmFeignClient svmFeignClient,
                                        JobFeignClient jobFeignClient,
                                        NetworkFeignClient networkFeignClient,
-                                       SANFeignClient sanFeignClient) {
+                                       SANFeignClient sanFeignClient,
+                                       SnapshotFeignClient snapshotFeignClient) {
             super(ontapStorage);
             // Use reflection to replace the private Feign client fields with mocked ones
             injectMockedClient("aggregateFeignClient", aggregateFeignClient);
@@ -107,6 +112,7 @@ public class StorageStrategyTest {
             injectMockedClient("jobFeignClient", jobFeignClient);
             injectMockedClient("networkFeignClient", networkFeignClient);
             injectMockedClient("sanFeignClient", sanFeignClient);
+            injectMockedClient("snapshotFeignClient", snapshotFeignClient);
         }
 
         private void injectMockedClient(String fieldName, Object mockedClient) {
@@ -192,7 +198,7 @@ public class StorageStrategyTest {
         // For testing, we'll need to mock the FeignClientFactory behavior
         storageStrategy = new TestableStorageStrategy(ontapStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
     }
 
     // ========== connect() Tests ==========
@@ -291,7 +297,7 @@ public class StorageStrategyTest {
                 "svm1", 5000000000L, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
 
         Svm svm = new Svm();
         svm.setName("svm1");
@@ -608,7 +614,7 @@ public class StorageStrategyTest {
                 "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
 
         IscsiService.IscsiServiceTarget target = new IscsiService.IscsiServiceTarget();
         target.setName("iqn.1992-08.com.netapp:sn.123456:vs.1");
@@ -638,7 +644,7 @@ public class StorageStrategyTest {
                 "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
 
         OntapResponse<IscsiService> emptyResponse = new OntapResponse<>();
         emptyResponse.setRecords(new ArrayList<>());
@@ -659,7 +665,7 @@ public class StorageStrategyTest {
                 "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
 
         IscsiService iscsiService = new IscsiService();
         iscsiService.setTarget(null);
@@ -709,7 +715,7 @@ public class StorageStrategyTest {
                 "svm1", null, ProtocolType.ISCSI);
         storageStrategy = new TestableStorageStrategy(iscsiStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
-                jobFeignClient, networkFeignClient, sanFeignClient);
+                jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
 
         IpInterface.IpInfo ipInfo = new IpInterface.IpInfo();
         ipInfo.setAddress("192.168.1.51");
@@ -865,5 +871,24 @@ public class StorageStrategyTest {
 
         assertThrows(CloudRuntimeException.class,
                 () -> storageStrategy.executeCliSfsrRestore(response, "CLI SFSR restore"));
+    }
+
+    @Test
+    void testDeleteFlexVolSnapshotForCloudStackVolume_PollsJobAndSucceeds() {
+        Job job = new Job();
+        job.setUuid("delete-job-1");
+        JobResponse response = new JobResponse();
+        response.setJob(job);
+        when(snapshotFeignClient.deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1")))
+                .thenReturn(response);
+
+        Job completedJob = new Job();
+        completedJob.setUuid("delete-job-1");
+        completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
+        when(jobFeignClient.getJobByUUID(anyString(), eq("delete-job-1"))).thenReturn(completedJob);
+
+        storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
+
+        verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
     }
 }

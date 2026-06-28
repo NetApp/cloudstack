@@ -720,4 +720,47 @@ public abstract class StorageStrategy {
                 OntapStorageConstants.ONTAP_SFSR_JOB_MAX_RETRIES,
                 OntapStorageConstants.ONTAP_SFSR_JOB_POLL_INTERVAL_MS);
     }
+
+    /**
+     * Deletes a FlexVolume snapshot on ONTAP for a CloudStack volume snapshot.
+     *
+     * <p>ONTAP volume snapshots (NFS and iSCSI) are FlexVol-level snapshots created by
+     * {@code POST /storage/volumes/{uuid}/snapshots} during take. Delete uses the matching
+     * REST {@code DELETE /storage/volumes/{uuid}/snapshots/{snapshot.uuid}} API regardless
+     * of whether the CloudStack volume is a file (NFS) or LUN (iSCSI). Protocol-specific
+     * subclasses ({@code UnifiedNASStrategy}, {@code UnifiedSANStrategy}) inherit this
+     * implementation; revert/restore remains protocol-specific via SFSR CLI.</p>
+     *
+     * <p>Called from {@link org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver}
+     * during the standard delete chain — not from a separate ONTAP snapshot strategy.</p>
+     *
+     * @param flexVolUuid   ONTAP FlexVolume UUID
+     * @param snapshotUuid  ONTAP FlexVolume snapshot UUID
+     * @param snapshotName  ONTAP FlexVolume snapshot name (for logging)
+     */
+    public void deleteFlexVolSnapshotForCloudStackVolume(String flexVolUuid, String snapshotUuid, String snapshotName) {
+        if (flexVolUuid == null || flexVolUuid.isEmpty() || snapshotUuid == null || snapshotUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume UUID and snapshot UUID are required to delete an ONTAP snapshot");
+        }
+
+        logger.info("deleteFlexVolSnapshotForCloudStackVolume: issuing ONTAP REST delete for snapshot [{}] "
+                + "(uuid={}) on FlexVol [{}]", snapshotName, snapshotUuid, flexVolUuid);
+
+        JobResponse jobResponse = snapshotFeignClient.deleteSnapshot(getAuthHeader(), flexVolUuid, snapshotUuid);
+
+        if (jobResponse == null || jobResponse.getJob() == null) {
+            logger.debug("deleteFlexVolSnapshotForCloudStackVolume: no async job returned for snapshot [{}] "
+                    + "(uuid={}); treating HTTP success as completion", snapshotName, snapshotUuid);
+        } else {
+            logger.debug("deleteFlexVolSnapshotForCloudStackVolume: polling ONTAP delete job [{}] for snapshot [{}]",
+                    jobResponse.getJob().getUuid(), snapshotName);
+        }
+
+        pollJobIfPresent(jobResponse, "delete FlexVol snapshot [" + snapshotName + "] uuid [" + snapshotUuid + "]",
+                OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_MAX_RETRIES,
+                OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_POLL_INTERVAL_MS);
+
+        logger.info("deleteFlexVolSnapshotForCloudStackVolume: ONTAP FlexVol snapshot [{}] (uuid={}) removed from [{}]",
+                snapshotName, snapshotUuid, flexVolUuid);
+    }
 }
