@@ -981,7 +981,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                                               String cgUuid, String snapshotName) {
         Map<String, Object> query = new HashMap<>();
         query.put("name", snapshotName);
-        query.put("fields", "uuid,name,state");
+        query.put("fields", "uuid,name");
         OntapResponse<Map<String, Object>> response = client.getConsistencyGroupSnapshots(authHeader, cgUuid, query);
         String snapshotUuid = findConsistencyGroupSnapshotUuidInRecords(response, snapshotName);
         if (snapshotUuid != null) {
@@ -989,7 +989,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         }
 
         Map<String, Object> listAllQuery = new HashMap<>();
-        listAllQuery.put("fields", "uuid,name,state");
+        listAllQuery.put("fields", "uuid,name");
         OntapResponse<Map<String, Object>> allSnapshots = client.getConsistencyGroupSnapshots(authHeader, cgUuid, listAllQuery);
         return findConsistencyGroupSnapshotUuidInRecords(allSnapshots, snapshotName);
     }
