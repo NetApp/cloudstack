@@ -36,6 +36,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
+import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -709,13 +710,12 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             logger.info("takeVMSnapshot: [CG:Create] Creating temporary consistency group [{}] for VM [{}] over {} FlexVol(s)",
                     tempCgName, userVm.getInstanceName(), flexVolGroups.size());
             tempCgUuid = createTemporaryConsistencyGroup(snapshotClient, storageStrategy, authHeader, tempCgName,
-                    resolveConsistencyGroupSvmName(flexVolGroups), flexVolGroups.keySet());
+                    resolveConsistencyGroupScope(flexVolGroups), flexVolGroups.keySet());
 
             logger.info("takeVMSnapshot: [CG:Start] Starting phase-1 snapshot [{}] for temporary consistency group [{}]",
                     snapshotNameBase, tempCgUuid);
-            startConsistencyGroupSnapshot(snapshotClient, storageStrategy, authHeader, tempCgUuid, snapshotNameBase);
-
-            cgSnapshotUuid = resolveConsistencyGroupSnapshotUuid(snapshotClient, authHeader, tempCgUuid, snapshotNameBase);
+            cgSnapshotUuid = resolveStartedConsistencyGroupSnapshotUuid(snapshotClient, storageStrategy,
+                    authHeader, tempCgUuid, snapshotNameBase);
 
             logger.info("takeVMSnapshot: [CG:Commit] Committing phase-2 snapshot [{}] (uuid={}) for temporary consistency group [{}]",
                     snapshotNameBase, cgSnapshotUuid, tempCgUuid);
@@ -795,33 +795,50 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     }
 
     /**
-     * ONTAP consistency groups are scoped to a single SVM. All participating FlexVols must belong to it.
+     * Validates and returns the ONTAP scope for a temporary consistency group.
+     *
+     * <p>CG membership requires all FlexVols on the same ONTAP management endpoint and SVM.
+     * SVM name alone is not sufficient — different clusters may reuse names such as {@code vs0}.
+     * Identity uses {@code storageIP} plus {@code svmUUID} when persisted, otherwise
+     * {@code storageIP} plus {@code svmName} for legacy pools.</p>
      */
-    String resolveConsistencyGroupSvmName(Map<String, FlexVolGroupInfo> flexVolGroups) {
-        String svmName = null;
+    ConsistencyGroupScope resolveConsistencyGroupScope(Map<String, FlexVolGroupInfo> flexVolGroups) {
+        ConsistencyGroupScope scope = null;
         for (FlexVolGroupInfo group : flexVolGroups.values()) {
-            String candidate = group.poolDetails.get(OntapStorageConstants.SVM_NAME);
-            if (candidate == null || candidate.trim().isEmpty()) {
-                throw new CloudRuntimeException("SVM name not found in pool details for pool [" + group.poolId + "]");
-            }
-            if (svmName == null) {
-                svmName = candidate;
-            } else if (!svmName.equals(candidate)) {
-                throw new CloudRuntimeException("ONTAP consistency groups require all VM volumes on the same SVM; found ["
-                        + svmName + "] and [" + candidate + "]");
+            ConsistencyGroupScope candidate = consistencyGroupScopeFromPoolDetails(group.poolDetails, group.poolId);
+            if (scope == null) {
+                scope = candidate;
+            } else if (!scope.matches(candidate)) {
+                throw new CloudRuntimeException("ONTAP consistency groups require all VM volumes on the same "
+                        + "ONTAP cluster and SVM. Found [" + scope + "] and [" + candidate + "]");
             }
         }
-        return svmName;
+        return scope;
+    }
+
+    ConsistencyGroupScope consistencyGroupScopeFromPoolDetails(Map<String, String> poolDetails, long poolId) {
+        String storageIp = poolDetails.get(OntapStorageConstants.STORAGE_IP);
+        if (storageIp == null || storageIp.trim().isEmpty()) {
+            throw new CloudRuntimeException("ONTAP storage management IP not found in pool details for pool ["
+                    + poolId + "]");
+        }
+        String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
+        if (svmName == null || svmName.trim().isEmpty()) {
+            throw new CloudRuntimeException("SVM name not found in pool details for pool [" + poolId + "]");
+        }
+        String svmUuid = poolDetails.get(OntapStorageConstants.SVM_UUID);
+        return new ConsistencyGroupScope(storageIp.trim(), svmName.trim(),
+                svmUuid != null && !svmUuid.trim().isEmpty() ? svmUuid.trim() : null);
     }
 
     /**
      * Creates a temporary consistency group for the involved FlexVol UUIDs and returns its UUID.
      */
     String createTemporaryConsistencyGroup(SnapshotFeignClient client, StorageStrategy storageStrategy,
-                                           String authHeader, String cgName, String svmName,
+                                           String authHeader, String cgName, ConsistencyGroupScope cgScope,
                                            Set<String> flexVolUuids) {
-        if (svmName == null || svmName.trim().isEmpty()) {
-            throw new CloudRuntimeException("SVM name is required to create ONTAP consistency group [" + cgName + "]");
+        if (cgScope == null) {
+            throw new CloudRuntimeException("ONTAP consistency group scope is required to create CG [" + cgName + "]");
         }
 
         List<Map<String, Object>> volumeRefs = new ArrayList<>();
@@ -835,8 +852,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             volumeRefs.add(volumeRef);
         }
 
-        Map<String, Object> svmRef = new LinkedHashMap<>();
-        svmRef.put("name", svmName);
+        Map<String, Object> svmRef = cgScope.toOntapSvmReference();
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("name", cgName);
@@ -846,7 +862,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         JobResponse response = client.createConsistencyGroup(authHeader, payload);
         storageStrategy.pollJobIfPresent(response, "create temporary consistency group " + cgName);
 
-        String cgUuid = resolveConsistencyGroupUuidByName(client, authHeader, cgName, svmName);
+        String cgUuid = resolveConsistencyGroupUuidByName(client, authHeader, cgName, cgScope);
         if (cgUuid == null || cgUuid.isEmpty()) {
             throw new CloudRuntimeException("Unable to resolve temporary consistency group UUID for [" + cgName + "]");
         }
@@ -854,15 +870,26 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     }
 
     /**
-     * Starts phase-1 of the two-phase CG snapshot.
+     * Starts phase-1 of the two-phase CG snapshot and returns the CG snapshot UUID when ONTAP exposes it in the job record.
      */
-    void startConsistencyGroupSnapshot(SnapshotFeignClient client, StorageStrategy storageStrategy,
+    String startConsistencyGroupSnapshot(SnapshotFeignClient client, StorageStrategy storageStrategy,
                                        String authHeader, String cgUuid, String snapshotName) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("name", snapshotName);
         payload.put("action", "start");
         JobResponse response = client.createConsistencyGroupSnapshot(authHeader, cgUuid, payload);
-        storageStrategy.pollJobIfPresent(response, "start CG snapshot " + snapshotName + " for " + cgUuid);
+        Job completedJob = storageStrategy.pollJobIfPresentAndGetCompletedJob(response,
+                "start CG snapshot " + snapshotName + " for " + cgUuid);
+        if (completedJob == null) {
+            return null;
+        }
+        String snapshotUuid = OntapStorageUtils.extractUuidFromOntapJobDescription(
+                completedJob.getDescription(), "/snapshots/");
+        if (snapshotUuid != null) {
+            logger.info("takeVMSnapshot: [CG:Start] Resolved CG snapshot UUID [{}] from ONTAP job for snapshot [{}]",
+                    snapshotUuid, snapshotName);
+        }
+        return snapshotUuid;
     }
 
     /**
@@ -886,13 +913,13 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     }
 
     /**
-     * Resolves consistency group UUID by name within the given SVM.
+     * Resolves consistency group UUID by name within the given ONTAP cluster/SVM scope.
      */
     String resolveConsistencyGroupUuidByName(SnapshotFeignClient client, String authHeader,
-                                             String cgName, String svmName) {
+                                             String cgName, ConsistencyGroupScope cgScope) {
         Map<String, Object> query = new HashMap<>();
         query.put("name", cgName);
-        query.put("svm.name", svmName);
+        cgScope.applySvmQueryFilter(query);
         query.put("fields", "uuid,name");
         OntapResponse<Map<String, Object>> response = client.getConsistencyGroups(authHeader, query);
         if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
@@ -902,24 +929,86 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     }
 
     /**
-     * Resolves consistency group snapshot UUID by name.
+     * Resolves the started CG snapshot UUID after phase-1, using the job record when available and polling GET otherwise.
      */
-    String resolveConsistencyGroupSnapshotUuid(SnapshotFeignClient client, String authHeader,
-                                               String cgUuid, String snapshotName) {
+    String resolveStartedConsistencyGroupSnapshotUuid(SnapshotFeignClient client, StorageStrategy storageStrategy,
+                                                    String authHeader, String cgUuid, String snapshotName) {
+        String snapshotUuidFromJob = startConsistencyGroupSnapshot(client, storageStrategy, authHeader, cgUuid, snapshotName);
+        if (snapshotUuidFromJob != null && !snapshotUuidFromJob.isEmpty()) {
+            return snapshotUuidFromJob;
+        }
+        return resolveConsistencyGroupSnapshotUuid(client, storageStrategy, authHeader, cgUuid, snapshotName);
+    }
+
+    /**
+     * Resolves consistency group snapshot UUID by name with retries (ONTAP list can lag behind job success).
+     */
+    String resolveConsistencyGroupSnapshotUuid(SnapshotFeignClient client, StorageStrategy storageStrategy,
+                                               String authHeader, String cgUuid, String snapshotName) {
+        int maxRetries = OntapStorageConstants.ONTAP_CG_SNAPSHOT_RESOLVE_MAX_RETRIES;
+        int pollIntervalMs = OntapStorageConstants.ONTAP_CG_SNAPSHOT_RESOLVE_POLL_INTERVAL_MS;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            String snapshotUuid = lookupConsistencyGroupSnapshotUuid(client, authHeader, cgUuid, snapshotName);
+            if (snapshotUuid != null) {
+                if (attempt > 1) {
+                    logger.info("takeVMSnapshot: [CG:Resolve] CG snapshot [{}] resolved on attempt {}/{}",
+                            snapshotName, attempt, maxRetries);
+                }
+                return snapshotUuid;
+            }
+            if (attempt < maxRetries) {
+                logger.debug("takeVMSnapshot: [CG:Resolve] CG snapshot [{}] not yet visible in CG [{}], retry {}/{}",
+                        snapshotName, cgUuid, attempt, maxRetries);
+                try {
+                    Thread.sleep(pollIntervalMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new CloudRuntimeException("Interrupted while resolving CG snapshot [" + snapshotName + "]", e);
+                }
+            }
+        }
+
+        throw new CloudRuntimeException("Unable to resolve consistency group snapshot UUID for snapshot [" +
+                snapshotName + "] in CG [" + cgUuid + "] after " + maxRetries + " attempts");
+    }
+
+    /**
+     * Single GET attempt: match by name, then fall back to listing all CG snapshots in this group (And it would one
+     *  always since workflow is keep deleting the CG).
+     */
+    String lookupConsistencyGroupSnapshotUuid(SnapshotFeignClient client, String authHeader,
+                                              String cgUuid, String snapshotName) {
         Map<String, Object> query = new HashMap<>();
         query.put("name", snapshotName);
-        query.put("fields", "uuid,name");
+        query.put("fields", "uuid,name,state");
         OntapResponse<Map<String, Object>> response = client.getConsistencyGroupSnapshots(authHeader, cgUuid, query);
+        String snapshotUuid = findConsistencyGroupSnapshotUuidInRecords(response, snapshotName);
+        if (snapshotUuid != null) {
+            return snapshotUuid;
+        }
+
+        Map<String, Object> listAllQuery = new HashMap<>();
+        listAllQuery.put("fields", "uuid,name,state");
+        OntapResponse<Map<String, Object>> allSnapshots = client.getConsistencyGroupSnapshots(authHeader, cgUuid, listAllQuery);
+        return findConsistencyGroupSnapshotUuidInRecords(allSnapshots, snapshotName);
+    }
+
+    private String findConsistencyGroupSnapshotUuidInRecords(OntapResponse<Map<String, Object>> response,
+                                                               String snapshotName) {
         if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
-            throw new CloudRuntimeException("Unable to resolve consistency group snapshot UUID for snapshot [" +
-                    snapshotName + "] in CG [" + cgUuid + "]");
+            return null;
         }
-        String snapshotUuid = getStringField(response.getRecords().get(0), "uuid");
-        if (snapshotUuid == null || snapshotUuid.isEmpty()) {
-            throw new CloudRuntimeException("Invalid consistency group snapshot UUID for snapshot [" +
-                    snapshotName + "] in CG [" + cgUuid + "]");
+        for (Map<String, Object> record : response.getRecords()) {
+            String name = getStringField(record, "name");
+            if (snapshotName.equals(name)) {
+                String uuid = getStringField(record, "uuid");
+                if (uuid != null && !uuid.isEmpty()) {
+                    return uuid;
+                }
+            }
         }
-        return snapshotUuid;
+        return null;
     }
 
     private String getStringField(Map<String, Object> record, String key) {
@@ -1089,6 +1178,58 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         FlexVolGroupInfo(Map<String, String> poolDetails, long poolId) {
             this.poolDetails = poolDetails;
             this.poolId = poolId;
+        }
+    }
+
+    /**
+     * Identifies the ONTAP cluster management endpoint and SVM for CG operations.
+     */
+    static class ConsistencyGroupScope {
+        final String storageIp;
+        final String svmName;
+        final String svmUuid;
+
+        ConsistencyGroupScope(String storageIp, String svmName, String svmUuid) {
+            this.storageIp = storageIp;
+            this.svmName = svmName;
+            this.svmUuid = svmUuid;
+        }
+
+        boolean matches(ConsistencyGroupScope other) {
+            return other != null && identityKey().equals(other.identityKey());
+        }
+
+        String identityKey() {
+            if (svmUuid != null && !svmUuid.isEmpty()) {
+                return storageIp + "|" + svmUuid;
+            }
+            return storageIp + "|" + svmName;
+        }
+
+        Map<String, Object> toOntapSvmReference() {
+            Map<String, Object> svmRef = new LinkedHashMap<>();
+            if (svmUuid != null && !svmUuid.isEmpty()) {
+                svmRef.put("uuid", svmUuid);
+            } else {
+                svmRef.put("name", svmName);
+            }
+            return svmRef;
+        }
+
+        void applySvmQueryFilter(Map<String, Object> query) {
+            if (svmUuid != null && !svmUuid.isEmpty()) {
+                query.put("svm.uuid", svmUuid);
+            } else {
+                query.put("svm.name", svmName);
+            }
+        }
+
+        @Override
+        public String toString() {
+            if (svmUuid != null && !svmUuid.isEmpty()) {
+                return "storageIP=" + storageIp + ", svmUUID=" + svmUuid + ", svmName=" + svmName;
+            }
+            return "storageIP=" + storageIp + ", svmName=" + svmName;
         }
     }
 

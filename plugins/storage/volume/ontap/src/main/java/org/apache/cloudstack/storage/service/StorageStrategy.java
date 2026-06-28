@@ -78,6 +78,7 @@ public abstract class StorageStrategy {
      * Presents aggregate object for the unified storage, not eligible for disaggregated
      */
     private List<Aggregate> aggregates;
+    private String resolvedSvmUuid;
 
     private static final Logger logger = LogManager.getLogger(StorageStrategy.class);
 
@@ -142,10 +143,11 @@ public abstract class StorageStrategy {
             if (Objects.equals(storage.getProtocol(), ProtocolType.NFS3) && !svm.getNfsEnabled()) {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
-            } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
+            } else             if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("ISCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("ISCSI protocol is not enabled on SVM " + svmName);
             }
+            this.resolvedSvmUuid = svm.getUuid();
 
             if (validateAggregatesForVolumeCreation) {
                 validateAndSelectAggregatesForVolumeCreation(authHeader, svmName, svm.getAggregates());
@@ -161,6 +163,13 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
         }
         return true;
+    }
+
+    /**
+     * ONTAP SVM UUID resolved during the last successful {@link #connect(boolean)} call.
+     */
+    public String getResolvedSvmUuid() {
+        return resolvedSvmUuid;
     }
 
     private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {
@@ -670,7 +679,13 @@ public abstract class StorageStrategy {
      * @return true if the job completed successfully
      */
     public Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInMilliSecs) {
-        //Create URI for GET Job API
+        return jobPollUntilSuccess(jobUUID, maxRetries, sleepTimeInMilliSecs) != null;
+    }
+
+    /**
+     * Polls an ONTAP async job until it succeeds and returns the completed job record.
+     */
+    public Job jobPollUntilSuccess(String jobUUID, int maxRetries, int sleepTimeInMilliSecs) {
         int jobRetryCount = 0;
         Job jobResp = null;
         try {
@@ -696,14 +711,15 @@ public abstract class StorageStrategy {
                 Thread.sleep(sleepTimeInMilliSecs);
             }
             if (jobResp == null || !jobResp.getState().equals(OntapStorageConstants.JOB_SUCCESS)) {
-                return false;
+                return null;
             }
+            return jobResp;
         } catch (FeignException.FeignClientException e) {
             throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
+            throw new CloudRuntimeException("Interrupted while polling ONTAP job " + jobUUID, e);
         }
-        return true;
     }
 
     /**
@@ -735,6 +751,24 @@ public abstract class StorageStrategy {
         if (!Boolean.TRUE.equals(success)) {
             throw new CloudRuntimeException("ONTAP operation failed: " + operationName);
         }
+    }
+
+    /**
+     * Polls an ONTAP async job when present and returns the completed job (for extracting created resource UUIDs).
+     */
+    public Job pollJobIfPresentAndGetCompletedJob(JobResponse response, String operationName) {
+        return pollJobIfPresentAndGetCompletedJob(response, operationName,
+                OntapStorageConstants.ONTAP_CG_JOB_MAX_RETRIES,
+                OntapStorageConstants.ONTAP_CG_JOB_POLL_INTERVAL_MS);
+    }
+
+    public Job pollJobIfPresentAndGetCompletedJob(JobResponse response, String operationName,
+                                                  int maxRetries, int pollIntervalMs) {
+        if (response == null || response.getJob() == null || response.getJob().getUuid() == null) {
+            logger.debug("pollJobIfPresentAndGetCompletedJob: No async job for operation [{}]", operationName);
+            return null;
+        }
+        return jobPollUntilSuccess(response.getJob().getUuid(), maxRetries, pollIntervalMs);
     }
 
     /**

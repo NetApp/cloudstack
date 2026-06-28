@@ -563,7 +563,8 @@ class OntapVMSnapshotStrategyTest {
         when(client.getConsistencyGroups(any(), any())).thenReturn(cgResponse);
 
         String cgUuid = strategy.createTemporaryConsistencyGroup(client, storageStrategy, "auth",
-                "cg-name", "vs0", java.util.Set.of("flexvol-uuid-1", "flexvol-uuid-2"));
+                "cg-name", new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", "svm-uuid-1"),
+                java.util.Set.of("flexvol-uuid-1", "flexvol-uuid-2"));
 
         assertEquals("cg-uuid-1", cgUuid);
         org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor = org.mockito.ArgumentCaptor.forClass(Map.class);
@@ -572,7 +573,7 @@ class OntapVMSnapshotStrategyTest {
         assertEquals("cg-name", payload.get("name"));
         @SuppressWarnings("unchecked")
         Map<String, Object> svm = (Map<String, Object>) payload.get("svm");
-        assertEquals("vs0", svm.get("name"));
+        assertEquals("svm-uuid-1", svm.get("uuid"));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> volumes = (List<Map<String, Object>>) payload.get("volumes");
         assertEquals(2, volumes.size());
@@ -582,17 +583,57 @@ class OntapVMSnapshotStrategyTest {
     }
 
     @Test
-    void testResolveConsistencyGroupSvmName_rejectsDifferentSvms() {
+    void testResolveConsistencyGroupScope_rejectsDifferentStorageIpWithSameSvmName() {
         Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = new HashMap<>();
         Map<String, String> poolDetails1 = new HashMap<>();
+        poolDetails1.put(OntapStorageConstants.STORAGE_IP, "10.1.1.1");
         poolDetails1.put(OntapStorageConstants.SVM_NAME, "vs0");
         groups.put("flexvol-uuid-1", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails1, POOL_ID_1));
 
         Map<String, String> poolDetails2 = new HashMap<>();
-        poolDetails2.put(OntapStorageConstants.SVM_NAME, "vs1");
+        poolDetails2.put(OntapStorageConstants.STORAGE_IP, "10.2.2.2");
+        poolDetails2.put(OntapStorageConstants.SVM_NAME, "vs0");
         groups.put("flexvol-uuid-2", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails2, POOL_ID_2));
 
-        assertThrows(CloudRuntimeException.class, () -> strategy.resolveConsistencyGroupSvmName(groups));
+        assertThrows(CloudRuntimeException.class, () -> strategy.resolveConsistencyGroupScope(groups));
+    }
+
+    @Test
+    void testResolveConsistencyGroupScope_acceptsSameClusterAndSvmUuid() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = new HashMap<>();
+        Map<String, String> poolDetails1 = new HashMap<>();
+        poolDetails1.put(OntapStorageConstants.STORAGE_IP, "10.1.1.1");
+        poolDetails1.put(OntapStorageConstants.SVM_NAME, "vs0");
+        poolDetails1.put(OntapStorageConstants.SVM_UUID, "svm-uuid-shared");
+        groups.put("flexvol-uuid-1", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails1, POOL_ID_1));
+
+        Map<String, String> poolDetails2 = new HashMap<>();
+        poolDetails2.put(OntapStorageConstants.STORAGE_IP, "10.1.1.1");
+        poolDetails2.put(OntapStorageConstants.SVM_NAME, "vs0");
+        poolDetails2.put(OntapStorageConstants.SVM_UUID, "svm-uuid-shared");
+        groups.put("flexvol-uuid-2", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails2, POOL_ID_2));
+
+        OntapVMSnapshotStrategy.ConsistencyGroupScope scope = strategy.resolveConsistencyGroupScope(groups);
+        assertEquals("svm-uuid-shared", scope.svmUuid);
+        assertEquals("10.1.1.1", scope.storageIp);
+    }
+
+    @Test
+    void testResolveConsistencyGroupScope_rejectsDifferentSvmUuidOnSameCluster() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = new HashMap<>();
+        Map<String, String> poolDetails1 = new HashMap<>();
+        poolDetails1.put(OntapStorageConstants.STORAGE_IP, "10.1.1.1");
+        poolDetails1.put(OntapStorageConstants.SVM_NAME, "vs0");
+        poolDetails1.put(OntapStorageConstants.SVM_UUID, "svm-uuid-1");
+        groups.put("flexvol-uuid-1", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails1, POOL_ID_1));
+
+        Map<String, String> poolDetails2 = new HashMap<>();
+        poolDetails2.put(OntapStorageConstants.STORAGE_IP, "10.1.1.1");
+        poolDetails2.put(OntapStorageConstants.SVM_NAME, "vs0");
+        poolDetails2.put(OntapStorageConstants.SVM_UUID, "svm-uuid-2");
+        groups.put("flexvol-uuid-2", new OntapVMSnapshotStrategy.FlexVolGroupInfo(poolDetails2, POOL_ID_2));
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.resolveConsistencyGroupScope(groups));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1054,6 +1095,7 @@ class OntapVMSnapshotStrategyTest {
         poolDetails1.put(OntapStorageConstants.PASSWORD, "pass");
         poolDetails1.put(OntapStorageConstants.STORAGE_IP, "10.0.0.1");
         poolDetails1.put(OntapStorageConstants.SVM_NAME, "svm1");
+        poolDetails1.put(OntapStorageConstants.SVM_UUID, "svm-uuid-shared");
         poolDetails1.put(OntapStorageConstants.SIZE, "107374182400");
         poolDetails1.put(OntapStorageConstants.PROTOCOL, "NFS3");
         when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(poolDetails1);
@@ -1064,6 +1106,7 @@ class OntapVMSnapshotStrategyTest {
         poolDetails2.put(OntapStorageConstants.PASSWORD, "pass");
         poolDetails2.put(OntapStorageConstants.STORAGE_IP, "10.0.0.1");
         poolDetails2.put(OntapStorageConstants.SVM_NAME, "svm1");
+        poolDetails2.put(OntapStorageConstants.SVM_UUID, "svm-uuid-shared");
         poolDetails2.put(OntapStorageConstants.SIZE, "107374182400");
         poolDetails2.put(OntapStorageConstants.PROTOCOL, "NFS3");
         when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_2)).thenReturn(poolDetails2);
@@ -1107,6 +1150,16 @@ class OntapVMSnapshotStrategyTest {
         when(storageStrategy.getSnapshotFeignClient()).thenReturn(snapshotFeignClient);
         when(storageStrategy.getAuthHeader()).thenReturn("Basic dGVzdDp0ZXN0");
         when(storageStrategy.jobPollForSuccess(any(), anyInt(), anyInt())).thenReturn(true);
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenAnswer(invocation -> {
+            Job completedJob = new Job();
+            completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
+            String operationName = invocation.getArgument(1);
+            if (operationName != null && operationName.startsWith("start CG snapshot")) {
+                completedJob.setDescription(
+                        "POST /api/application/consistency-groups/cg-uuid-1/snapshots/cg-snap-uuid-1");
+            }
+            return completedJob;
+        });
 
         when(snapshotFeignClient.createConsistencyGroup(any(), any())).thenReturn(createJobResponse("job-cg-create"));
         OntapResponse<Map<String, Object>> cgResponse = new OntapResponse<>();

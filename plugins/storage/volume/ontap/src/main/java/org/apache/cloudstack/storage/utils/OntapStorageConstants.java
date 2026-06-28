@@ -36,6 +36,7 @@ public class OntapStorageConstants {
     public static final String SIZE = "size";
     public static final String PROTOCOL = "protocol";
     public static final String SVM_NAME = "svmName";
+    public static final String SVM_UUID = "svmUUID";
     public static final String USERNAME = "username";
     public static final String PASSWORD = "password";
     public static final String DATA_LIF = "dataLIF";
@@ -110,6 +111,8 @@ public class OntapStorageConstants {
     public static final String CG_VOLUME_PROVISIONING_ACTION_ADD = "add";
     public static final int ONTAP_CG_JOB_MAX_RETRIES = 60;
     public static final int ONTAP_CG_JOB_POLL_INTERVAL_MS = 2000;
+    public static final int ONTAP_CG_SNAPSHOT_RESOLVE_MAX_RETRIES = 30;
+    public static final int ONTAP_CG_SNAPSHOT_RESOLVE_POLL_INTERVAL_MS = 1000;
     public static final int ONTAP_SFSR_JOB_MAX_RETRIES = 60;
     public static final int ONTAP_SFSR_JOB_POLL_INTERVAL_MS = 2000;
     public static final int ONTAP_SNAPSHOT_DELETE_JOB_MAX_RETRIES = 30;

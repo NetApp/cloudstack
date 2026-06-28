@@ -205,4 +205,33 @@ public class OntapStorageUtils {
         return normalizedBase + suffix;
     }
 
+    /**
+     * Extracts a resource UUID from an ONTAP job description path.
+     *
+     * <p>Example: {@code POST /api/application/consistency-groups/{cg}/snapshots/{uuid}}
+     * with {@code pathSegment} {@code "/snapshots/"} returns the snapshot UUID.</p>
+     */
+    public static String extractUuidFromOntapJobDescription(String description, String pathSegment) {
+        if (description == null || pathSegment == null || pathSegment.isEmpty()) {
+            return null;
+        }
+        int idx = description.indexOf(pathSegment);
+        if (idx < 0) {
+            return null;
+        }
+        String remainder = description.substring(idx + pathSegment.length()).trim();
+        if (remainder.isEmpty()) {
+            return null;
+        }
+        int queryIdx = remainder.indexOf('?');
+        if (queryIdx >= 0) {
+            remainder = remainder.substring(0, queryIdx);
+        }
+        int slashIdx = remainder.indexOf('/');
+        if (slashIdx >= 0) {
+            remainder = remainder.substring(0, slashIdx);
+        }
+        return remainder.isEmpty() ? null : remainder;
+    }
+
 }
