@@ -199,52 +199,59 @@ public class UnifiedNASStrategy extends NASStrategy {
         if (accessGroup == null) {
             throw new CloudRuntimeException("Invalid accessGroup object - accessGroup is null");
         }
+        // Check if an AccessGroup was constructed without associating it to a storage pool.
         if (accessGroup.getStoragePoolId() == null) {
             throw new CloudRuntimeException("Invalid accessGroup object - storagePoolId is null");
         }
+        // At least one host is required regardless of ADD or REMOVE action.
+        // An empty list means there is nothing to add to or remove from the export policy client list.
         if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
             throw new CloudRuntimeException("Invalid accessGroup object - hostsToConnect is null or empty");
         }
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
-        String exportPolicyId = details.get(OntapStorageConstants.EXPORT_POLICY_ID);
-
-        // No policy exists yet (e.g. pool was created before any eligible hosts came up), create it now.
-        if (exportPolicyId == null || exportPolicyId.isEmpty()) {
-            logger.info("updateAccessGroup: No export policy found for pool {}. Creating one now.", accessGroup.getStoragePoolId());
-            return createAccessGroup(accessGroup);
+        if (details == null || details.isEmpty()) {
+            throw new CloudRuntimeException("No storage pool details found for storagePoolId: " + accessGroup.getStoragePoolId());
         }
+        String exportPolicyId = details.get(OntapStorageConstants.EXPORT_POLICY_ID);
+        if (exportPolicyId == null || exportPolicyId.isEmpty()) {
+            throw new CloudRuntimeException("No export policy found for storagePoolId: " + accessGroup.getStoragePoolId());
+        }
+
 
         try {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             ExportPolicy existingPolicy = nasFeignClient.getExportPolicyById(authHeader, exportPolicyId);
+            // Check if the export policy was deleted externally on ONTAP or the stored ID is stale.
             if (existingPolicy == null) {
                 throw new CloudRuntimeException("Failed to fetch existing export policy with id: " + exportPolicyId);
             }
 
             List<ExportRule> rules = existingPolicy.getRules();
+            // An existing export policy should always have at least one rule. A null or empty rules list
+            // indicates the policy was corrupted or modified externally on ONTAP and is in an unexpected
+            // state. updateAccessGroup only modifies an existing policy — it does not create rules from scratch.
             if (rules == null || rules.isEmpty()) {
-                rules = new ArrayList<>();
-                ExportRule newRule = new ExportRule();
-                newRule.setProtocols(List.of(ExportRule.ProtocolsEnum.NFS3));
-                newRule.setRoRule(List.of("sys"));
-                newRule.setRwRule(List.of("sys"));
-                newRule.setSuperuser(List.of("sys"));
-                newRule.setClients(new ArrayList<>());
-                rules.add(newRule);
+                throw new CloudRuntimeException("Export policy " + existingPolicy.getName() + " has no rules. " +
+                        "Cannot update an export policy with no existing rules.");
             }
 
-            ExportRule exportRule = rules.get(0);
-            List<ExportRule.ExportClient> exportClients = exportRule.getClients();
-            if (exportClients == null) {
-                exportClients = new ArrayList<>();
-                exportRule.setClients(exportClients);
+            // This plugin creates a single NFS export rule per policy. More than one rule means the
+            // policy was changed outside the plugin and we no longer know which rule should be mutated.
+            if (rules.size() != 1) {
+                throw new CloudRuntimeException("Export policy " + existingPolicy.getName() +
+                        " is expected to have exactly one rule but found: " + rules.size());
             }
+
+            ExportRule targetRule = rules.get(0);
 
             Set<String> hostMatches = new HashSet<>();
             for (HostVO host : accessGroup.getHostsToConnect()) {
                 String hostStorageIp = host.getStorageIpAddress();
                 String ip = (hostStorageIp != null && !hostStorageIp.isEmpty()) ? hostStorageIp : host.getPrivateIpAddress();
+                // Occurs when a CloudStack host has neither a storage IP nor a private IP configured
+                // (misconfigured or partially registered host). Skip it to avoid inserting a broken
+                // or empty match entry into the ONTAP export rule.
                 if (ip == null || ip.isEmpty()) {
                     logger.warn("updateAccessGroup: Host {} has no storage/private IP, skipping export rule update", host.getName());
                     continue;
@@ -252,26 +259,45 @@ public class UnifiedNASStrategy extends NASStrategy {
                 hostMatches.add(ip + "/32");
             }
 
+            // Occurs when every host in hostsToConnect had no valid IP (all were skipped above).
+            // There is nothing to add or remove, so skip the ONTAP API call and return early.
             if (hostMatches.isEmpty()) {
                 accessGroup.setPolicy(existingPolicy);
                 return accessGroup;
             }
 
             boolean updated = false;
+            // Differentiates between removing hosts (e.g., host decommissioned or removed from the cluster)
+            // and the default ADD path (e.g., new host being connected to the storage pool).
+            List<ExportRule.ExportClient> exportClients = targetRule.getClients();
+            // Existing rules can legitimately have no clients yet; treat that as an empty list.
+            if (exportClients == null) {
+                exportClients = new ArrayList<>();
+                targetRule.setClients(exportClients);
+            }
+
             if (AccessGroup.HostRuleAction.REMOVE.equals(accessGroup.getHostRuleAction())) {
                 updated = exportClients.removeIf(c -> c != null && c.getMatch() != null && hostMatches.contains(c.getMatch()));
+                // None of the requested host IPs were present in the policy — log for diagnostics
+                // so operators can investigate whether the policy state is already correct or stale.
                 if (!updated) {
                     logger.info("updateAccessGroup: No matching host IPs found in export policy {} for removal", existingPolicy.getName());
                 }
             } else {
                 Set<String> existingMatches = new HashSet<>();
                 for (ExportRule.ExportClient exportClient : exportClients) {
+                    // Skips null client entries or entries with a null match field that may have been
+                    // inserted externally on ONTAP. Avoids polluting the dedup set with null values
+                    // which would cause subsequent hosts to be incorrectly treated as duplicates.
                     if (exportClient != null && exportClient.getMatch() != null) {
                         existingMatches.add(exportClient.getMatch());
                     }
                 }
 
                 for (String match : hostMatches) {
+                    // Set.add() returns false when the element was already present, acting as a dedup check.
+                    // Prevents inserting a duplicate client match entry for a host that is already allowed
+                    // in the export policy — ONTAP may reject or behave unpredictably with duplicate matches.
                     if (existingMatches.add(match)) {
                         ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
                         exportClient.setMatch(match);
@@ -281,13 +307,16 @@ public class UnifiedNASStrategy extends NASStrategy {
                 }
             }
 
+            // Occurs when the export policy is already in the desired state:
+            // ADD path — all provided host IPs were already present (all were duplicates).
+            // REMOVE path — none of the provided host IPs matched any existing entry.
+            // In both cases, skip the ONTAP PATCH call to avoid an unnecessary round-trip.
             if (!updated) {
+                // Only log the "nothing to add" message for the ADD path; the REMOVE no-op
+                // is already logged above in its own branch to avoid double-logging.
                 if (!AccessGroup.HostRuleAction.REMOVE.equals(accessGroup.getHostRuleAction())) {
                     logger.info("updateAccessGroup: No new host IPs to add to export policy {}", existingPolicy.getName());
                 }
-            }
-
-            if (!updated) {
                 accessGroup.setPolicy(existingPolicy);
                 return accessGroup;
             }
