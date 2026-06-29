@@ -736,9 +736,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_SNAP_ID + "=" + ontapSnapshotUuid);
 
             // Persist snapshot_details so deleteAsync can resolve ONTAP FlexVol/snapshot UUIDs
-            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume)
+            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume).
+            // volumeVO.getSize() is stored as ONTAP_SNAP_SIZE to capture the source volume's
+            // provisioned size at snapshot time; if the volume is later resized the stored value
+            // still reflects what was snapshotted, giving ASUP an accurate per-snapshot footprint.
+            long snapSizeBytes = volumeVO.getSize() != null ? volumeVO.getSize() : 0L;
             updateSnapshotDetails(snapshot.getId(), volumeInfo.getId(), flexVolUuid,
-                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid);
+                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid, snapSizeBytes);
 
             CreateObjectAnswer createObjectAnswer = new CreateObjectAnswer(snapshotObjectTo);
             result = new CreateCmdResult(null, createObjectAnswer);
@@ -1023,7 +1027,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private void updateSnapshotDetails(long csSnapshotId, long csVolumeId, String flexVolUuid,
                                         String ontapSnapshotUuid, String snapshotName,
                                         String volumePath, long storagePoolId, String protocol,
-                                        String lunUuid) {
+                                        String lunUuid, long snapSizeBytes) {
         SnapshotDetailsVO snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
                 OntapStorageConstants.SRC_CS_VOLUME_ID, String.valueOf(csVolumeId), false);
         snapshotDetailsDao.persist(snapshotDetail);
@@ -1050,6 +1054,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
                 OntapStorageConstants.PROTOCOL, protocol, false);
+        snapshotDetailsDao.persist(snapshotDetail);
+
+        // Store the source volume's provisioned size at snapshot-creation time.
+        // Used by ASUP telemetry to report csVolumeSnapshotProvisionedSizeBytes without
+        // needing an extra ONTAP REST call per snapshot.
+        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
+                OntapStorageConstants.ONTAP_SNAP_SIZE, String.valueOf(snapSizeBytes), false);
         snapshotDetailsDao.persist(snapshotDetail);
 
         // Store LUN UUID for iSCSI volumes (required for LUN restore API)
