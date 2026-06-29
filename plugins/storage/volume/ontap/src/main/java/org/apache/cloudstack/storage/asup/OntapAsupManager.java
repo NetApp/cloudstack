@@ -22,7 +22,6 @@ package org.apache.cloudstack.storage.asup;
 import com.cloud.storage.Volume;
 import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.VolumeVO;
-import com.cloud.storage.dao.SnapshotDetailsDao;
 import com.cloud.storage.dao.SnapshotDao;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.vm.snapshot.VMSnapshot;
@@ -119,8 +118,6 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     private VolumeDao volumeDao;
     @Inject
     private SnapshotDao snapshotDao;
-    @Inject
-    private SnapshotDetailsDao snapshotDetailsDao;
     @Inject
     private VMSnapshotDao vmSnapshotDao;
     @Inject
@@ -358,19 +355,14 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Adds {@code csVolumeSnapshotCount} and {@code csVolumeSnapshotProvisionedSizeBytes} to the payload.
-     *
-     * <p>Size per snapshot is read from the {@code ontap_snap_size} snapshot-detail key, which is
-     * written at {@code takeSnapshot} time and holds the source volume's provisioned size at that
-     * moment. If the detail is missing (e.g. snapshots taken before this feature was deployed) the
-     * current provisioned size of the source volume is used as a fallback.</p>
+     * Adds {@code csVolumeSnapshotCount} to the payload.
+     * Counts all non-destroyed CloudStack volume-level snapshots for volumes on this pool.
      */
     private void addVolumeSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
         try {
             List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
             if (volumes == null || volumes.isEmpty()) {
                 payload.put("csVolumeSnapshotCount", 0);
-                payload.put("csVolumeSnapshotProvisionedSizeBytes", 0L);
                 return;
             }
 
@@ -381,35 +373,15 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
             List<SnapshotVO> snapshots = snapshotDao.searchByVolumes(volumeIds);
             long snapCount = 0;
-            long snapSizeBytes = 0L;
-
             if (snapshots != null) {
                 for (SnapshotVO snap : snapshots) {
-                    if (com.cloud.storage.Snapshot.State.Destroyed.equals(snap.getState())) {
-                        continue;
-                    }
-                    snapCount++;
-                    // Prefer the size stored at takeSnapshot time (source volume provisioned size
-                    // captured at the moment of snapshot creation). Falls back to the current
-                    // provisioned size of the source volume for older snapshots that pre-date
-                    // the ONTAP_SNAP_SIZE detail being written.
-                    com.cloud.storage.dao.SnapshotDetailsVO sizeDetail =
-                            snapshotDetailsDao.findDetail(snap.getId(), OntapStorageConstants.ONTAP_SNAP_SIZE);
-                    if (sizeDetail != null && sizeDetail.getValue() != null) {
-                        try {
-                            snapSizeBytes += Long.parseLong(sizeDetail.getValue());
-                        } catch (NumberFormatException ignored) {}
-                    } else {
-                        VolumeVO srcVol = volumeDao.findById(snap.getVolumeId());
-                        if (srcVol != null && srcVol.getSize() != null) {
-                            snapSizeBytes += srcVol.getSize();
-                        }
+                    if (!com.cloud.storage.Snapshot.State.Destroyed.equals(snap.getState())) {
+                        snapCount++;
                     }
                 }
             }
 
             payload.put("csVolumeSnapshotCount", snapCount);
-            payload.put("csVolumeSnapshotProvisionedSizeBytes", snapSizeBytes);
         } catch (Exception e) {
             logger.warn("ONTAP ASUP: failed to compute volume-snapshot metrics for pool [{}]: {}",
                     pool.getId(), e.getMessage());
@@ -417,59 +389,42 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Adds {@code vmSnapshotCount} and {@code vmSnapshotSizeBytes} to the payload.
-     *
-     * <p>VM snapshots are stored on ONTAP as FlexVol-level snapshots, so the size estimate
-     * is {@code sum(poolVolumeSize) × vmSnapshotCount} — the total provisioned pool space
-     * that could be consumed by those snapshots.</p>
+     * Adds {@code vmSnapshotCount} to the payload.
+     * Counts all active (non-expunging, non-removed) VM snapshots for VMs that have at
+     * least one volume on this pool. Size is not reported — requires a DB schema change
+     * to {@code vm_snapshots} table which is deferred.
      */
     private void addVmSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
         try {
             List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
             if (volumes == null || volumes.isEmpty()) {
                 payload.put("vmSnapshotCount", 0);
-                payload.put("vmSnapshotSizeBytes", 0L);
                 return;
             }
 
-            // Collect the unique VM IDs that have volumes on this pool, and total pool volume size.
             java.util.Set<Long> vmIds = new java.util.HashSet<>();
-            long totalPoolVolumeSizeBytes = 0L;
             for (VolumeVO v : volumes) {
                 if (v.getInstanceId() != null) {
                     vmIds.add(v.getInstanceId());
-                }
-                if (v.getSize() != null) {
-                    totalPoolVolumeSizeBytes += v.getSize();
                 }
             }
 
             if (vmIds.isEmpty()) {
                 payload.put("vmSnapshotCount", 0);
-                payload.put("vmSnapshotSizeBytes", 0L);
                 return;
             }
 
-            // Fetch all active VM snapshots for those VMs in one query.
             List<VMSnapshotVO> vmSnapshots = vmSnapshotDao.searchByVms(new java.util.ArrayList<>(vmIds));
             long vmSnapCount = 0;
             if (vmSnapshots != null) {
                 for (VMSnapshotVO vmSnap : vmSnapshots) {
-                    VMSnapshot.State state = vmSnap.getState();
-                    // Count only active (visible) VM snapshots; skip expunging / removed entries.
-                    if (!VMSnapshot.State.Expunging.equals(state) && vmSnap.getRemoved() == null) {
+                    if (!VMSnapshot.State.Expunging.equals(vmSnap.getState()) && vmSnap.getRemoved() == null) {
                         vmSnapCount++;
                     }
                 }
             }
 
-            // Size estimate: each VM snapshot captures all volumes currently on the FlexVol.
-            // totalPoolVolumeSizeBytes * vmSnapCount gives the cumulative space that could
-            // be attributed to VM snapshots on this pool.
-            long vmSnapSizeBytes = totalPoolVolumeSizeBytes * vmSnapCount;
-
             payload.put("vmSnapshotCount", vmSnapCount);
-            payload.put("vmSnapshotSizeBytes", vmSnapSizeBytes);
         } catch (Exception e) {
             logger.warn("ONTAP ASUP: failed to compute VM-snapshot metrics for pool [{}]: {}",
                     pool.getId(), e.getMessage());
