@@ -19,8 +19,15 @@
 
 package org.apache.cloudstack.storage.asup;
 
+import com.cloud.storage.Volume;
+import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.SnapshotDetailsDao;
+import com.cloud.storage.dao.SnapshotDao;
 import com.cloud.storage.dao.VolumeDao;
+import com.cloud.vm.snapshot.VMSnapshot;
+import com.cloud.vm.snapshot.VMSnapshotVO;
+import com.cloud.vm.snapshot.dao.VMSnapshotDao;
 import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.net.NetUtils;
@@ -43,11 +50,11 @@ import org.apache.commons.lang3.StringUtils;
 
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -61,7 +68,8 @@ import java.util.Set;
  *     <li><b>event-id 0 (heartbeat):</b> identifies the CloudStack deployment (CloudStack
  *         version, management host) connected to the ONTAP cluster (ONTAP cluster version).</li>
  *     <li><b>event-id 1 (pool):</b> maps the CloudStack storage pool to its backing ONTAP
- *         volume - protocol (NFS/iSCSI), ONTAP FlexVolume UUID and name, and SVM.</li>
+ *         volume - protocol (NFS/iSCSI), ONTAP FlexVolume UUID, SVM, disk usage, and
+ *         snapshot telemetry (counts by state, total provisioned size).</li>
  * </ul>
  */
 public class OntapAsupManager extends ManagerBase implements Configurable {
@@ -71,9 +79,8 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.",
             true, ConfigKey.Scope.Global);
 
-    // TODO(test-only): default lowered to 120s (2 min) for testing; revert to "3600" before merging.
     public static final ConfigKey<Integer> AsupIntervalSeconds = new ConfigKey<>("Advanced", Integer.class,
-            "ontap.asup.interval", "120",
+            "ontap.asup.interval", "3600",
             "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.",
             true, ConfigKey.Scope.Global);
 
@@ -81,6 +88,25 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
     /** Default interval (in seconds) used when the configured value is missing or invalid. */
     private static final int ASUP_DEFAULT_INTERVAL_SECONDS = 3600;
+
+    /**
+     * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
+     * States like {@link Volume.State#Allocated} have a CloudStack DB row pointing to this
+     * pool but ONTAP provisioning has not been called yet — they must be excluded to avoid
+     * inflating disk counts and provisioned-size totals. Upload-family states live on
+     * secondary storage, not on the primary ONTAP volume, so they are also excluded.
+     */
+    private static final Set<Volume.State> ONTAP_PRESENT_STATES = EnumSet.of(
+            Volume.State.Ready,
+            Volume.State.Migrating,
+            Volume.State.Snapshotting,
+            Volume.State.RevertSnapshotting,
+            Volume.State.Resizing,
+            Volume.State.Attaching,
+            Volume.State.Restoring,
+            Volume.State.Expunging,
+            Volume.State.Destroying
+    );
 
     /** Serializes the structured event-description payloads to JSON. */
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -91,6 +117,12 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject
     private VolumeDao volumeDao;
+    @Inject
+    private SnapshotDao snapshotDao;
+    @Inject
+    private SnapshotDetailsDao snapshotDetailsDao;
+    @Inject
+    private VMSnapshotDao vmSnapshotDao;
     @Inject
     private BackgroundPollManager backgroundPollManager;
 
@@ -189,6 +221,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             }
 
             // event-id 1: CloudStack storage pool -> backing ONTAP volume mapping, once per pool.
+            // The description also includes disk usage and snapshot telemetry (see buildPoolDescription).
             EmsApplicationLog poolMessage = buildBaseMessage(computerName, appVersion);
             poolMessage.setEventId(OntapStorageConstants.ASUP_EVENT_ID_POOL);
             poolMessage.setEventDescription(buildPoolDescription(pool, details, clusterUuid));
@@ -221,50 +254,225 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Builds the minimal pool->backing-volume description (NFS and iSCSI) as a JSON object,
-     * reading the values persisted in storage_pool_details at pool creation time and including the
-     * ONTAP cluster UUID plus pool usage (VM count, disk count, total disk size in bytes). Example:
-     * {@code {"message":"CloudStack storage pool backed by ONTAP volume","poolId":1,
-     * "poolUuid":"...","poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
-     * "ontapVolumeUuid":"...","vmCount":12,"diskCount":30,"totalDiskSizeBytes":322122547200}}
+     * Builds the pool description (event-id 1) as a JSON object combining the backing-volume
+     * mapping, disk usage, and snapshot telemetry into a single EMS message.
+     *
+     * <p>Example: {@code {"message":"CloudStack storage pool backed by ONTAP volume",
+     * "poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
+     * "ontapVolumeUuid":"...","rootDiskCount":12,"dataDiskCount":18,
+     * "totalProvisionedSizeBytes":322122547200,
+     * "csVolumeSnapshotCount":5,"csVolumeSnapshotProvisionedSizeBytes":107374182400,
+     * "vmSnapshotCount":3,"vmSnapshotSizeBytes":322122547200}}</p>
      */
     private String buildPoolDescription(StoragePoolVO pool, Map<String, String> details,
             String clusterUuid) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("message", "CloudStack storage pool backed by ONTAP volume");
-        payload.put("poolId", pool.getId());
-        payload.put("poolUuid", defaultUnknown(pool.getUuid()));
         payload.put("poolName", defaultUnknown(pool.getName()));
         payload.put("protocol", defaultUnknown(details.get(OntapStorageConstants.PROTOCOL)));
         payload.put("clusterUuid", defaultUnknown(clusterUuid));
         payload.put("svm", defaultUnknown(details.get(OntapStorageConstants.SVM_NAME)));
         payload.put("ontapVolumeUuid", defaultUnknown(details.get(OntapStorageConstants.VOLUME_UUID)));
         addPoolUsage(pool, payload);
+        addSnapshotUsage(pool, payload);
         return toJson(payload);
     }
 
     /**
      * Computes pool usage from CloudStack's volume records and adds it to the payload:
      * <ul>
-     *     <li>{@code vmCount} - number of distinct VMs with at least one disk on the pool</li>
-     *     <li>{@code diskCount} - number of (non-destroyed) CloudStack volumes on the pool</li>
-     *     <li>{@code totalDiskSizeBytes} - sum of those volumes' sizes, in bytes</li>
+     *     <li>{@code rootDiskCount} - number of ROOT (boot) disks physically on this pool</li>
+     *     <li>{@code dataDiskCount} - number of DATADISK disks physically on this pool</li>
+     *     <li>{@code attachedVmCount} - number of distinct VMs that have at least one volume on
+     *         this pool; always &ge; {@code rootDiskCount} because a VM's root disk may live on a
+     *         different pool while one of its data disks resides here</li>
+     *     <li>{@code totalProvisionedSizeBytes} - sum of those volumes' provisioned (logical) sizes
+     *         in bytes; for thin-provisioned volumes this is the logical size requested at
+     *         creation time, not the physical space consumed on ONTAP</li>
      * </ul>
-     * Best-effort: any failure leaves the usage fields out and never breaks telemetry.
+     * All volume types are counted (both ROOT and DATADISK); the {@code null} type argument
+     * disables the type filter in the DAO. All derived values are computed in-memory from the
+     * same single query (no extra round-trips). Best-effort: any failure leaves the usage
+     * fields out and never breaks telemetry.
      */
     private void addPoolUsage(StoragePoolVO pool, Map<String, Object> payload) {
         try {
-            List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId());
-            long diskCount = volumes.size();
-            long totalDiskSizeBytes = volumes.stream()
+            // Pass null volume-type to include ALL volumes (ROOT + DATADISK). The single-arg
+            // findNonDestroyedVolumesByPoolId(poolId) overload hardcodes ROOT-only and would
+            // undercount data disks.
+            List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
+
+            // Only count volumes that definitely have a physical object on the ONTAP FlexVolume.
+            // "Allocated" volumes have a pool_id row in the CS DB but ONTAP provisioning has not
+            // yet been called, so including them would inflate counts and provisioned size.
+            // Upload-family states live on secondary storage, not on this primary pool.
+            List<VolumeVO> ontapVolumes = volumes.stream()
+                    .filter(v -> ONTAP_PRESENT_STATES.contains(v.getState()))
+                    .collect(java.util.stream.Collectors.toList());
+
+            long rootDiskCount = ontapVolumes.stream()
+                    .filter(v -> Volume.Type.ROOT.equals(v.getVolumeType())).count();
+            long dataDiskCount = ontapVolumes.stream()
+                    .filter(v -> Volume.Type.DATADISK.equals(v.getVolumeType())).count();
+            // Count distinct VMs that have at least one volume on this pool.
+            // A VM whose root disk is on a different pool but has a data disk here is still counted,
+            // so attachedVmCount >= rootDiskCount is always guaranteed.
+            long attachedVmCount = ontapVolumes.stream()
+                    .map(VolumeVO::getInstanceId)
+                    .filter(id -> id != null)
+                    .distinct()
+                    .count();
+            // getSize() is the provisioned (logical) size from the CloudStack volumes table; for
+            // thin-provisioned volumes the physical space used on ONTAP can be far smaller.
+            long totalProvisionedSizeBytes = ontapVolumes.stream()
                     .mapToLong(v -> v.getSize() != null ? v.getSize() : 0L).sum();
-            long vmCount = volumes.stream().map(VolumeVO::getInstanceId)
-                    .filter(Objects::nonNull).distinct().count();
-            payload.put("vmCount", vmCount);
-            payload.put("diskCount", diskCount);
-            payload.put("totalDiskSizeBytes", totalDiskSizeBytes);
+            payload.put("rootDiskCount", rootDiskCount);
+            payload.put("dataDiskCount", dataDiskCount);
+            payload.put("attachedVmCount", attachedVmCount);
+            payload.put("totalProvisionedSizeBytes", totalProvisionedSizeBytes);
         } catch (Exception e) {
             logger.warn("ONTAP ASUP: failed to compute usage for pool [{}]: {}", pool.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Computes and adds two groups of snapshot telemetry to the pool description payload.
+     *
+     * <p><b>Volume-snapshot metrics</b> ({@code csVolumeSnapshotCount},
+     * {@code csVolumeSnapshotSizeBytes}): counts all non-destroyed CloudStack
+     * volume-level snapshots for volumes on this pool.  Where an ONTAP-side size has been
+     * recorded in {@code snapshot_details} (key {@code ontap_snap_size}) that value is used;
+     * otherwise the source volume's provisioned size is used as a conservative upper bound.</p>
+     *
+     * <p><b>VM-snapshot metrics</b> ({@code vmSnapshotCount},
+     * {@code vmSnapshotSizeBytes}): counts all active (non-expunging, non-removed) VM
+     * snapshots for VMs that have at least one volume on this pool.  Because ONTAP stores
+     * VM snapshots as FlexVol-level snapshots, the ONTAP-space estimate is computed as
+     * {@code sum(poolVolumes.size) × vmSnapshotCount} — a pool-level approximation.</p>
+     *
+     * <p>Best-effort: any failure leaves the fields out without breaking telemetry.</p>
+     */
+    private void addSnapshotUsage(StoragePoolVO pool, Map<String, Object> payload) {
+        addVolumeSnapshotMetrics(pool, payload);
+        addVmSnapshotMetrics(pool, payload);
+    }
+
+    /**
+     * Adds {@code csVolumeSnapshotCount} and {@code csVolumeSnapshotProvisionedSizeBytes} to the payload.
+     *
+     * <p>Size per snapshot is read from the {@code ontap_snap_size} snapshot-detail key, which is
+     * written at {@code takeSnapshot} time and holds the source volume's provisioned size at that
+     * moment. If the detail is missing (e.g. snapshots taken before this feature was deployed) the
+     * current provisioned size of the source volume is used as a fallback.</p>
+     */
+    private void addVolumeSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
+        try {
+            List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
+            if (volumes == null || volumes.isEmpty()) {
+                payload.put("csVolumeSnapshotCount", 0);
+                payload.put("csVolumeSnapshotProvisionedSizeBytes", 0L);
+                return;
+            }
+
+            List<Long> volumeIds = new java.util.ArrayList<>();
+            for (VolumeVO v : volumes) {
+                volumeIds.add(v.getId());
+            }
+
+            List<SnapshotVO> snapshots = snapshotDao.searchByVolumes(volumeIds);
+            long snapCount = 0;
+            long snapSizeBytes = 0L;
+
+            if (snapshots != null) {
+                for (SnapshotVO snap : snapshots) {
+                    if (com.cloud.storage.Snapshot.State.Destroyed.equals(snap.getState())) {
+                        continue;
+                    }
+                    snapCount++;
+                    // Prefer the size stored at takeSnapshot time (source volume provisioned size
+                    // captured at the moment of snapshot creation). Falls back to the current
+                    // provisioned size of the source volume for older snapshots that pre-date
+                    // the ONTAP_SNAP_SIZE detail being written.
+                    com.cloud.storage.dao.SnapshotDetailsVO sizeDetail =
+                            snapshotDetailsDao.findDetail(snap.getId(), OntapStorageConstants.ONTAP_SNAP_SIZE);
+                    if (sizeDetail != null && sizeDetail.getValue() != null) {
+                        try {
+                            snapSizeBytes += Long.parseLong(sizeDetail.getValue());
+                        } catch (NumberFormatException ignored) {}
+                    } else {
+                        VolumeVO srcVol = volumeDao.findById(snap.getVolumeId());
+                        if (srcVol != null && srcVol.getSize() != null) {
+                            snapSizeBytes += srcVol.getSize();
+                        }
+                    }
+                }
+            }
+
+            payload.put("csVolumeSnapshotCount", snapCount);
+            payload.put("csVolumeSnapshotProvisionedSizeBytes", snapSizeBytes);
+        } catch (Exception e) {
+            logger.warn("ONTAP ASUP: failed to compute volume-snapshot metrics for pool [{}]: {}",
+                    pool.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Adds {@code vmSnapshotCount} and {@code vmSnapshotSizeBytes} to the payload.
+     *
+     * <p>VM snapshots are stored on ONTAP as FlexVol-level snapshots, so the size estimate
+     * is {@code sum(poolVolumeSize) × vmSnapshotCount} — the total provisioned pool space
+     * that could be consumed by those snapshots.</p>
+     */
+    private void addVmSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
+        try {
+            List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
+            if (volumes == null || volumes.isEmpty()) {
+                payload.put("vmSnapshotCount", 0);
+                payload.put("vmSnapshotSizeBytes", 0L);
+                return;
+            }
+
+            // Collect the unique VM IDs that have volumes on this pool, and total pool volume size.
+            java.util.Set<Long> vmIds = new java.util.HashSet<>();
+            long totalPoolVolumeSizeBytes = 0L;
+            for (VolumeVO v : volumes) {
+                if (v.getInstanceId() != null) {
+                    vmIds.add(v.getInstanceId());
+                }
+                if (v.getSize() != null) {
+                    totalPoolVolumeSizeBytes += v.getSize();
+                }
+            }
+
+            if (vmIds.isEmpty()) {
+                payload.put("vmSnapshotCount", 0);
+                payload.put("vmSnapshotSizeBytes", 0L);
+                return;
+            }
+
+            // Fetch all active VM snapshots for those VMs in one query.
+            List<VMSnapshotVO> vmSnapshots = vmSnapshotDao.searchByVms(new java.util.ArrayList<>(vmIds));
+            long vmSnapCount = 0;
+            if (vmSnapshots != null) {
+                for (VMSnapshotVO vmSnap : vmSnapshots) {
+                    VMSnapshot.State state = vmSnap.getState();
+                    // Count only active (visible) VM snapshots; skip expunging / removed entries.
+                    if (!VMSnapshot.State.Expunging.equals(state) && vmSnap.getRemoved() == null) {
+                        vmSnapCount++;
+                    }
+                }
+            }
+
+            // Size estimate: each VM snapshot captures all volumes currently on the FlexVol.
+            // totalPoolVolumeSizeBytes * vmSnapCount gives the cumulative space that could
+            // be attributed to VM snapshots on this pool.
+            long vmSnapSizeBytes = totalPoolVolumeSizeBytes * vmSnapCount;
+
+            payload.put("vmSnapshotCount", vmSnapCount);
+            payload.put("vmSnapshotSizeBytes", vmSnapSizeBytes);
+        } catch (Exception e) {
+            logger.warn("ONTAP ASUP: failed to compute VM-snapshot metrics for pool [{}]: {}",
+                    pool.getId(), e.getMessage());
         }
     }
 
