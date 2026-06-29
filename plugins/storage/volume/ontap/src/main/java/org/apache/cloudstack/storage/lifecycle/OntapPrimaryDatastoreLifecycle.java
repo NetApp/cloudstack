@@ -347,11 +347,12 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             logger.error("attachZone : Storage Pool not found for id: " + dataStore.getId());
             throw new CloudRuntimeException("Storage Pool not found for id: " + dataStore.getId());
         }
-        if(hypervisorType != null && hypervisorType == Hypervisor.HypervisorType.None && storagePool.getHypervisor() == null){
-            storagePool.setHypervisor(hypervisorType);
-            storagePoolDao.update(storagePool.getId(),storagePool);
-            logger.debug("attachZone : Set Hypervisor type for storage pool {} to {}", storagePool.getName(), hypervisorType);
+        if (hypervisorType != null && hypervisorType != Hypervisor.HypervisorType.KVM) {
+            throw new CloudRuntimeException("ONTAP primary storage is supported only for KVM hypervisor");
         }
+        storagePool.setHypervisor(hypervisorType);
+        storagePoolDao.update(storagePool.getId(),storagePool);
+        logger.debug("attachZone : Set Hypervisor type for storage pool {} to {}", storagePool.getName(), hypervisorType);
 
         PrimaryDataStoreInfo primaryStore = (PrimaryDataStoreInfo)dataStore;
         List<HostVO> hostsToConnect = _resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(dataStore, scope.getScopeId(), hypervisorType);
