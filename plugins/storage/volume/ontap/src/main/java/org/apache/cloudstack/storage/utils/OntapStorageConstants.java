@@ -158,12 +158,11 @@ public class OntapStorageConstants {
     /** Default value for {@link #ASUP_ENABLED_CONFIG_KEY}: ASUP is on by default. */
     public static final String ASUP_ENABLED_DEFAULT = "true";
     /** Description for {@link #ASUP_ENABLED_CONFIG_KEY}. */
-    public static final String ASUP_ENABLED_DESCRIPTION =
-            "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.";
+    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.";
     /** ConfigKey name for the ASUP push interval. */
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
     /** Default interval (in seconds) between ASUP pushes; shared by the ConfigKey default and the poll-task fallback. */
-    public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 3600;
+    public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 120;
     /** Description for {@link #ASUP_INTERVAL_CONFIG_KEY}. */
     public static final String ASUP_INTERVAL_DESCRIPTION =
             "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.";
