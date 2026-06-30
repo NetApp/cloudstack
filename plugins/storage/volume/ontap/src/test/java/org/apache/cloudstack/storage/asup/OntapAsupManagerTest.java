@@ -44,6 +44,7 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -420,12 +421,41 @@ class OntapAsupManagerTest {
 
     @Test
     void asupIntervalSeconds_defaultIsProductionValue() {
-        assertEquals("120", OntapAsupManager.AsupIntervalSeconds.defaultValue());
+        assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
+                OntapAsupManager.AsupIntervalSeconds.defaultValue());
     }
 
     @Test
     void asupEnabled_defaultIsTrue() {
         assertEquals("true", OntapAsupManager.AsupEnabled.defaultValue());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // OntapAsupPollTask – self-throttle (interval change takes effect without restart)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void pollTask_getDelay_returnsFixedCheckInterval() {
+        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+        assertEquals(OntapAsupManager.ASUP_POLL_CHECK_INTERVAL_MS, task.getDelay());
+    }
+
+    @Test
+    void pollTask_skipsWhenIntervalNotElapsed() {
+        asupManager.lastPushTime = Instant.now(); // just pushed
+        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+        task.run();
+        verify(storagePoolDao, never()).findPoolsByProvider(any());
+    }
+
+    @Test
+    void pollTask_pushesWhenIntervalElapsed() {
+        asupManager.lastPushTime = Instant.EPOCH; // never pushed
+        when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
+                .thenReturn(Collections.emptyList());
+        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+        task.run();
+        verify(storagePoolDao).findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
