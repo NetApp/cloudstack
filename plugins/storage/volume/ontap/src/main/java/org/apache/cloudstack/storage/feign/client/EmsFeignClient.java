@@ -28,5 +28,5 @@ public interface EmsFeignClient {
 
     @RequestLine("POST /api/support/ems/application-logs")
     @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
-    void sendEmsApplicationLog(@Param("authHeader") String authHeader, EmsApplicationLog body);
+    void sendEmsApplicationLog(@Param("authHeader") String authHeader, EmsApplicationLog emsApplicationLog);
 }
