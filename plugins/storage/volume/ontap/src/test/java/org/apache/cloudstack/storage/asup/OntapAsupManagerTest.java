@@ -60,6 +60,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -89,8 +90,8 @@ class OntapAsupManagerTest {
     @BeforeEach
     void setUp() {
         pool = mock(StoragePoolVO.class);
-        when(pool.getId()).thenReturn(1L);
-        when(pool.getName()).thenReturn("ontap-pool-1");
+        lenient().when(pool.getId()).thenReturn(1L);
+        lenient().when(pool.getName()).thenReturn("ontap-pool-1");
 
         poolDetails = new HashMap<>();
         poolDetails.put(OntapStorageConstants.STORAGE_IP, "192.168.1.10");
@@ -102,8 +103,8 @@ class OntapAsupManagerTest {
         mockStrategy = mock(StorageStrategy.class);
 
         mockCluster = mock(Cluster.class);
-        when(mockCluster.getUuid()).thenReturn("cluster-uuid-1");
-        when(mockCluster.getName()).thenReturn("ontap-cluster-1");
+        lenient().when(mockCluster.getUuid()).thenReturn("cluster-uuid-1");
+        lenient().when(mockCluster.getName()).thenReturn("ontap-cluster-1");
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -486,8 +487,6 @@ class OntapAsupManagerTest {
     /** Creates a mock SnapshotVO with the given id, volumeId and state. */
     private SnapshotVO makeSnapshot(long id, long volumeId, Snapshot.State state) {
         SnapshotVO snap = mock(SnapshotVO.class);
-        when(snap.getId()).thenReturn(id);
-        when(snap.getVolumeId()).thenReturn(volumeId);
         when(snap.getState()).thenReturn(state);
         return snap;
     }
@@ -496,7 +495,7 @@ class OntapAsupManagerTest {
     private VMSnapshotVO makeVmSnapshot(VMSnapshot.State state, java.util.Date removed) {
         VMSnapshotVO vmSnap = mock(VMSnapshotVO.class);
         when(vmSnap.getState()).thenReturn(state);
-        when(vmSnap.getRemoved()).thenReturn(removed);
+        lenient().when(vmSnap.getRemoved()).thenReturn(removed);
         return vmSnap;
     }
 }
