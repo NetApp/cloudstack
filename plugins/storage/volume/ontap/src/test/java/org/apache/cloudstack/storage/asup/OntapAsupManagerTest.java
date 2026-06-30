@@ -420,7 +420,7 @@ class OntapAsupManagerTest {
 
     @Test
     void asupIntervalSeconds_defaultIsProductionValue() {
-        assertEquals("3600", OntapAsupManager.AsupIntervalSeconds.defaultValue());
+        assertEquals("120", OntapAsupManager.AsupIntervalSeconds.defaultValue());
     }
 
     @Test
