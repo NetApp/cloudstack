@@ -138,6 +138,7 @@ public class OntapStorageConstants {
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";
 
     // ASUP (AutoSupport) / EMS telemetry
+    public static final String ADVANCED_CONFIG_KEY_CATEGORY = "Advanced";
     /** EMS category reported in the AutoSupport message. */
     public static final String ASUP_CATEGORY = "provisioning";
     /** EMS severity reported in the AutoSupport message. */
@@ -147,9 +148,23 @@ public class OntapStorageConstants {
     /** event-id used for the periodic CloudStack-to-cluster heartbeat message. */
     public static final String ASUP_EVENT_ID_HEARTBEAT = "0";
     /** event-id used for the periodic storage-pool backing-volume message. */
-    public static final String ASUP_EVENT_ID_POOL = "1";
+    public static final String ASUP_EVENT_ID_STORAGE_POOL = "1";
     /** Fallback value used when a piece of telemetry cannot be resolved. */
     public static final String ASUP_UNKNOWN = "unknown";
     /** GlobalLock name ensuring a single management server emits ASUP per cycle. */
     public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
+    /** ConfigKey name for the ASUP enabled/disabled toggle. */
+    public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
+    /** Default value for {@link #ASUP_ENABLED_CONFIG_KEY}: ASUP is on by default. */
+    public static final String ASUP_ENABLED_DEFAULT = "true";
+    /** Description for {@link #ASUP_ENABLED_CONFIG_KEY}. */
+    public static final String ASUP_ENABLED_DESCRIPTION =
+            "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.";
+    /** ConfigKey name for the ASUP push interval. */
+    public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
+    /** Default interval (in seconds) between ASUP pushes; shared by the ConfigKey default and the poll-task fallback. */
+    public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 3600;
+    /** Description for {@link #ASUP_INTERVAL_CONFIG_KEY}. */
+    public static final String ASUP_INTERVAL_DESCRIPTION =
+            "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.";
 }
