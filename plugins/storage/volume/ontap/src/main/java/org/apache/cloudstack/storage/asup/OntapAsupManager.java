@@ -49,6 +49,8 @@ import org.apache.commons.lang3.StringUtils;
 
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -84,10 +86,18 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
             String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
             OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            false, ConfigKey.Scope.Global);
+            true, ConfigKey.Scope.Global);
 
     /** Time (in seconds) to wait while acquiring the single-emitter global lock. */
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
+
+    /**
+     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask}. The task wakes on this
+     * cadence and checks whether the configured push interval ({@link #AsupIntervalSeconds})
+     * has elapsed. This decouples the scheduler's fixed delay from the live config value,
+     * so changes made in the CloudStack UI take effect without a management-server restart.
+     */
+    static final long ASUP_POLL_CHECK_INTERVAL_MS = 60_000L;
 
     /**
      * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
@@ -108,6 +118,13 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
     /** Serializes the structured event-description payloads to JSON. */
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * Timestamp of the last successful ASUP push. Starts at {@link Instant#EPOCH} so the
+     * very first wakeup always fires immediately. {@code volatile} ensures the poll-task
+     * thread's write is visible without synchronization overhead.
+     */
+    volatile Instant lastPushTime = Instant.EPOCH;
 
     @Inject
     private PrimaryDataStoreDao storagePoolDao;
@@ -510,13 +527,26 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     /**
      * Background poll task that runs the ASUP push within a managed CloudStack context.
      *
-     * <p>Submitted once to the shared {@link BackgroundPollManager} during the configure-phase;
-     * the poll manager owns the thread and invokes this task every {@link #getDelay()} ms.</p>
+     * <p>Wakes every {@link #ASUP_POLL_CHECK_INTERVAL_MS} ms. On each wakeup it reads
+     * the live value of {@link #AsupIntervalSeconds} and only pushes if enough time has
+     * elapsed since {@link #lastPushTimeMs}. This means changing the interval in the
+     * CloudStack UI takes effect within one check cycle — no restart required.</p>
      */
     protected class OntapAsupPollTask extends ManagedContextRunnable implements BackgroundPollTask {
         @Override
         protected void runInContext() {
             try {
+                int intervalSeconds = AsupIntervalSeconds.value() != null
+                        ? AsupIntervalSeconds.value() : OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+                if (intervalSeconds <= 0) {
+                    intervalSeconds = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+                }
+                Duration configuredInterval = Duration.ofSeconds(intervalSeconds);
+                Instant now = Instant.now();
+                if (Duration.between(lastPushTime, now).compareTo(configuredInterval) < 0) {
+                    return; // configured interval has not elapsed yet
+                }
+                lastPushTime = now;
                 pushAsupForAllStoragePools();
             } catch (Exception e) {
                 logger.warn("ONTAP ASUP: unexpected error during periodic push: {}", e.getMessage());
@@ -525,12 +555,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
         @Override
         public Long getDelay() {
-            int intervalSeconds = AsupIntervalSeconds.value() != null
-                    ? AsupIntervalSeconds.value() : OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
-            if (intervalSeconds <= 0) {
-                intervalSeconds = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
-            }
-            return intervalSeconds * 1000L;
+            return ASUP_POLL_CHECK_INTERVAL_MS;
         }
     }
 }
