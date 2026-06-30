@@ -135,7 +135,7 @@ public abstract class StorageStrategy {
      * @param cluster the cluster (may be {@code null})
      * @return the ONTAP version string, or {@code null} if it cannot be resolved
      */
-    public String extractClusterVersion(Cluster cluster) {
+    public String getClusterVersion(Cluster cluster) {
         if (cluster == null || cluster.getVersion() == null) {
             return null;
         }
@@ -148,16 +148,6 @@ public abstract class StorageStrategy {
             return version.getFull();
         }
         return null;
-    }
-
-    /**
-     * Fetches the ONTAP cluster version (e.g. "9.17.1") for ASUP telemetry. Convenience wrapper
-     * around {@link #getClusterInfo()} and {@link #extractClusterVersion(Cluster)}.
-     *
-     * @return the ONTAP cluster version string, or {@code null} if it cannot be resolved
-     */
-    public String getClusterVersion() {
-        return extractClusterVersion(getClusterInfo());
     }
 
     /**
@@ -178,8 +168,7 @@ public abstract class StorageStrategy {
             logger.debug("sendAsupMessage: ASUP EMS message [event-id={}] sent to ONTAP cluster at {}",
                     message.getEventId(), storage.getStorageIP());
         } catch (Exception e) {
-            // Telemetry is best-effort; never propagate.
-            logger.warn("sendAsupMessage: failed to send ASUP EMS message [event-id={}] to ONTAP cluster at {}: {}",
+            logger.error("sendAsupMessage: failed to send ASUP EMS message [event-id={}] to ONTAP cluster at {}: {}",
                     message.getEventId(), storage.getStorageIP(), e.getMessage());
         }
     }

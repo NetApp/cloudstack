@@ -73,20 +73,21 @@ import java.util.Set;
  */
 public class OntapAsupManager extends ManagerBase implements Configurable {
 
-    public static final ConfigKey<Boolean> AsupEnabled = new ConfigKey<>("Advanced", Boolean.class,
-            "ontap.asup.enabled", "true",
-            "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.",
+    public static final ConfigKey<Boolean> AsupEnabled = new ConfigKey<>(
+            OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Boolean.class,
+            OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY, OntapStorageConstants.ASUP_ENABLED_DEFAULT,
+            OntapStorageConstants.ASUP_ENABLED_DESCRIPTION,
             true, ConfigKey.Scope.Global);
 
-    public static final ConfigKey<Integer> AsupIntervalSeconds = new ConfigKey<>("Advanced", Integer.class,
-            "ontap.asup.interval", "3600",
-            "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.",
+    public static final ConfigKey<Integer> AsupIntervalSeconds = new ConfigKey<>(
+            OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Integer.class,
+            OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
+            String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
+            OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
             true, ConfigKey.Scope.Global);
 
     /** Time (in seconds) to wait while acquiring the single-emitter global lock. */
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
-    /** Default interval (in seconds) used when the configured value is missing or invalid. */
-    private static final int ASUP_DEFAULT_INTERVAL_SECONDS = 3600;
 
     /**
      * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
@@ -95,12 +96,10 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * inflating disk counts and provisioned-size totals. Upload-family states live on
      * secondary storage, not on the primary ONTAP volume, so they are also excluded.
      */
-    private static final Set<Volume.State> ONTAP_PRESENT_STATES = EnumSet.of(
+    private static final Set<Volume.State> CS_VOLUME_STATES = EnumSet.of(
             Volume.State.Ready,
-            Volume.State.Migrating,
             Volume.State.Snapshotting,
             Volume.State.RevertSnapshotting,
-            Volume.State.Resizing,
             Volume.State.Attaching,
             Volume.State.Restoring,
             Volume.State.Expunging,
@@ -141,7 +140,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * <p>Guarded by a {@link GlobalLock} so that, in a multi-management-server deployment,
      * only one node emits per cycle.</p>
      */
-    protected void pushAsupForAllPools() {
+    protected void pushAsupForAllStoragePools() {
         if (Boolean.FALSE.equals(AsupEnabled.value())) {
             logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); skipping this cycle.", AsupEnabled.key());
             return;
@@ -165,9 +164,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             // Tracks clusters that have already received a heartbeat this cycle, so that multiple
             // pools backed by the same ONTAP cluster emit only a single heartbeat (event-id 0),
             // while each distinct cluster still gets its own heartbeat per cycle.
-            Set<String> clustersHeartbeated = new HashSet<>();
+            Set<String> clustersHeartBeated = new HashSet<>();
             for (StoragePoolVO pool : pools) {
-                pushAsupForPool(pool, cloudStackVersion, computerName, clustersHeartbeated);
+                pushAsupForStoragePool(pool, cloudStackVersion, computerName, clustersHeartBeated);
             }
         } finally {
             lock.unlock();
@@ -184,8 +183,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      *
      * <p>Best-effort: any failure is logged and swallowed.</p>
      */
-    protected void pushAsupForPool(StoragePoolVO pool, String cloudStackVersion, String computerName,
-            Set<String> clustersHeartbeated) {
+    protected void pushAsupForStoragePool(StoragePoolVO pool, String cloudStackVersion, String computerName, Set<String> clustersHeartbeated) {
         try {
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(pool.getId());
             if (details == null || details.isEmpty()) {
@@ -197,7 +195,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             // Fetch the ONTAP cluster once and reuse its identity (uuid, name) and version
             // for both messages, avoiding extra REST round-trips.
             Cluster cluster = strategy.getClusterInfo();
-            String ontapVersion = strategy.extractClusterVersion(cluster);
+            String ontapVersion = strategy.getClusterVersion(cluster);
             String clusterUuid = cluster != null ? cluster.getUuid() : null;
             String clusterName = cluster != null ? cluster.getName() : null;
             String appVersion = buildAppVersion(cloudStackVersion, ontapVersion);
@@ -218,9 +216,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             }
 
             // event-id 1: CloudStack storage pool -> backing ONTAP volume mapping, once per pool.
-            // The description also includes disk usage and snapshot telemetry (see buildPoolDescription).
+            // The description also includes disk usage and snapshot telemetry
             EmsApplicationLog poolMessage = buildBaseMessage(computerName, appVersion);
-            poolMessage.setEventId(OntapStorageConstants.ASUP_EVENT_ID_POOL);
+            poolMessage.setEventId(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL);
             poolMessage.setEventDescription(buildPoolDescription(pool, details, clusterUuid));
             strategy.sendAsupMessage(poolMessage);
 
@@ -270,7 +268,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         payload.put("clusterUuid", defaultUnknown(clusterUuid));
         payload.put("svm", defaultUnknown(details.get(OntapStorageConstants.SVM_NAME)));
         payload.put("ontapVolumeUuid", defaultUnknown(details.get(OntapStorageConstants.VOLUME_UUID)));
-        addPoolUsage(pool, payload);
+        addStoragePoolUsage(pool, payload);
         addSnapshotUsage(pool, payload);
         return toJson(payload);
     }
@@ -292,43 +290,39 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * same single query (no extra round-trips). Best-effort: any failure leaves the usage
      * fields out and never breaks telemetry.
      */
-    private void addPoolUsage(StoragePoolVO pool, Map<String, Object> payload) {
+    private void addStoragePoolUsage(StoragePoolVO pool, Map<String, Object> payload) {
         try {
             // Pass null volume-type to include ALL volumes (ROOT + DATADISK). The single-arg
-            // findNonDestroyedVolumesByPoolId(poolId) overload hardcodes ROOT-only and would
-            // undercount data disks.
             List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
 
             // Only count volumes that definitely have a physical object on the ONTAP FlexVolume.
             // "Allocated" volumes have a pool_id row in the CS DB but ONTAP provisioning has not
             // yet been called, so including them would inflate counts and provisioned size.
             // Upload-family states live on secondary storage, not on this primary pool.
-            List<VolumeVO> ontapVolumes = volumes.stream()
-                    .filter(v -> ONTAP_PRESENT_STATES.contains(v.getState()))
+            List<VolumeVO> cstackVolumes = volumes.stream()
+                    .filter(v -> CS_VOLUME_STATES.contains(v.getState()))
                     .collect(java.util.stream.Collectors.toList());
 
-            long rootDiskCount = ontapVolumes.stream()
+            long rootDiskCount = cstackVolumes.stream()
                     .filter(v -> Volume.Type.ROOT.equals(v.getVolumeType())).count();
-            long dataDiskCount = ontapVolumes.stream()
+            long dataDiskCount = cstackVolumes.stream()
                     .filter(v -> Volume.Type.DATADISK.equals(v.getVolumeType())).count();
             // Count distinct VMs that have at least one volume on this pool.
             // A VM whose root disk is on a different pool but has a data disk here is still counted,
-            // so attachedVmCount >= rootDiskCount is always guaranteed.
-            long attachedVmCount = ontapVolumes.stream()
+            long attachedVmCount = cstackVolumes.stream()
                     .map(VolumeVO::getInstanceId)
                     .filter(id -> id != null)
                     .distinct()
                     .count();
-            // getSize() is the provisioned (logical) size from the CloudStack volumes table; for
-            // thin-provisioned volumes the physical space used on ONTAP can be far smaller.
-            long totalProvisionedSizeBytes = ontapVolumes.stream()
+
+            long totalProvisionedSizeBytes = cstackVolumes.stream()
                     .mapToLong(v -> v.getSize() != null ? v.getSize() : 0L).sum();
             payload.put("rootDiskCount", rootDiskCount);
             payload.put("dataDiskCount", dataDiskCount);
             payload.put("attachedVmCount", attachedVmCount);
             payload.put("totalProvisionedSizeBytes", totalProvisionedSizeBytes);
         } catch (Exception e) {
-            logger.warn("ONTAP ASUP: failed to compute usage for pool [{}]: {}", pool.getId(), e.getMessage());
+            logger.error("ONTAP ASUP: failed to compute usage for pool [{}]: {}", pool.getId(), e.getMessage());
         }
     }
 
@@ -350,8 +344,8 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * <p>Best-effort: any failure leaves the fields out without breaking telemetry.</p>
      */
     private void addSnapshotUsage(StoragePoolVO pool, Map<String, Object> payload) {
-        addVolumeSnapshotMetrics(pool, payload);
         addVmSnapshotMetrics(pool, payload);
+        addVolumeSnapshotMetrics(pool, payload);
     }
 
     /**
@@ -391,8 +385,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     /**
      * Adds {@code vmSnapshotCount} to the payload.
      * Counts all active (non-expunging, non-removed) VM snapshots for VMs that have at
-     * least one volume on this pool. Size is not reported — requires a DB schema change
-     * to {@code vm_snapshots} table which is deferred.
+     * least one volume on this pool.
      */
     private void addVmSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
         try {
@@ -456,7 +449,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         return message;
     }
 
-    /** Composes "cloudstack-&lt;version&gt;|ontap-&lt;version&gt;" for the EMS app-version field. */
+    /** Composes "cloudstack-version|ontap-version" for the EMS app-version field. */
     private String buildAppVersion(String cloudStackVersion, String ontapVersion) {
         return "cloudstack-" + cloudStackVersion + "|ontap-" + defaultUnknown(ontapVersion);
     }
@@ -524,9 +517,8 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         @Override
         protected void runInContext() {
             try {
-                pushAsupForAllPools();
+                pushAsupForAllStoragePools();
             } catch (Exception e) {
-                // Best-effort telemetry; never let the poll thread die.
                 logger.warn("ONTAP ASUP: unexpected error during periodic push: {}", e.getMessage());
             }
         }
@@ -534,9 +526,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         @Override
         public Long getDelay() {
             int intervalSeconds = AsupIntervalSeconds.value() != null
-                    ? AsupIntervalSeconds.value() : ASUP_DEFAULT_INTERVAL_SECONDS;
+                    ? AsupIntervalSeconds.value() : OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
             if (intervalSeconds <= 0) {
-                intervalSeconds = ASUP_DEFAULT_INTERVAL_SECONDS;
+                intervalSeconds = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
             }
             return intervalSeconds * 1000L;
         }
