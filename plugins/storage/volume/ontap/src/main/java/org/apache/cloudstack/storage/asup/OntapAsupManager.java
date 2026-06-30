@@ -84,7 +84,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
             String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
             OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            true, ConfigKey.Scope.Global);
+            false, ConfigKey.Scope.Global);
 
     /** Time (in seconds) to wait while acquiring the single-emitter global lock. */
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
