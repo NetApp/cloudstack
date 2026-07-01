@@ -344,17 +344,24 @@ public class OntapPrimaryDatastoreLifecycleTest {
         clusterVO.setHypervisorType("XenServer");
         when(_clusterDao.findById(2L)).thenReturn(clusterVO);
 
+        HashMap<String, String> detailsMap = new HashMap<>();
+        detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
+        detailsMap.put(OntapStorageConstants.PASSWORD, "testPassword");
+        detailsMap.put(OntapStorageConstants.STORAGE_IP, "10.10.10.10");
+        detailsMap.put(OntapStorageConstants.SVM_NAME, "vs0");
+        detailsMap.put(OntapStorageConstants.PROTOCOL, "NFS3");
+
         Map<String, Object> dsInfos = new HashMap<>();
-        dsInfos.put("zoneId",1L);
-        dsInfos.put("podId",1L);
+        dsInfos.put("zoneId", 1L);
+        dsInfos.put("podId", 1L);
         dsInfos.put("clusterId", 2L);
         dsInfos.put("name", "testStoragePool");
         dsInfos.put("providerName", "testProvider");
-        dsInfos.put("capacityBytes",200000L);
-        dsInfos.put("managed",true);
+        dsInfos.put("capacityBytes", 200000L);
+        dsInfos.put("managed", true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
-        dsInfos.put("details", new HashMap<String, String>());
+        dsInfos.put("details", detailsMap);
 
         Exception ex = assertThrows(CloudRuntimeException.class, () -> {
             try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
