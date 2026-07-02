@@ -19,20 +19,15 @@
 
 package org.apache.cloudstack.storage.lifecycle;
 
-import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
-import com.cloud.agent.api.StoragePoolInfo;
-import com.cloud.dc.ClusterVO;
-import com.cloud.dc.dao.ClusterDao;
-import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor;
-import com.cloud.resource.ResourceManager;
-import com.cloud.storage.Storage;
-import com.cloud.storage.StorageManager;
-import com.cloud.storage.StoragePool;
-import com.cloud.storage.StoragePoolAutomation;
-import com.cloud.utils.exception.CloudRuntimeException;
-import com.google.common.base.Preconditions;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+import javax.inject.Inject;
+
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.engine.subsystem.api.storage.ClusterScope;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
@@ -40,10 +35,11 @@ import org.apache.cloudstack.engine.subsystem.api.storage.HostScope;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreParameters;
+import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
 import org.apache.cloudstack.engine.subsystem.api.storage.ZoneScope;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
-import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
@@ -59,13 +55,19 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import com.cloud.agent.api.StoragePoolInfo;
+import com.cloud.dc.ClusterVO;
+import com.cloud.dc.dao.ClusterDao;
+import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.host.HostVO;
+import com.cloud.hypervisor.Hypervisor;
+import com.cloud.resource.ResourceManager;
+import com.cloud.storage.Storage;
+import com.cloud.storage.StorageManager;
+import com.cloud.storage.StoragePool;
+import com.cloud.storage.StoragePoolAutomation;
+import com.cloud.utils.exception.CloudRuntimeException;
+import com.google.common.base.Preconditions;
 
 public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycleImpl implements PrimaryDataStoreLifeCycle {
     @Inject private ClusterDao _clusterDao;
@@ -108,8 +110,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         @SuppressWarnings("unchecked")
         Map<String, String> details = (Map<String, String>) dsInfos.get("details");
 
-        capacityBytes = validateInitializeInputs(capacityBytes, podId, clusterId, zoneId, storagePoolName, providerName, managed, details);
-
         PrimaryDataStoreParameters parameters = new PrimaryDataStoreParameters();
         if (clusterId != null) {
             ClusterVO clusterVO = _clusterDao.findById(clusterId);
@@ -119,6 +119,8 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
             parameters.setHypervisorType(clusterVO.getHypervisorType());
         }
+
+        capacityBytes = validateInitializeInputs(capacityBytes, podId, clusterId, zoneId, storagePoolName, providerName, managed, details);
 
         details.put(OntapStorageConstants.SIZE, capacityBytes.toString());
 
