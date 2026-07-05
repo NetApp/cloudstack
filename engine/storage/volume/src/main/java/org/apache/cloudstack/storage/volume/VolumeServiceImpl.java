@@ -1317,15 +1317,16 @@ public class VolumeServiceImpl implements VolumeService {
             AsyncCallbackDispatcher<VolumeServiceImpl, CopyCommandResult> caller = AsyncCallbackDispatcher.create(this);
 
             caller.setCallback(caller.getTarget().managedCopyBaseImageCallback(null, null)).setContext(context);
-
+            grantAccess(volumeInfo, destHost, primaryDataStore);
             Map<String, String> details = new HashMap<>();
 
             details.put(PrimaryDataStore.MANAGED, Boolean.TRUE.toString());
             details.put(PrimaryDataStore.STORAGE_HOST, primaryDataStore.getHostAddress());
             details.put(PrimaryDataStore.STORAGE_PORT, String.valueOf(primaryDataStore.getPort()));
             // for managed storage, the storage repository (XenServer) or datastore (ESX) name is based off of the iScsiName property of a volume
-            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, volumeInfo.get_iScsiName());
-            details.put(PrimaryDataStore.MANAGED_STORE_TARGET_ROOT_VOLUME, volumeInfo.getName());
+            // For Netapp ONTAP iscsiName or Lun path  is available only after grantAccess
+            String managedStoreTarget = ObjectUtils.defaultIfNull(volumeInfo.get_iScsiName(), volumeInfo.getUuid());
+            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, managedStoreTarget);            details.put(PrimaryDataStore.MANAGED_STORE_TARGET_ROOT_VOLUME, volumeInfo.getName());
             details.put(PrimaryDataStore.VOLUME_SIZE, String.valueOf(volumeInfo.getSize()));
             details.put(StorageManager.STORAGE_POOL_DISK_WAIT.toString(), String.valueOf(StorageManager.STORAGE_POOL_DISK_WAIT.valueIn(primaryDataStore.getId())));
 
@@ -1339,14 +1340,6 @@ public class VolumeServiceImpl implements VolumeService {
             }
 
             primaryDataStore.setDetails(details);
-
-            grantAccess(volumeInfo, destHost, primaryDataStore);
-            volumeInfo = volFactory.getVolume(volumeInfo.getId(), primaryDataStore);
-            // For Netapp ONTAP iscsiName or Lun path  is available only after grantAccess
-            String managedStoreTarget = ObjectUtils.defaultIfNull(volumeInfo.get_iScsiName(), volumeInfo.getUuid());
-            details.put(PrimaryDataStore.MANAGED_STORE_TARGET, managedStoreTarget);
-            primaryDataStore.setDetails(details);
-
             try {
                 motionSrv.copyAsync(srcTemplateInfo, destTemplateInfo, destHost, caller);
             } finally {
