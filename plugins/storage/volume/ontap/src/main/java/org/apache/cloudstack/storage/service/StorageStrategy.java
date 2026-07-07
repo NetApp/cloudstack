@@ -49,6 +49,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -154,6 +155,8 @@ public abstract class StorageStrategy {
             } else {
                 logger.debug("Skipping aggregate capacity validation — not required for existing-volume operations");
             }
+            this.aggregates = eligibleAggregates;
+            logger.info("Found " + eligibleAggregates.size() + " online aggregate(s) on SVM " + svmName + " for volume operations.");
 
             logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (CloudRuntimeException e) {
@@ -246,7 +249,7 @@ public abstract class StorageStrategy {
 
             if (aggrResp == null) {
                 logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
-                break;
+                continue;
             }
 
             if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
@@ -286,6 +289,7 @@ public abstract class StorageStrategy {
         volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
         volumeRequest.setNas(nas);
+        volumeRequest.setGuarantee(new Volume.Guarantee(Volume.Guarantee.TypeEnum.NONE));
         try {
             JobResponse jobResponse = volumeFeignClient.createVolumeWithJob(authHeader, volumeRequest);
             if (jobResponse == null || jobResponse.getJob() == null) {

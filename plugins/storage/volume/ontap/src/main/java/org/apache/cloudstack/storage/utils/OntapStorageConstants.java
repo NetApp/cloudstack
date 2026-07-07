@@ -97,6 +97,7 @@ public class OntapStorageConstants {
     public static final String IGROUP_DOT_UUID = "igroup.uuid";
     public static final String UNDERSCORE = "_";
     public static final String CS = "cs";
+    public static final int IGROUP_NAME_MAX_LENGTH = 96;
     public static final String SRC_CS_VOLUME_ID = "src_cs_volume_id";
     public static final String BASE_ONTAP_FV_ID = "base_ontap_fv_id";
     public static final String ONTAP_SNAP_ID = "ontap_snap_id";
@@ -105,7 +106,7 @@ public class OntapStorageConstants {
     public static final String PRIMARY_POOL_ID = "primary_pool_id";
     public static final String ONTAP_SNAP_SIZE = "ontap_snap_size";
     public static final String FILE_PATH = "file_path";
-    public static final int MAX_SNAPSHOT_NAME_LENGTH = 64;
+    public static final int MAX_SNAPSHOT_NAME_LENGTH = 255;
     public static final String ONTAP_TEMP_CG_PREFIX = "cs-temp-cg-";
     /** ONTAP CG API: action required when referencing existing FlexVols in a consistency group. */
     public static final String CG_VOLUME_PROVISIONING_ACTION_ADD = "add";
