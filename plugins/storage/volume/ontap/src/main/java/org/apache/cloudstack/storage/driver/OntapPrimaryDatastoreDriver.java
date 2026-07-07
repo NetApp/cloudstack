@@ -352,11 +352,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         SnapshotVO snapshotVO = snapshotDao.findById(snapshotId);
         if (snapshotVO == null) {
-            throw new CloudRuntimeException("Cannot resolve storage pool for snapshot [" + snapshotId + "]");
+            throw new CloudRuntimeException("Snapshot not found for snapshot [" + snapshotId + "]");
         }
         VolumeVO volumeVO = volumeDao.findByIdIncludingRemoved(snapshotVO.getVolumeId());
         if (volumeVO == null) {
-            throw new CloudRuntimeException("Cannot resolve storage pool for snapshot [" + snapshotId + "]");
+            throw new CloudRuntimeException("CloudStack Volume not found for snapshot [" + snapshotId + "]");
         }
         Long poolId = volumeVO.getPoolId() != null ? volumeVO.getPoolId() : volumeVO.getLastPoolId();
         if (poolId == null || poolId <= 0) {
@@ -685,7 +685,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
             if (volumeVO == null) {
-                throw new CloudRuntimeException("VolumeVO not found for id: " + volumeInfo.getId());
+                throw new CloudRuntimeException("CloudStack Volume not found for id: " + volumeInfo.getId());
             }
 
             StoragePoolVO storagePool = storagePoolDao.findById(volumeVO.getPoolId());
@@ -718,11 +718,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String lunUuid = null;
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
                 VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeVO.getId(), OntapStorageConstants.LUN_DOT_UUID);
-                String lunUUID = lunDetail != null ? lunDetail.getValue() : null;
-                if (lunUUID == null) {
+                if (lunDetail.getValue() == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
-                lunUuid = lunUUID;
+                lunUuid = lunDetail.getValue();
             }
 
             // Create FlexVolume snapshot via ONTAP REST API

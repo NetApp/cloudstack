@@ -677,7 +677,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
                         flexVolUuid, snapshotUuid, snapshotNameBase, volumePath, groupInfo.poolId, protocol));
             }
 
-            logger.info("takeVMSnapshot: [FlexVol] Snapshot [{}] (uuid={}) on FlexVol [{}] completed in {} ms. Covers volumes: {}",
+            logger.debug("takeVMSnapshot: [FlexVol] Snapshot [{}] (uuid={}) on FlexVol [{}] completed in {} ms. Covers volumes: {}",
                     snapshotNameBase, snapshotUuid, flexVolUuid,
                     TimeUnit.MILLISECONDS.convert(System.nanoTime() - startSnapshot, TimeUnit.NANOSECONDS),
                     groupInfo.volumeIds);

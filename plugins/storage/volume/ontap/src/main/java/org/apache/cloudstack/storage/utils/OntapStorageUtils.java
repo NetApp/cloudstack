@@ -166,7 +166,7 @@ public class OntapStorageUtils {
     /**
      * Builds an ONTAP-safe name token from user-provided snapshot text.
      */
-    public static String getOntapCloneName(String cloudStackSnapshotName) {
+    public static String getOntapSnapshotName(String cloudStackSnapshotName) {
         if (cloudStackSnapshotName == null || cloudStackSnapshotName.trim().isEmpty()) {
             throw new InvalidParameterValueException("Snapshot name cannot be null or blank");
         }
@@ -190,7 +190,7 @@ public class OntapStorageUtils {
     public static String buildOntapSnapshotName(String cloudStackSnapshotName, String uniquenessSuffix) {
         String normalizedBase = (cloudStackSnapshotName == null || cloudStackSnapshotName.trim().isEmpty())
                 ? "snapshot"
-                : getOntapCloneName(cloudStackSnapshotName);
+                : getOntapSnapshotName(cloudStackSnapshotName);
         String suffix = (uniquenessSuffix == null || uniquenessSuffix.isEmpty())
                 ? ""
                 : "_" + uniquenessSuffix.replaceAll("[^a-zA-Z0-9_]", "_");
