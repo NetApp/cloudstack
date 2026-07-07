@@ -974,8 +974,9 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
     }
 
     /**
-     * Single GET attempt: match by name, then fall back to listing all CG snapshots in this group (And it would one
-     *  always since workflow is keep deleting the CG).
+     * Single GET attempt: try to match by name,
+     * then fall back to listing all CG snapshots in this group (And it would be one
+     * always since workflow is keep deleting the CG).
      */
     String lookupConsistencyGroupSnapshotUuid(SnapshotFeignClient client, String authHeader,
                                               String cgUuid, String snapshotName) {

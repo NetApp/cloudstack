@@ -675,7 +675,7 @@ public abstract class StorageStrategy {
      *
      * @param jobUUID          UUID of the ONTAP job to poll
      * @param maxRetries       maximum number of poll attempts
-     * @param sleepTimeInMilliSecs  seconds to sleep between poll attempts
+     * @param sleepTimeInMilliSecs  sleep between poll attempts
      * @return true if the job completed successfully
      */
     public Boolean jobPollForSuccess(String jobUUID, int maxRetries, int sleepTimeInMilliSecs) {
