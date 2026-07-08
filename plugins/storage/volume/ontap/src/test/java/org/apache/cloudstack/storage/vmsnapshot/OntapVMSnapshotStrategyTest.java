@@ -50,6 +50,8 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroup;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroupSnapshot;
 import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
@@ -556,9 +558,9 @@ class OntapVMSnapshotStrategyTest {
         SnapshotFeignClient client = mock(SnapshotFeignClient.class);
         StorageStrategy storageStrategy = mock(StorageStrategy.class);
         when(client.createConsistencyGroup(any(), any())).thenReturn(createJobResponse("job-cg-create"));
-        OntapResponse<Map<String, Object>> cgResponse = new OntapResponse<>();
-        Map<String, Object> cgRecord = new HashMap<>();
-        cgRecord.put("uuid", "cg-uuid-1");
+        OntapResponse<ConsistencyGroup> cgResponse = new OntapResponse<>();
+        ConsistencyGroup cgRecord = new ConsistencyGroup();
+        cgRecord.setUuid("cg-uuid-1");
         cgResponse.setRecords(Collections.singletonList(cgRecord));
         when(client.getConsistencyGroups(any(), any())).thenReturn(cgResponse);
 
@@ -567,19 +569,14 @@ class OntapVMSnapshotStrategyTest {
                 java.util.Set.of("flexvol-uuid-1", "flexvol-uuid-2"));
 
         assertEquals("cg-uuid-1", cgUuid);
-        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor = org.mockito.ArgumentCaptor.forClass(Map.class);
+        org.mockito.ArgumentCaptor<ConsistencyGroup> payloadCaptor = org.mockito.ArgumentCaptor.forClass(ConsistencyGroup.class);
         verify(client).createConsistencyGroup(eq("auth"), payloadCaptor.capture());
-        Map<String, Object> payload = payloadCaptor.getValue();
-        assertEquals("cg-name", payload.get("name"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> svm = (Map<String, Object>) payload.get("svm");
-        assertEquals("svm-uuid-1", svm.get("uuid"));
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> volumes = (List<Map<String, Object>>) payload.get("volumes");
-        assertEquals(2, volumes.size());
-        @SuppressWarnings("unchecked")
-        Map<String, Object> provisioningOptions = (Map<String, Object>) volumes.get(0).get("provisioning_options");
-        assertEquals(OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD, provisioningOptions.get("action"));
+        ConsistencyGroup payload = payloadCaptor.getValue();
+        assertEquals("cg-name", payload.getName());
+        assertEquals("svm-uuid-1", payload.getSvm().getUuid());
+        assertEquals(2, payload.getVolumes().size());
+        assertEquals(OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD,
+                payload.getVolumes().get(0).getProvisioningOptions().getAction());
     }
 
     @Test
@@ -1162,18 +1159,18 @@ class OntapVMSnapshotStrategyTest {
         });
 
         when(snapshotFeignClient.createConsistencyGroup(any(), any())).thenReturn(createJobResponse("job-cg-create"));
-        OntapResponse<Map<String, Object>> cgResponse = new OntapResponse<>();
-        Map<String, Object> cgRecord = new HashMap<>();
-        cgRecord.put("uuid", "cg-uuid-1");
+        OntapResponse<ConsistencyGroup> cgResponse = new OntapResponse<>();
+        ConsistencyGroup cgRecord = new ConsistencyGroup();
+        cgRecord.setUuid("cg-uuid-1");
         cgResponse.setRecords(Collections.singletonList(cgRecord));
         when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(cgResponse);
 
         when(snapshotFeignClient.createConsistencyGroupSnapshot(any(), eq("cg-uuid-1"), any()))
                 .thenReturn(createJobResponse("job-cg-start"));
-        OntapResponse<Map<String, Object>> cgSnapshotResponse = new OntapResponse<>();
-        Map<String, Object> cgSnapshotRecord = new HashMap<>();
-        cgSnapshotRecord.put("uuid", "cg-snap-uuid-1");
-        cgSnapshotRecord.put("name", snapshotName);
+        OntapResponse<ConsistencyGroupSnapshot> cgSnapshotResponse = new OntapResponse<>();
+        ConsistencyGroupSnapshot cgSnapshotRecord = new ConsistencyGroupSnapshot();
+        cgSnapshotRecord.setUuid("cg-snap-uuid-1");
+        cgSnapshotRecord.setName(snapshotName);
         cgSnapshotResponse.setRecords(Collections.singletonList(cgSnapshotRecord));
         when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-uuid-1"), any()))
                 .thenReturn(cgSnapshotResponse);

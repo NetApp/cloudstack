@@ -51,6 +51,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreCapabilities;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.ObjectInDataStoreStateMachine;
@@ -1635,7 +1636,7 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
 
         updateSnapshotPayload(volume.getPoolId(), payload, isKvmAndFileBasedStorage, clusterId);
 
-        // Managed PRIMARY snapshots (ONTAP volume snapshots, etc.) remain on primary/array storage.
+        // NetApp ONTAP managed PRIMARY snapshots remain on primary/array storage (FlexVol).
         // They must not use secondary archive bookkeeping (postSnapshotDirectlyToSecondary) or a physical
         // secondary copy — delete is handled via StorageSystemSnapshotStrategy → driver deleteAsync.
         boolean archiveSnapshotToSecondary = backupSnapToSecondary
@@ -1670,7 +1671,7 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
                 }
             } else {
                 if (backupSnapToSecondary && isManagedPrimaryLocationSnapshot(storagePool, payload)) {
-                    logger.info("takeSnapshot: snapshot [{}] on managed primary pool [{}] with locationType=PRIMARY — "
+                    logger.info("takeSnapshot: snapshot [{}] on NetApp ONTAP managed primary pool [{}] with locationType=PRIMARY — "
                             + "keeping snapshot on primary/array storage only; not archiving to secondary "
                             + "(backup.snapshot.after.take is ignored for this snapshot class)",
                             snapshotId, storagePool.getId());
@@ -1740,7 +1741,7 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
     /**
      * KVM file-based fast-path: records snapshot on image store without copying bytes, then drops the
      * primary {@code snapshot_data_store} row. Used only for non-managed primary storage when
-     * {@code backup.snapshot.after.take} is enabled. Managed PRIMARY snapshots (e.g. ONTAP) never
+     * {@code backup.snapshot.after.take} is enabled. NetApp ONTAP managed PRIMARY snapshots never
      * call this method — see {@link #isManagedPrimaryLocationSnapshot}.
      */
     private void postSnapshotDirectlyToSecondary(SnapshotInfo snapshot, SnapshotInfo snapshotOnPrimary, Long snapshotId) {
@@ -1760,16 +1761,19 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
     }
 
     /**
-     * Returns true when a volume snapshot is explicitly kept on managed primary/array storage.
+     * Returns true when a volume snapshot on NetApp ONTAP is explicitly kept on managed primary/array storage.
      *
-     * <p>For managed pools, {@link #updateSnapshotPayload} defaults {@code locationType} to
+     * <p>For ONTAP managed pools, {@link #updateSnapshotPayload} defaults {@code locationType} to
      * {@link Snapshot.LocationType#PRIMARY}. ONTAP volume snapshots therefore stay on the FlexVol
      * on primary — they are not moved or mirrored to secondary storage. The primary
      * {@code snapshot_data_store} row must remain so volume-snapshot DELETE uses
      * {@code StorageSystemSnapshotStrategy} and the primary datastore driver.</p>
+     *
+     * <p>Other managed storage providers are not affected by this check.</p>
      */
     private boolean isManagedPrimaryLocationSnapshot(StoragePool storagePool, CreateSnapshotPayload payload) {
         return storagePool != null && storagePool.isManaged()
+                && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePool.getStorageProviderName())
                 && Snapshot.LocationType.PRIMARY.equals(payload.getLocationType());
     }
 

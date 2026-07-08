@@ -29,13 +29,19 @@ import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 
+import com.cloud.utils.StringUtils;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.StrategyPriority;
 import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroup;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroupSnapshot;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroupVolume;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroupVolumeProvisioningOptions;
 import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -789,9 +795,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      * Builds a deterministic temporary CG name for the VM snapshot transaction.
      */
     String buildTemporaryConsistencyGroupName(VMSnapshot vmSnapshot) {
-        return OntapStorageUtils.buildOntapSnapshotName(
-                OntapStorageConstants.ONTAP_TEMP_CG_PREFIX + vmSnapshot.getId(),
-                "cg" + vmSnapshot.getId());
+        return OntapStorageConstants.ONTAP_TEMP_CG_PREFIX + vmSnapshot.getId();
     }
 
     /**
@@ -818,12 +822,12 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
     ConsistencyGroupScope consistencyGroupScopeFromPoolDetails(Map<String, String> poolDetails, long poolId) {
         String storageIp = poolDetails.get(OntapStorageConstants.STORAGE_IP);
-        if (storageIp == null || storageIp.trim().isEmpty()) {
+        if (StringUtils.isBlank(storageIp)) {
             throw new CloudRuntimeException("ONTAP storage management IP not found in pool details for pool ["
                     + poolId + "]");
         }
         String svmName = poolDetails.get(OntapStorageConstants.SVM_NAME);
-        if (svmName == null || svmName.trim().isEmpty()) {
+        if (StringUtils.isBlank(svmName)) {
             throw new CloudRuntimeException("SVM name not found in pool details for pool [" + poolId + "]");
         }
         String svmUuid = poolDetails.get(OntapStorageConstants.SVM_UUID);
@@ -841,23 +845,21 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
             throw new CloudRuntimeException("ONTAP consistency group scope is required to create CG [" + cgName + "]");
         }
 
-        List<Map<String, Object>> volumeRefs = new ArrayList<>();
+        List<ConsistencyGroupVolume> volumeRefs = new ArrayList<>();
         for (String flexVolUuid : flexVolUuids) {
-            Map<String, Object> provisioningOptions = new LinkedHashMap<>();
-            provisioningOptions.put("action", OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD);
+            ConsistencyGroupVolumeProvisioningOptions provisioningOptions =
+                    new ConsistencyGroupVolumeProvisioningOptions(OntapStorageConstants.CG_VOLUME_PROVISIONING_ACTION_ADD);
 
-            Map<String, Object> volumeRef = new LinkedHashMap<>();
-            volumeRef.put("uuid", flexVolUuid);
-            volumeRef.put("provisioning_options", provisioningOptions);
+            ConsistencyGroupVolume volumeRef = new ConsistencyGroupVolume();
+            volumeRef.setUuid(flexVolUuid);
+            volumeRef.setProvisioningOptions(provisioningOptions);
             volumeRefs.add(volumeRef);
         }
 
-        Map<String, Object> svmRef = cgScope.toOntapSvmReference();
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("name", cgName);
-        payload.put("svm", svmRef);
-        payload.put("volumes", volumeRefs);
+        ConsistencyGroup payload = new ConsistencyGroup();
+        payload.setName(cgName);
+        payload.setSvm(cgScope.toOntapSvm());
+        payload.setVolumes(volumeRefs);
 
         JobResponse response = client.createConsistencyGroup(authHeader, payload);
         storageStrategy.pollJobIfPresent(response, "create temporary consistency group " + cgName);
@@ -874,9 +876,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      */
     String startConsistencyGroupSnapshot(SnapshotFeignClient client, StorageStrategy storageStrategy,
                                        String authHeader, String cgUuid, String snapshotName) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("name", snapshotName);
-        payload.put("action", "start");
+        ConsistencyGroupSnapshot payload = new ConsistencyGroupSnapshot(snapshotName, "start");
         JobResponse response = client.createConsistencyGroupSnapshot(authHeader, cgUuid, payload);
         Job completedJob = storageStrategy.pollJobIfPresentAndGetCompletedJob(response,
                 "start CG snapshot " + snapshotName + " for " + cgUuid);
@@ -897,8 +897,8 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      */
     void commitConsistencyGroupSnapshot(SnapshotFeignClient client, StorageStrategy storageStrategy,
                                         String authHeader, String cgUuid, String snapshotUuid) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("action", "commit");
+        ConsistencyGroupSnapshot payload = new ConsistencyGroupSnapshot();
+        payload.setAction("commit");
         JobResponse response = client.commitConsistencyGroupSnapshot(authHeader, cgUuid, snapshotUuid, payload);
         storageStrategy.pollJobIfPresent(response, "commit CG snapshot " + snapshotUuid + " for " + cgUuid);
     }
@@ -921,11 +921,12 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         query.put("name", cgName);
         cgScope.applySvmQueryFilter(query);
         query.put("fields", "uuid,name");
-        OntapResponse<Map<String, Object>> response = client.getConsistencyGroups(authHeader, query);
+        OntapResponse<ConsistencyGroup> response = client.getConsistencyGroups(authHeader, query);
         if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
             return null;
         }
-        return getStringField(response.getRecords().get(0), "uuid");
+        ConsistencyGroup consistencyGroup = response.getRecords().get(0);
+        return consistencyGroup != null ? consistencyGroup.getUuid() : null;
     }
 
     /**
@@ -983,7 +984,7 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         Map<String, Object> query = new HashMap<>();
         query.put("name", snapshotName);
         query.put("fields", "uuid,name");
-        OntapResponse<Map<String, Object>> response = client.getConsistencyGroupSnapshots(authHeader, cgUuid, query);
+        OntapResponse<ConsistencyGroupSnapshot> response = client.getConsistencyGroupSnapshots(authHeader, cgUuid, query);
         String snapshotUuid = findConsistencyGroupSnapshotUuidInRecords(response, snapshotName);
         if (snapshotUuid != null) {
             return snapshotUuid;
@@ -991,33 +992,24 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
 
         Map<String, Object> listAllQuery = new HashMap<>();
         listAllQuery.put("fields", "uuid,name");
-        OntapResponse<Map<String, Object>> allSnapshots = client.getConsistencyGroupSnapshots(authHeader, cgUuid, listAllQuery);
+        OntapResponse<ConsistencyGroupSnapshot> allSnapshots = client.getConsistencyGroupSnapshots(authHeader, cgUuid, listAllQuery);
         return findConsistencyGroupSnapshotUuidInRecords(allSnapshots, snapshotName);
     }
 
-    private String findConsistencyGroupSnapshotUuidInRecords(OntapResponse<Map<String, Object>> response,
+    private String findConsistencyGroupSnapshotUuidInRecords(OntapResponse<ConsistencyGroupSnapshot> response,
                                                                String snapshotName) {
         if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
             return null;
         }
-        for (Map<String, Object> record : response.getRecords()) {
-            String name = getStringField(record, "name");
-            if (snapshotName.equals(name)) {
-                String uuid = getStringField(record, "uuid");
+        for (ConsistencyGroupSnapshot record : response.getRecords()) {
+            if (record != null && snapshotName.equals(record.getName())) {
+                String uuid = record.getUuid();
                 if (uuid != null && !uuid.isEmpty()) {
                     return uuid;
                 }
             }
         }
         return null;
-    }
-
-    private String getStringField(Map<String, Object> record, String key) {
-        if (record == null) {
-            return null;
-        }
-        Object value = record.get(key);
-        return value != null ? value.toString() : null;
     }
 
     /**
@@ -1082,33 +1074,52 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
      * <p>Since there is one detail row per CloudStack volume, multiple rows may reference
      * the same FlexVol + snapshot combination. This method deduplicates to delete each
      * underlying ONTAP snapshot only once.</p>
+     *
+     * <p>Detail rows are removed only after the underlying ONTAP snapshot delete succeeds
+     * (or was already deleted for the same FlexVol+snapshot pair in this pass). If delete
+     * throws, the detail row is retained so a retry can still find the ONTAP snapshot.</p>
      */
     void deleteFlexVolSnapshots(List<VMSnapshotDetailsVO> flexVolDetails) {
-        // Track which FlexVol+Snapshot pairs have already been deleted
         Map<String, Boolean> deletedSnapshots = new HashMap<>();
+        CloudRuntimeException deleteFailure = null;
 
         for (VMSnapshotDetailsVO detailVO : flexVolDetails) {
             FlexVolSnapshotDetail detail = FlexVolSnapshotDetail.parse(detailVO.getValue());
             String dedupeKey = detail.flexVolUuid + "::" + detail.snapshotUuid;
 
-            // Only delete the ONTAP snapshot once per FlexVol+Snapshot pair
-            if (!deletedSnapshots.containsKey(dedupeKey)) {
-                Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
-                StorageStrategy storageStrategy = resolveStorageStrategy(poolDetails);
+            try {
+                if (!deletedSnapshots.containsKey(dedupeKey)) {
+                    Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(detail.poolId);
+                    StorageStrategy storageStrategy = resolveStorageStrategy(poolDetails);
 
-                logger.info("deleteFlexVolSnapshots: Deleting ONTAP FlexVol snapshot [{}] (uuid={}) on FlexVol [{}]",
-                        detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid);
+                    logger.info("deleteFlexVolSnapshots: Deleting ONTAP FlexVol snapshot [{}] (uuid={}) on FlexVol [{}]",
+                            detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid);
 
-                storageStrategy.deleteFlexVolSnapshotForCloudStackVolume(
-                        detail.flexVolUuid, detail.snapshotUuid, detail.snapshotName);
+                    storageStrategy.deleteFlexVolSnapshotForCloudStackVolume(
+                            detail.flexVolUuid, detail.snapshotUuid, detail.snapshotName);
 
-                deletedSnapshots.put(dedupeKey, Boolean.TRUE);
-                logger.info("deleteFlexVolSnapshots: Deleted ONTAP FlexVol snapshot [{}] on FlexVol [{}]",
-                        detail.snapshotName, detail.flexVolUuid);
+                    deletedSnapshots.put(dedupeKey, Boolean.TRUE);
+                    logger.info("deleteFlexVolSnapshots: Deleted ONTAP FlexVol snapshot [{}] on FlexVol [{}]",
+                            detail.snapshotName, detail.flexVolUuid);
+                }
+            } catch (Exception e) {
+                logger.error("deleteFlexVolSnapshots: Failed to delete ONTAP FlexVol snapshot [{}] (uuid={}) "
+                        + "on FlexVol [{}] for detail [{}]: {}",
+                        detail.snapshotName, detail.snapshotUuid, detail.flexVolUuid, detailVO.getId(), e.getMessage(), e);
+                if (deleteFailure == null) {
+                    deleteFailure = e instanceof CloudRuntimeException
+                            ? (CloudRuntimeException) e
+                            : new CloudRuntimeException("Failed to delete ONTAP FlexVol snapshot: " + e.getMessage(), e);
+                }
+            } finally {
+                if (deletedSnapshots.containsKey(dedupeKey)) {
+                    vmSnapshotDetailsDao.remove(detailVO.getId());
+                }
             }
+        }
 
-            // Always remove the DB detail row
-            vmSnapshotDetailsDao.remove(detailVO.getId());
+        if (deleteFailure != null) {
+            throw deleteFailure;
         }
     }
 
@@ -1208,13 +1219,24 @@ public class OntapVMSnapshotStrategy extends StorageVMSnapshotStrategy {
         }
 
         Map<String, Object> toOntapSvmReference() {
+            Svm svm = toOntapSvm();
             Map<String, Object> svmRef = new LinkedHashMap<>();
-            if (svmUuid != null && !svmUuid.isEmpty()) {
-                svmRef.put("uuid", svmUuid);
+            if (svm.getUuid() != null && !svm.getUuid().isEmpty()) {
+                svmRef.put("uuid", svm.getUuid());
             } else {
-                svmRef.put("name", svmName);
+                svmRef.put("name", svm.getName());
             }
             return svmRef;
+        }
+
+        Svm toOntapSvm() {
+            Svm svm = new Svm();
+            if (svmUuid != null && !svmUuid.isEmpty()) {
+                svm.setUuid(svmUuid);
+            } else {
+                svm.setName(svmName);
+            }
+            return svm;
         }
 
         void applySvmQueryFilter(Map<String, Object> query) {

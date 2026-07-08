@@ -1000,8 +1000,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * Builds an ONTAP-safe snapshot name from the CloudStack UI name with uniqueness suffix.
      */
     private String buildSnapshotName(String cloudStackSnapshotName, long snapshotId) {
-        return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, "cs" + snapshotId);
+        return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
     }
+
 
     /**
      * Persists snapshot metadata in snapshot_details table.

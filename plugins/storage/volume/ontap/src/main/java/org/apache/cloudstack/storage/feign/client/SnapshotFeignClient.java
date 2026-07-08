@@ -23,6 +23,8 @@ import feign.Param;
 import feign.QueryMap;
 import feign.RequestLine;
 import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroup;
+import org.apache.cloudstack.storage.feign.model.ConsistencyGroupSnapshot;
 import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
 import org.apache.cloudstack.storage.feign.model.SnapshotFileRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
@@ -194,7 +196,7 @@ public interface SnapshotFeignClient {
     @RequestLine("POST /api/application/consistency-groups")
     @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
     JobResponse createConsistencyGroup(@Param("authHeader") String authHeader,
-                                       Map<String, Object> request);
+                                       ConsistencyGroup request);
 
     /**
      * Lists consistency groups.
@@ -207,8 +209,8 @@ public interface SnapshotFeignClient {
      */
     @RequestLine("GET /api/application/consistency-groups")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<Map<String, Object>> getConsistencyGroups(@Param("authHeader") String authHeader,
-                                                            @QueryMap Map<String, Object> queryParams);
+    OntapResponse<ConsistencyGroup> getConsistencyGroups(@Param("authHeader") String authHeader,
+                                                       @QueryMap Map<String, Object> queryParams);
 
     /**
      * Creates (starts) a consistency group snapshot.
@@ -224,7 +226,7 @@ public interface SnapshotFeignClient {
     @Headers({"Authorization: {authHeader}", "Content-Type: application/json"})
     JobResponse createConsistencyGroupSnapshot(@Param("authHeader") String authHeader,
                                                @Param("cgUuid") String cgUuid,
-                                               Map<String, Object> request);
+                                               ConsistencyGroupSnapshot request);
 
     /**
      * Lists snapshots for a consistency group.
@@ -238,9 +240,9 @@ public interface SnapshotFeignClient {
      */
     @RequestLine("GET /api/application/consistency-groups/{cgUuid}/snapshots")
     @Headers({"Authorization: {authHeader}"})
-    OntapResponse<Map<String, Object>> getConsistencyGroupSnapshots(@Param("authHeader") String authHeader,
-                                                                    @Param("cgUuid") String cgUuid,
-                                                                    @QueryMap Map<String, Object> queryParams);
+    OntapResponse<ConsistencyGroupSnapshot> getConsistencyGroupSnapshots(@Param("authHeader") String authHeader,
+                                                                         @Param("cgUuid") String cgUuid,
+                                                                         @QueryMap Map<String, Object> queryParams);
 
     /**
      * Commits a started consistency group snapshot.
@@ -258,7 +260,7 @@ public interface SnapshotFeignClient {
     JobResponse commitConsistencyGroupSnapshot(@Param("authHeader") String authHeader,
                                                @Param("cgUuid") String cgUuid,
                                                @Param("snapshotUuid") String snapshotUuid,
-                                               Map<String, Object> request);
+                                               ConsistencyGroupSnapshot request);
 
     /**
      * Deletes a consistency group.

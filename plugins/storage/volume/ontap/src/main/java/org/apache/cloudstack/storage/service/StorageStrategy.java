@@ -186,7 +186,7 @@ public abstract class StorageStrategy {
             Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid());
             if (aggrResp == null) {
                 logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
-                break;
+                continue;
             }
             if (!Objects.equals(aggrResp.getState(), Aggregate.StateEnum.ONLINE)) {
                 logger.warn("Aggregate " + aggr.getName() + " is not in online state. Skipping this aggregate.");
@@ -715,9 +715,6 @@ public abstract class StorageStrategy {
                 jobRetryCount++;
                 Thread.sleep(sleepTimeInMilliSecs);
             }
-            if (jobResp == null || !jobResp.getState().equals(OntapStorageConstants.JOB_SUCCESS)) {
-                return null;
-            }
             return jobResp;
         } catch (FeignException.FeignClientException e) {
             throw new CloudRuntimeException("Failed to fetch job status: " + e.getMessage());
@@ -752,10 +749,7 @@ public abstract class StorageStrategy {
                     operationName);
             return;
         }
-        Boolean success = jobPollForSuccess(response.getJob().getUuid(), maxRetries, pollIntervalMs);
-        if (!Boolean.TRUE.equals(success)) {
-            throw new CloudRuntimeException("ONTAP operation failed: " + operationName);
-        }
+        jobPollForSuccess(response.getJob().getUuid(), maxRetries, pollIntervalMs);
     }
 
     /**
