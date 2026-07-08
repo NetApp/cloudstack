@@ -47,6 +47,7 @@ import com.cloud.hypervisor.Hypervisor;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
+import com.cloud.utils.Pair;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -116,7 +117,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_clusterDao.findById(1L)).thenReturn(clusterVO);
 
         when(storageStrategy.connect()).thenReturn(true);
-        when(storageStrategy.getNetworkInterface()).thenReturn("testNetworkInterface");
+        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("testNetworkInterface", null));
 
         Volume volume = new Volume();
         volume.setUuid("test-volume-uuid");
@@ -153,6 +154,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         poolDetails.put("svmName", "svm1");
         poolDetails.put("protocol", "NFS3");
         poolDetails.put("storageIP", "192.168.1.100");
+        when(zoneScope.getScopeId()).thenReturn(1L);
     }
 
     @Test
@@ -412,12 +414,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any()))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock successful host connections
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
@@ -446,12 +448,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any()))
                 .thenReturn(singleHost);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -477,12 +479,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any()))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -507,6 +509,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock host connection failure for first host
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong()))
@@ -533,12 +536,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any()))
                 .thenReturn(emptyHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
             // Execute
             boolean result = ontapPrimaryDatastoreLifecycle.attachCluster(
@@ -562,6 +565,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock: first host succeeds, second host fails
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong()))
@@ -585,12 +589,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any()))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -608,7 +612,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testAttachZone_positive() throws Exception {
         // Setup
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -618,6 +621,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock successful host connections
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
@@ -643,7 +647,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
         List<HostVO> singleHost = new ArrayList<>();
         singleHost.add(mockHosts.get(0));
 
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(singleHost);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -653,6 +656,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -675,7 +679,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
         host3.setClusterId(1L);
         mockHosts.add(host3);
 
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -685,6 +688,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -701,7 +705,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testAttachZone_hostConnectionFailure() throws Exception {
         // Setup
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -710,6 +713,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock host connection failure for first host
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong()))
@@ -733,7 +737,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
         // Setup - no hosts in zone
         List<HostVO> emptyHosts = new ArrayList<>();
 
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(emptyHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -743,6 +746,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
 
             // Execute
             boolean result = ontapPrimaryDatastoreLifecycle.attachZone(
@@ -758,7 +762,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testAttachZone_secondHostConnectionFails() throws Exception {
         // Setup
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -767,6 +770,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
 
             // Mock: first host succeeds, second host fails
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong()))
@@ -787,7 +791,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testAttachZone_createAccessGroupCalled() throws Exception {
         // Setup
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -797,6 +800,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
             when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
+            when(_dataStoreHelper.attachZone(any(DataStore.class))).thenReturn(dataStore);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             // Execute
@@ -834,7 +838,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
     @Test
     public void testAttachZone_kvmHypervisorSetsAndUpdatesPool() throws Exception {
         // KVM hypervisorType should be set on the pool and persisted via storagePoolDao.update
-        when(zoneScope.getScopeId()).thenReturn(1L);
         when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), eq(1L), eq(Hypervisor.HypervisorType.KVM)))
                 .thenReturn(mockHosts);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
@@ -843,7 +846,6 @@ public class OntapPrimaryDatastoreLifecycleTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(storageStrategy);
-            when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenReturn(null);
             when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
 
             boolean result = ontapPrimaryDatastoreLifecycle.attachZone(
