@@ -49,7 +49,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.HashMap;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -155,12 +154,14 @@ public abstract class StorageStrategy {
             } else {
                 logger.debug("Skipping aggregate capacity validation — not required for existing-volume operations");
             }
-            this.aggregates = eligibleAggregates;
-            logger.info("Found " + eligibleAggregates.size() + " online aggregate(s) on SVM " + svmName + " for volume operations.");
 
             logger.info("Successfully connected to ONTAP cluster and validated ONTAP details provided");
         } catch (CloudRuntimeException e) {
             throw e;
+        } catch (FeignException.Unauthorized e) {
+            String msg = "Authentication failed: Invalid credentials. Please verify the username and password.";
+            logger.error(msg, e);
+            throw new CloudRuntimeException(msg, e);
         } catch (Exception e) {
             logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
