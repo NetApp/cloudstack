@@ -231,11 +231,6 @@ public class OntapHostListener implements HypervisorHostListener {
             return false;
         }
 
-        if (!host.getHypervisorType().equals(Hypervisor.HypervisorType.KVM)) {
-            logger.debug("ONTAP plugin does not support {} type host, skipping cleanup", host.getHypervisorType());
-            return false;
-        }
-
         List<StoragePoolHostVO> poolHostRefs = storagePoolHostDao.listByHostId(hostId);
         if (poolHostRefs == null || poolHostRefs.isEmpty()) {
             logger.debug("No storage pool associations found for host {}", hostId);
