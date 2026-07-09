@@ -718,7 +718,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             String lunUuid = null;
             if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
                 VolumeDetailVO lunDetail = volumeDetailsDao.findDetail(volumeVO.getId(), OntapStorageConstants.LUN_DOT_UUID);
-                if (lunDetail.getValue() == null) {
+                if (lunDetail == null || lunDetail.getValue() == null) {
                     throw new CloudRuntimeException("LUN UUID not found for iSCSI volume " + volumeVO.getId());
                 }
                 lunUuid = lunDetail.getValue();
