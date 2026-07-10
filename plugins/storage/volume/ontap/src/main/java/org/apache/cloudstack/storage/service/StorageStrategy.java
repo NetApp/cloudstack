@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -389,7 +390,11 @@ public abstract class StorageStrategy {
                 throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
             }
             logger.info("Volume deleted successfully: " + volume.getName());
-        } catch (FeignException.FeignClientException e) {
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                logger.warn("deleteStorageVolume: Volume '{}' not found in ONTAP (may not have been created), treating as no-op", volume.getName());
+                return;
+            }
             logger.error("Exception while deleting volume: ", e);
             throw new CloudRuntimeException("Failed to delete volume: " + e.getMessage());
         }
