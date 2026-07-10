@@ -392,7 +392,7 @@ public abstract class StorageStrategy {
             logger.info("Volume deleted successfully: " + volume.getName());
         } catch (FeignException e) {
             if (e.status() == 404) {
-                logger.warn("deleteStorageVolume: Volume '{}' not found in ONTAP (may not have been created), treating as no-op", volume.getName());
+                logger.warn("deleteStorageVolume: Volume '{}' not found in ONTAP, treating as no-op", volume.getName());
                 return;
             }
             logger.error("Exception while deleting volume: ", e);
