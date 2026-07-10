@@ -160,6 +160,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
+                    volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
+                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}]", volumeVO.getFormat(), storagePool.getHypervisor());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
@@ -174,15 +176,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                             volumeVO.setFolder(created.getLun().getUuid());
                         }
 
-                        volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
-                        logger.info("createAsync: Volume format set to [{}] for hypervisor [{}] and protocol [{}]", volumeVO.getFormat(), storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL));
                         logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
                                 lunName, volumeVO.getId());
                         createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
 
-                        volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
-                        logger.info("createAsync: Volume format set to [{}] for hypervisor [{}] and protocol [{}]", volumeVO.getFormat(), storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL));
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
                         logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
                                 volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
@@ -1011,7 +1009,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
 
     private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType) {
-        if (hypervisorType == HypervisorType.KVM) {
+        if (hypervisorType.equals(HypervisorType.KVM)) {
             return Storage.ImageFormat.QCOW2;
         }
         throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
