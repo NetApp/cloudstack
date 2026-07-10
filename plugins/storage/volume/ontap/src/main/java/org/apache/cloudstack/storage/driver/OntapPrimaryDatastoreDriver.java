@@ -64,6 +64,8 @@ import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
 import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.exception.StorageConflictException;
+import com.cloud.exception.StorageUnavailableException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.storage.ScopeType;
@@ -71,6 +73,7 @@ import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
+import com.cloud.storage.StoragePoolHostVO;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.VolumeVO;
@@ -434,8 +437,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     // Only retrieve LUN name for iSCSI volumes
                     grantAccessIscsi(host, volumeVO, details, svmName, storagePool);
                 } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                    // For NFS, no access grant needed - file is accessible via mount
-                    logger.debug("grantAccess: NFS volume [{}], no igroup mapping required", volumeVO.getUuid());
+                    // For NFS, ensure export policy has host rule and host is connected to pool.
+                    ensureNfsHostAccess(host, storagePool, details);
+                    logger.debug("grantAccess: NFS volume [{}], ensured host access to storage pool [{}]", volumeVO.getUuid(), storagePool.getId());
                     return true;
                 }
                 volumeVO.setPoolType(storagePool.getPoolType());
@@ -450,6 +454,43 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             logger.error("grantAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
             throw new CloudRuntimeException("Failed with error: " + e.getMessage(), e);
         }
+    }
+
+    private void ensureNfsHostAccess(Host host, StoragePoolVO storagePool, Map<String, String> details) {
+        boolean hostConnectedToPool = false;
+        List<StoragePoolHostVO> connectedPools = storageManager.findStoragePoolsConnectedToHost(host.getId());
+        if (connectedPools != null) {
+            for (StoragePoolHostVO connectedPoolRef : connectedPools) {
+                if (connectedPoolRef.getPoolId() == storagePool.getId()) {
+                    hostConnectedToPool = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hostConnectedToPool) {
+            try {
+                logger.info("grantAccess: Host [{}] is not connected to NFS pool [{}], reconnecting host to pool", host.getId(), storagePool.getId());
+                boolean connected = storageManager.connectHostToSharedPool(host, storagePool.getId());
+                if (!connected) {
+                    throw new CloudRuntimeException("Failed to connect host " + host.getId() + " to NFS pool " + storagePool.getId());
+                }
+            } catch (StorageUnavailableException | StorageConflictException e) {
+                throw new CloudRuntimeException("Unable to connect host " + host.getId() + " to NFS pool " + storagePool.getId(), e);
+            }
+            return;
+        }
+
+        if (!(host instanceof HostVO)) {
+            throw new CloudRuntimeException("Host object is not of type HostVO for host id: " + host.getId());
+        }
+
+        AccessGroup accessGroup = new AccessGroup();
+        accessGroup.setStoragePoolId(storagePool.getId());
+        accessGroup.setHostsToConnect(List.of((HostVO) host));
+
+        StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        strategy.updateAccessGroup(accessGroup);
     }
 
     private void grantAccessIscsi(Host host, VolumeVO volumeVO, Map<String, String> details, String svmName, StoragePoolVO storagePool) {
