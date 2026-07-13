@@ -71,33 +71,33 @@ public class OntapHostListener implements HypervisorHostListener {
 
     @Override
     public boolean hostConnect(long hostId, long poolId)  {
-        logger.info("Connect to host " + hostId + " from pool " + poolId);
+        logger.info("hostConnect: Connecting host {} to pool {}", hostId, poolId);
         Host host = _hostDao.findById(hostId);
         if (host == null) {
-            logger.error("host was not found with id : {}", hostId);
+            logger.error("hostConnect: Host was not found with id: {}", hostId);
             return false;
         }
         if (!host.getHypervisorType().equals(Hypervisor.HypervisorType.KVM)) {
-            logger.error("ONTAP plugin does not support {} type host currently ", host.getHypervisorType());
+            logger.error("hostConnect: ONTAP plugin does not support {} type host currently", host.getHypervisorType());
             return false;
         }
 
         StoragePool pool = _storagePoolDao.findById(poolId);
         if (pool == null) {
-            logger.error("Failed to connect host - storage pool not found with id: {}", poolId);
+            logger.error("hostConnect: Failed to connect host - storage pool not found with id: {}", poolId);
             return false;
         }
-        logger.info("Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
+        logger.info("hostConnect: Connecting host {} to ONTAP storage pool {}", host.getName(), pool.getName());
         try {
             // Load storage pool details from database to pass mount options and other config to agent
             Map<String, String> detailsMap = _storagePoolDetailsDao.listDetailsKeyPairs(poolId);
             if (detailsMap == null || detailsMap.isEmpty()) {
-                logger.error("Failed to load storage pool details for pool id: {}", poolId);
+                logger.error("hostConnect: Failed to load storage pool details for pool id: {}", poolId);
                 return false;
             }
 
             if (detailsMap.get(OntapStorageConstants.PROTOCOL) == null) {
-                logger.error("Storage pool details missing required protocol type for pool id: {}", poolId);
+                logger.error("hostConnect: Storage pool details missing required protocol type for pool id: {}", poolId);
                 return false;
             }
 
@@ -139,7 +139,7 @@ public class OntapHostListener implements HypervisorHostListener {
             }
 
             String localPath = poolInfo.getLocalPath();
-            logger.info("Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
+            logger.info("hostConnect: Storage pool {} successfully mounted at: {}", pool.getName(), localPath);
 
             // Update or create the storage_pool_host_ref entry with the correct local_path
             StoragePoolHostVO storagePoolHost = storagePoolHostDao.findByPoolHost(poolId, hostId);
@@ -147,11 +147,11 @@ public class OntapHostListener implements HypervisorHostListener {
             if (storagePoolHost == null) {
                 storagePoolHost = new StoragePoolHostVO(poolId, hostId, localPath);
                 storagePoolHostDao.persist(storagePoolHost);
-                logger.info("Created storage_pool_host_ref entry for pool {} and host {}", pool.getName(), host.getName());
+                logger.info("hostConnect: Created storage_pool_host_ref entry for pool {} and host {}", pool.getName(), host.getName());
             } else {
                 storagePoolHost.setLocalPath(localPath);
                 storagePoolHostDao.update(storagePoolHost.getId(), storagePoolHost);
-                logger.info("Updated storage_pool_host_ref entry with local_path: {}", localPath);
+                logger.info("hostConnect: Updated storage_pool_host_ref entry with local_path: {}", localPath);
             }
 
             // Update pool capacity/usage information
@@ -160,11 +160,11 @@ public class OntapHostListener implements HypervisorHostListener {
                 poolVO.setCapacityBytes(poolInfo.getCapacityBytes());
                 poolVO.setUsedBytes(poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes());
                 _storagePoolDao.update(poolVO.getId(), poolVO);
-                logger.info("Updated storage pool capacity: {} GB, used: {} GB", poolInfo.getCapacityBytes() / (1024 * 1024 * 1024), (poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes()) / (1024 * 1024 * 1024));
+                logger.info("hostConnect: Updated storage pool capacity: {} GB, used: {} GB", poolInfo.getCapacityBytes() / (1024 * 1024 * 1024), (poolInfo.getCapacityBytes() - poolInfo.getAvailableBytes()) / (1024 * 1024 * 1024));
             }
 
         } catch (Exception e) {
-            logger.error("Exception while connecting host {} to storage pool {}", host.getName(), pool.getName(), e);
+            logger.error("hostConnect: Exception while connecting host {} to storage pool {}", host.getName(), pool.getName(), e);
             // CRITICAL: Don't throw exception - it crashes the agent and causes restart loops
             // Return false to indicate failure without crashing
             return false;
@@ -191,7 +191,7 @@ public class OntapHostListener implements HypervisorHostListener {
 
         StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(detailsMap);
         strategy.updateAccessGroup(accessGroup);
-        logger.info("Updated NFS export policy rules for host {} on storage pool {}", host.getName(), poolId);
+        logger.info("hostConnect: updateNfsExportPolicyForConnectedHostIfNeeded: Updated NFS export policy rules for host {} on storage pool {}", host.getName(), poolId);
     }
 
     private boolean isNfs3EnabledOnHost(Host host) {
@@ -201,7 +201,7 @@ public class OntapHostListener implements HypervisorHostListener {
 
         String storageIp = host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : "";
         if (storageIp.isEmpty() && StringUtils.isBlank(host.getPrivateIpAddress())) {
-            logger.warn("Host {} is not eligible for NFS3 protocol: both storage IP and private IP are empty",
+            logger.warn("isNfs3EnabledOnHost: Host {} is not eligible for NFS3 protocol: both storage IP and private IP are empty",
                     host.getId());
             return false;
         }
@@ -211,35 +211,35 @@ public class OntapHostListener implements HypervisorHostListener {
 
     @Override
     public boolean hostDisconnected(long hostId, long poolId) {
-        logger.info("Disconnect from host " + hostId + " from pool " + poolId);
+        logger.info("hostDisconnected: Disconnecting host {} from pool {}", hostId, poolId);
         // Note: This is not currently being called for NetApp ONTAP storage plugin.
         return false;
     }
 
     @Override
     public boolean hostAboutToBeRemoved(long hostId) {
-        logger.info("Host {} is about to be removed", hostId);
+        logger.info("hostAboutToBeRemoved: Host {} is about to be removed", hostId);
 
         Host host = _hostDao.findById(hostId);
         if (host == null) {
-            logger.warn("Host not found with id: {}, considering it as no-op", hostId);
+            logger.warn("hostAboutToBeRemoved: Host not found with id: {}, considering it as no-op", hostId);
             return true;
         }
 
         List<StoragePoolHostVO> poolHostRefs = storagePoolHostDao.listByHostId(hostId);
         if (poolHostRefs == null || poolHostRefs.isEmpty()) {
-            logger.debug("No storage pool associations found for host {}", hostId);
+            logger.debug("hostAboutToBeRemoved: No storage pool associations found for host {}", hostId);
             return true;
         }
 
         for (StoragePoolHostVO ref : poolHostRefs) {
             StoragePoolVO pool = _storagePoolDao.findById(ref.getPoolId());
             if (pool != null) {
-                removeHostFromOntapPoolIfNeeded(hostId, pool, host);
+                removeHostFromOntapPoolIfNeeded(pool, host);
             }
         }
 
-        logger.info("Cleaned up ONTAP export policies for host {} about to be removed", hostId);
+        logger.info("hostAboutToBeRemoved: Cleaned up ONTAP export policies for host {} about to be removed", hostId);
         return true;
     }
 
@@ -248,23 +248,23 @@ public class OntapHostListener implements HypervisorHostListener {
         return false;
     }
 
-    private void removeHostFromOntapPoolIfNeeded(long hostId, StoragePoolVO pool, Host host) {
+    private void removeHostFromOntapPoolIfNeeded(StoragePoolVO pool, Host host) {
         try {
             Map<String, String> detailsMap = _storagePoolDetailsDao.listDetailsKeyPairs(pool.getId());
             if (detailsMap == null || detailsMap.isEmpty()) {
-                logger.debug("No pool details found for pool id: {}", pool.getId());
+                logger.debug("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: No pool details found for pool id: {}", pool.getId());
                 return;
             }
 
-            // Skip non-NFS3 pools
+            // Skip non-NFS3 pools; Currently, for iSCSI type, iGroup rules are being handled as part of revokeAccess in OntapPrimaryDataStoreDriver, so no need to handle here.
             if (!ProtocolType.NFS3.name().equalsIgnoreCase(detailsMap.get(OntapStorageConstants.PROTOCOL))) {
                 return;
             }
 
-            logger.info("Removing export policy rule for host {} from storage pool {}", host.getName(), pool.getName());
+            logger.info("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Removing export policy rule for host {} from storage pool {}", host.getName(), pool.getName());
             if (!isNfs3EnabledOnHost(host)) {
-                logger.warn("Skipping NFS export policy removal for host {} on pool {} as host is not NFS-enabled",
-                        hostId, pool.getId());
+                logger.warn("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Skipping NFS export policy removal for host {} on pool {} as host is not NFS-enabled",
+                        host.getId(), pool.getId());
                 return;
             }
             AccessGroup accessGroup = new AccessGroup();
@@ -274,9 +274,9 @@ public class OntapHostListener implements HypervisorHostListener {
 
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(detailsMap);
             strategy.updateAccessGroup(accessGroup);
-            logger.info("Removed NFS export policy rules for removed host {} from storage pool {}", host.getName(), pool.getName());
+            logger.info("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Removed NFS export policy rules for removed host {} from storage pool {}", host.getName(), pool.getName());
         } catch (Exception e) {
-            logger.warn("Failed to remove NFS export policy rule for host {} from pool {}: {}", hostId, pool.getName(), e.getMessage());
+            logger.warn("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Failed to remove NFS export policy rule for host {} from pool {}: {}", host.getId(), pool.getName(), e.getMessage());
             // Continue processing other pools even if one fails
         }
     }

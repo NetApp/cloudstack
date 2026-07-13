@@ -228,19 +228,9 @@ public class UnifiedNASStrategy extends NASStrategy {
             }
 
             List<ExportRule> rules = existingPolicy.getRules();
-            // An existing export policy should always have at least one rule. A null or empty rules list
-            // indicates the policy was corrupted or modified externally on ONTAP and is in an unexpected
-            // state. updateAccessGroup only modifies an existing policy — it does not create rules from scratch.
             if (rules == null || rules.isEmpty()) {
-                throw new CloudRuntimeException("Export policy " + existingPolicy.getName() + " has no rules. " +
-                        "Cannot update an export policy with no existing rules.");
-            }
-
-            // This plugin creates a single NFS export rule per policy. More than one rule means the
-            // policy was changed outside the plugin and we no longer know which rule should be mutated.
-            if (rules.size() != 1) {
                 throw new CloudRuntimeException("Export policy " + existingPolicy.getName() +
-                        " is expected to have exactly one rule but found: " + rules.size());
+                        " has no rules — unexpected state, the plugin always creates a rule at pool registration");
             }
 
             ExportRule targetRule = rules.get(0);
