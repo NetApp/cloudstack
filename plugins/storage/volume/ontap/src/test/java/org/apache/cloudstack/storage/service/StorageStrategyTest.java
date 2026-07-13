@@ -166,7 +166,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-                public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
+        public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
             return null;
         }
 
