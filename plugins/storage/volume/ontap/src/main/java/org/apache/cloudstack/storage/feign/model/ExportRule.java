@@ -73,7 +73,7 @@ public class ExportRule {
                 return null;
             }
             for (ProtocolsEnum b : ProtocolsEnum.values()) {
-                if (String.valueOf(b.value).equalsIgnoreCase(text) || b.name().equalsIgnoreCase(text)) {
+                if (String.valueOf(b.value).equalsIgnoreCase(text)) {
                     return b;
                 }
             }
