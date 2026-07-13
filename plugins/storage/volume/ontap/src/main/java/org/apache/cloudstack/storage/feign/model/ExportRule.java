@@ -77,7 +77,7 @@ public class ExportRule {
                     return b;
                 }
             }
-            throw new IllegalArgumentException("Unexpected protocol value '" + text + "'");
+            return null;
         }
     }
 

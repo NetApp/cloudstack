@@ -181,25 +181,20 @@ public class OntapHostListener implements HypervisorHostListener {
             throw new CloudRuntimeException("Host was not found with id: " + hostId);
         }
 
-        if (!(host instanceof HostVO)) {
-            throw new CloudRuntimeException("Host object is not of type HostVO for hostId: " + hostId);
-        }
-
-        HostVO hostVO = (HostVO) host;
-        if (!isNfs3EnabledOnHost(hostVO)) {
+        if (!isNfs3EnabledOnHost(host)) {
             throw new CloudRuntimeException("NFS protocol is not enabled on host with id: " + hostId);
         }
 
         AccessGroup accessGroup = new AccessGroup();
         accessGroup.setStoragePoolId(poolId);
-        accessGroup.setHostsToConnect(List.of(hostVO));
+        accessGroup.setHostsToConnect(List.of((HostVO) host));
 
         StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(detailsMap);
         strategy.updateAccessGroup(accessGroup);
         logger.info("Updated NFS export policy rules for host {} on storage pool {}", host.getName(), poolId);
     }
 
-    private boolean isNfs3EnabledOnHost(HostVO host) {
+    private boolean isNfs3EnabledOnHost(Host host) {
         if (host == null) {
             return false;
         }
@@ -227,8 +222,8 @@ public class OntapHostListener implements HypervisorHostListener {
 
         Host host = _hostDao.findById(hostId);
         if (host == null) {
-            logger.warn("Host not found with id: {}", hostId);
-            return false;
+            logger.warn("Host not found with id: {}, considering it as no-op", hostId);
+            return true;
         }
 
         List<StoragePoolHostVO> poolHostRefs = storagePoolHostDao.listByHostId(hostId);
@@ -266,21 +261,15 @@ public class OntapHostListener implements HypervisorHostListener {
                 return;
             }
 
-            if (!(host instanceof HostVO)) {
-                logger.warn("Host object is not of type HostVO for hostId: {}", hostId);
-                return;
-            }
-
             logger.info("Removing export policy rule for host {} from storage pool {}", host.getName(), pool.getName());
-            HostVO hostVO = (HostVO) host;
-            if (!isNfs3EnabledOnHost(hostVO)) {
+            if (!isNfs3EnabledOnHost(host)) {
                 logger.warn("Skipping NFS export policy removal for host {} on pool {} as host is not NFS-enabled",
                         hostId, pool.getId());
                 return;
             }
             AccessGroup accessGroup = new AccessGroup();
             accessGroup.setStoragePoolId(pool.getId());
-            accessGroup.setHostsToConnect(List.of(hostVO));
+            accessGroup.setHostsToConnect(List.of((HostVO) host));
             accessGroup.setHostRuleAction(AccessGroup.HostRuleAction.REMOVE);
 
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(detailsMap);

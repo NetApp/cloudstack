@@ -247,8 +247,9 @@ public class UnifiedNASStrategy extends NASStrategy {
 
             Set<String> hostMatches = new HashSet<>();
             for (HostVO host : accessGroup.getHostsToConnect()) {
-                String hostStorageIp = host.getStorageIpAddress();
-                String ip = (hostStorageIp != null && !hostStorageIp.isEmpty()) ? hostStorageIp : host.getPrivateIpAddress();
+                String hostStorageIp = host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : null;
+                String ip = (hostStorageIp != null && !hostStorageIp.isEmpty()) ? hostStorageIp
+                        : (host.getPrivateIpAddress() != null ? host.getPrivateIpAddress().trim() : null);
                 // Occurs when a CloudStack host has neither a storage IP nor a private IP configured
                 // (misconfigured or partially registered host). Skip it to avoid inserting a broken
                 // or empty match entry into the ONTAP export rule.
@@ -448,10 +449,10 @@ public class UnifiedNASStrategy extends NASStrategy {
         List<ExportRule.ExportClient> exportClients = new ArrayList<>();
         List<HostVO> hosts = accessGroup.getHostsToConnect();
         for (HostVO host : hosts) {
-            String hostStorageIp = host.getStorageIpAddress();
+            String hostStorageIp = host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : null;
             String ip = (hostStorageIp != null && !hostStorageIp.isEmpty())
                     ? hostStorageIp
-                    : host.getPrivateIpAddress();
+                    : (host.getPrivateIpAddress() != null ? host.getPrivateIpAddress().trim() : null);
             String ipToUse = ip + "/32";
             ExportRule.ExportClient exportClient = new ExportRule.ExportClient();
             exportClient.setMatch(ipToUse);
