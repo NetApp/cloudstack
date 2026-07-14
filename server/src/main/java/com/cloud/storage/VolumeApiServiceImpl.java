@@ -1099,7 +1099,22 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         if (createVolumeResult.isFailed()) {
             throw new CloudRuntimeException("Volume creation on storage failed: " + createVolumeResult.getResult());
         }
-        return _volsDao.findById(volumeInfo.getId());
+        VolumeVO volVO = _volsDao.findById(volumeInfo.getId());
+        if (volVO.getFormat() == null) {
+            HypervisorType hyperType = storagePool.getHypervisor();
+            volVO.setFormat(getSupportedImageFormatForHypervisor(hyperType));
+        }
+        _volsDao.update(volVO.getId(), volVO);
+        return volVO;
+    }
+
+    private ImageFormat getSupportedImageFormatForHypervisor(HypervisorType hyperType) {
+        if (hyperType == HypervisorType.XenServer) return ImageFormat.VHD;
+        if (hyperType == HypervisorType.KVM) return ImageFormat.QCOW2;
+        if (hyperType == HypervisorType.VMware) return ImageFormat.OVA;
+        if (hyperType == HypervisorType.Ovm) return ImageFormat.RAW;
+        if (hyperType == HypervisorType.Hyperv) return ImageFormat.VHDX;
+        return null;
     }
 
     @Override

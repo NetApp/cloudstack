@@ -26,7 +26,6 @@ import com.cloud.agent.api.to.DataTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
@@ -160,8 +159,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
-                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}]", volumeVO.getFormat(), storagePool.getHypervisor());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
@@ -1008,12 +1005,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
 
-    private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType) {
-        if (hypervisorType.equals(HypervisorType.KVM)) {
-            return Storage.ImageFormat.QCOW2;
-        }
-        throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
-    }
     /**
      * Persists snapshot metadata in snapshot_details table.
      *

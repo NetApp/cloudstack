@@ -21,7 +21,6 @@ package org.apache.cloudstack.storage.driver;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
 import com.cloud.storage.VolumeVO;
@@ -168,7 +167,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
-        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
@@ -222,7 +220,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
-        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeVO.getId()).thenReturn(100L);
