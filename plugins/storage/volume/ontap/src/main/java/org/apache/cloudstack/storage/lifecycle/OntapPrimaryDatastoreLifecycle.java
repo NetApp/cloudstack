@@ -140,13 +140,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
-            // Get the DataLIF for data access
-            String dataLIF = storageStrategy.getNetworkInterface();
-            if (dataLIF == null || dataLIF.isEmpty()) {
-                throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
-            }
-            logger.info("Using Data LIF for storage access: " + dataLIF);
-            details.put(OntapStorageConstants.DATA_LIF, dataLIF);
             if (storageStrategy.getResolvedSvmUuid() != null && !storageStrategy.getResolvedSvmUuid().isEmpty()) {
                 details.put(OntapStorageConstants.SVM_UUID, storageStrategy.getResolvedSvmUuid());
             }

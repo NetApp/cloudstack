@@ -237,6 +237,8 @@ public abstract class StorageStrategy {
     public Volume createStorageVolume(String volumeName, Long size) {
         logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
 
+        this.chosenAggregateNode = null;
+
         String svmName = storage.getSvmName();
         if (aggregates == null || aggregates.isEmpty()) {
             logger.error("No aggregates available to create volume on SVM " + svmName);
@@ -304,9 +306,7 @@ public abstract class StorageStrategy {
         }
         logger.info("Selected aggregate: " + aggrChosen.getName() + " for volume operations.");
 
-        if (aggrChosen.getNode() != null) {
-            this.chosenAggregateNode = aggrChosen.getNode().getName();
-        }
+        this.chosenAggregateNode = aggrChosen.getNode() != null ? aggrChosen.getNode().getName() : null;
 
         Aggregate aggr = new Aggregate();
         aggr.setName(aggrChosen.getName());
@@ -537,11 +537,14 @@ public abstract class StorageStrategy {
                     continue;
                 }
                 if (chosenAggregateNode != null) {
+                    // LIF is homed on the aggregate's node
                     String homeNode = iface.getLocation() != null && iface.getLocation().getHomeNode() != null
                             ? iface.getLocation().getHomeNode().getName() : null;
                     if (chosenAggregateNode.equals(homeNode)) {
                         return new Pair<>(iface.getIp().getAddress(), null);
                     }
+                    // LIF has failed over and is currently running on the aggregate's node
+                    // (home_node differs). Keep as a candidate; returned with a warning if no match is found earlier.
                     if (currentNodeInterface == null) {
                         String currentNode = iface.getLocation() != null && iface.getLocation().getNode() != null
                                 ? iface.getLocation().getNode().getName() : null;
