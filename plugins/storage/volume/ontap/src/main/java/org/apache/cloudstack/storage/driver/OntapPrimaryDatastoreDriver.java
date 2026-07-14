@@ -177,7 +177,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                                 lunName, volumeVO.getId());
                         createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
                     } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-
                         createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
                         logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
                                 volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
