@@ -1102,19 +1102,29 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         VolumeVO volVO = _volsDao.findById(volumeInfo.getId());
         if (volVO.getFormat() == null) {
             HypervisorType hyperType = storagePool.getHypervisor();
-            volVO.setFormat(getSupportedImageFormatForHypervisor(hyperType));
+            ImageFormat format = getSupportedImageFormatForHypervisor(hyperType);
+            if (format != null) {
+                volVO.setFormat(format);
+                _volsDao.update(volVO.getId(), volVO);
+            }
         }
-        _volsDao.update(volVO.getId(), volVO);
         return volVO;
     }
 
     private ImageFormat getSupportedImageFormatForHypervisor(HypervisorType hyperType) {
-        if (hyperType == HypervisorType.XenServer) return ImageFormat.VHD;
-        if (hyperType == HypervisorType.KVM) return ImageFormat.QCOW2;
-        if (hyperType == HypervisorType.VMware) return ImageFormat.OVA;
-        if (hyperType == HypervisorType.Ovm) return ImageFormat.RAW;
-        if (hyperType == HypervisorType.Hyperv) return ImageFormat.VHDX;
-        return null;
+        if (hyperType == HypervisorType.XenServer) {
+            return ImageFormat.VHD;
+        } else if (hyperType == HypervisorType.KVM) {
+            return ImageFormat.QCOW2;
+        } else if (hyperType == HypervisorType.VMware) {
+            return ImageFormat.OVA;
+        } else if (hyperType == HypervisorType.Ovm) {
+            return ImageFormat.RAW;
+        } else if (hyperType == HypervisorType.Hyperv) {
+            return ImageFormat.VHDX;
+        } else {
+            return null;
+        }
     }
 
     @Override
