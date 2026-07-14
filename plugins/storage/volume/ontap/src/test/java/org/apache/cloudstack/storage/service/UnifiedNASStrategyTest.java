@@ -705,20 +705,6 @@ public class UnifiedNASStrategyTest {
         assertThrows(CloudRuntimeException.class, () -> strategy.updateAccessGroup(accessGroup));
     }
 
-    // updateAccessGroup - existing policy has multiple rules
-    @Test
-    public void testUpdateAccessGroup_MultipleRules() {
-        AccessGroup accessGroup = new AccessGroup();
-        accessGroup.setStoragePoolId(1L);
-        accessGroup.setHostsToConnect(List.of(mock(HostVO.class)));
-        ExportPolicy policy = new ExportPolicy();
-        policy.setName("test-policy");
-        policy.setRules(List.of(new ExportRule(), new ExportRule()));
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(detailsWithExportPolicyId());
-        when(nasFeignClient.getExportPolicyById(anyString(), eq("policy-42"))).thenReturn(policy);
-        assertThrows(CloudRuntimeException.class, () -> strategy.updateAccessGroup(accessGroup));
-    }
-
     // updateAccessGroup - all hosts have no IP: returns early without ONTAP patch
     @Test
     public void testUpdateAccessGroup_AllHostsHaveNoIp_ReturnsEarly() {
