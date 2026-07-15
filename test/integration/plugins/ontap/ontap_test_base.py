@@ -57,14 +57,6 @@ logger = logging.getLogger("OntapTestBase")
 # ---------------------------------------------------------------------------
 
 def _parse_pool_details(pool):
-    """
-    Convert a StoragePool object's ``details`` attribute to a plain Python dict,
-    regardless of how Marvin chose to represent it.
-
-    Note: listStoragePools only returns a subset of detail keys
-    (volumeUUID, exportPolicyName, exportPolicyId).  For the full set
-    use the pool object returned directly by createStoragePool.
-    """
     details_raw = getattr(pool, "details", None)
     if not details_raw:
         return {}
@@ -236,16 +228,6 @@ class OntapRestClient:
 # ---------------------------------------------------------------------------
 
 class OntapTestBase(cloudstackTestCase):
-    """
-    Shared base for sequential ONTAP primary-storage workflow tests.
-
-    Subclasses must:
-      - Set ``_vol_name_prefix`` to distinguish volume names per protocol.
-      - Define ``setUpClass`` that builds ``cls.testdata``, creates
-        ``cls.ontap`` and ``cls.svm_name``, then calls
-        ``cls._setup_cloudstack_resources(config, account_testdata)``.
-      - Define ``_create_pool`` (protocol-specific URL scheme and name).
-    """
 
     # ---- shared state (set/cleared by individual tests) ----------------
     pool = None
