@@ -257,8 +257,8 @@ public class StorageStrategyTest {
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 1000000.0); // only 1MB free
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap())).thenReturn(aggregateDetail);
 
-        // Execute & Verify - connect() should succeed regardless of available space.
-        boolean result = storageStrategy.connect();
+        // Execute & Verify - connect(false) should succeed regardless of available space.
+        boolean result = storageStrategy.connect(false);
         assertTrue(result, "connect() should succeed for an online aggregate even when its free space is below the pool capacity");
     }
 
