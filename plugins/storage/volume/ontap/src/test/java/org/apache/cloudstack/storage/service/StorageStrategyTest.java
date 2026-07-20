@@ -929,4 +929,24 @@ public class StorageStrategyTest {
 
         verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
     }
+
+    @Test
+    void testDeleteFlexVolSnapshotForCloudStackVolume_AlreadyAbsentOnOntap() {
+        Job job = new Job();
+        job.setUuid("delete-job-missing");
+        JobResponse response = new JobResponse();
+        response.setJob(job);
+        when(snapshotFeignClient.deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1")))
+                .thenReturn(response);
+
+        Job failedJob = new Job();
+        failedJob.setUuid("delete-job-missing");
+        failedJob.setState(OntapStorageConstants.JOB_FAILURE);
+        failedJob.setMessage("entry doesn't exist");
+        when(jobFeignClient.getJobByUUID(anyString(), eq("delete-job-missing"))).thenReturn(failedJob);
+
+        storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
+
+        verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
+    }
 }

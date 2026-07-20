@@ -239,4 +239,23 @@ public class OntapStorageUtils {
         return remainder.isEmpty() ? null : remainder;
     }
 
+    /**
+     * Returns true when the exception indicates the ONTAP snapshot was already removed.
+     * Delete workflows treat a missing backend snapshot as idempotent success.
+     */
+    public static boolean isOntapSnapshotNotFoundError(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        String message = error.getMessage();
+        if (message != null) {
+            String lower = message.toLowerCase();
+            if (lower.contains("404") || lower.contains("not found") || lower.contains("does not exist")
+                    || lower.contains("entry doesn't exist")) {
+                return true;
+            }
+        }
+        return isOntapSnapshotNotFoundError(error.getCause());
+    }
+
 }
