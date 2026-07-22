@@ -1008,7 +1008,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
 
     private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType) {
-        if (hypervisorType.equals(HypervisorType.KVM)) {
+        if (HypervisorType.KVM.equals(hypervisorType)) {
             return Storage.ImageFormat.QCOW2;
         }
         throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
