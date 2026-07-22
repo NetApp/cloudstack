@@ -204,6 +204,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("lun-uuid-123"), eq(false));
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_NAME), eq("/vol/vol1/lun1"), eq(false));
+            verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
@@ -247,6 +248,7 @@ class OntapPrimaryDatastoreDriverTest {
             CreateCmdResult result = resultCaptor.getValue();
             assertNotNull(result);
             assertTrue(result.isSuccess());
+            verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
