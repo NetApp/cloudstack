@@ -823,7 +823,7 @@ public abstract class StorageStrategy {
             logger.info("deleteFlexVolSnapshotForCloudStackVolume: ONTAP FlexVol snapshot [{}] (uuid={}) removed from [{}]",
                     snapshotName, snapshotUuid, flexVolUuid);
         } catch (Exception e) {
-            if (OntapStorageUtils.isOntapSnapshotNotFoundError(e)) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                 logger.warn("deleteFlexVolSnapshotForCloudStackVolume: ONTAP snapshot [{}] (uuid={}) on FlexVol [{}] "
                         + "already absent; treating delete as success: {}", snapshotName, snapshotUuid, flexVolUuid,
                         e.getMessage());

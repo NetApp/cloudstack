@@ -240,10 +240,10 @@ public class OntapStorageUtils {
     }
 
     /**
-     * Returns true when the exception indicates the ONTAP snapshot was already removed.
-     * Delete workflows treat a missing backend snapshot as idempotent success.
+     * Returns true when the exception indicates the ONTAP Object was already removed.
+     * Delete workflows treat a missing backend object as idempotent success.
      */
-    public static boolean isOntapSnapshotNotFoundError(Throwable error) {
+    public static boolean isOntapObjectNotFoundError(Throwable error) {
         if (error == null) {
             return false;
         }
@@ -255,7 +255,7 @@ public class OntapStorageUtils {
                 return true;
             }
         }
-        return isOntapSnapshotNotFoundError(error.getCause());
+        return isOntapObjectNotFoundError(error.getCause());
     }
 
 }

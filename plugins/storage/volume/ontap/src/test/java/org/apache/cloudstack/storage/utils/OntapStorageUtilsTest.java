@@ -85,12 +85,12 @@ public class OntapStorageUtilsTest {
     @Test
     public void isOntapSnapshotNotFoundError_matchesEntryDoesNotExist() {
         CloudRuntimeException ex = new CloudRuntimeException("Job failed with error: entry doesn't exist");
-        assertTrue(OntapStorageUtils.isOntapSnapshotNotFoundError(ex));
+        assertTrue(OntapStorageUtils.isOntapObjectNotFoundError(ex));
     }
 
     @Test
     public void isOntapSnapshotNotFoundError_rejectsUnrelatedErrors() {
-        assertFalse(OntapStorageUtils.isOntapSnapshotNotFoundError(
+        assertFalse(OntapStorageUtils.isOntapObjectNotFoundError(
                 new CloudRuntimeException("Job failed with error: permission denied")));
     }
 }

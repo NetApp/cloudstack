@@ -313,7 +313,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             commandResult.setSuccess(true);
             commandResult.setResult(null);
         } catch (Exception e) {
-            if (OntapStorageUtils.isOntapSnapshotNotFoundError(e)) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                 logger.warn("deleteCloudStackVolumeSnapshot: ONTAP snapshot for CloudStack snapshot [{}] "
                         + "already absent (idempotent success): {}", snapshotId, e.getMessage());
                 commandResult.setSuccess(true);
