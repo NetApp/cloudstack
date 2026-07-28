@@ -166,6 +166,7 @@ import com.cloud.utils.DateUtil;
 import com.cloud.utils.DateUtil.IntervalType;
 import com.cloud.utils.NumbersUtil;
 import com.cloud.utils.Pair;
+import com.cloud.storage.clvm.ClvmPoolManager;
 import com.cloud.utils.Ternary;
 import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.db.DB;
@@ -1634,7 +1635,8 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
         boolean isKvmAndFileBasedStorage = isHypervisorKvmAndFileBasedStorage(volume, storagePool);
         boolean backupSnapToSecondary = isBackupSnapshotToSecondaryForZone(volume.getDataCenterId());
 
-        updateSnapshotPayload(volume.getPoolId(), payload, isKvmAndFileBasedStorage, clusterId);
+        StoragePoolType poolType = volume.getStoragePoolType();
+        updateSnapshotPayload(volume.getPoolId(), payload, isKvmAndFileBasedStorage, poolType, clusterId);
 
         // NetApp ONTAP managed PRIMARY snapshots remain on primary/array storage (FlexVol).
         // They must not use secondary archive bookkeeping (postSnapshotDirectlyToSecondary) or a physical
@@ -1666,6 +1668,9 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
             if (archiveSnapshotToSecondary) {
                 if (!isKvmAndFileBasedStorage) {
                     backupSnapshotToSecondary(payload.getAsyncBackup(), snapshotStrategy, snapshotOnPrimary, payload.getZoneIds(), payload.getStoragePoolIds());
+                    if (!payload.getAsyncBackup() && ClvmPoolManager.isClvmPoolType(storagePool.getPoolType())) {
+                        _snapshotStoreDao.removeBySnapshotStore(snapshotId, snapshotOnPrimary.getDataStore().getId(), snapshotOnPrimary.getDataStore().getRole());
+                    }
                 } else {
                     postSnapshotDirectlyToSecondary(snapshot, snapshotOnPrimary, snapshotId);
                 }
@@ -1693,7 +1698,12 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
                 postCreateSnapshot(volume.getId(), snapshotId, payload.getSnapshotPolicyId(), clusterId);
                 snapshotZoneDao.addSnapshotToZone(snapshotId, snapshot.getDataCenterId());
 
-                DataStoreRole dataStoreRole = archiveSnapshotToSecondary ? snapshotHelper.getDataStoreRole(snapshot) : DataStoreRole.Primary;
+                DataStoreRole dataStoreRole;
+                if (payload.getAsyncBackup() && backupSnapToSecondary && !isKvmAndFileBasedStorage) {
+                    dataStoreRole = DataStoreRole.Primary;
+                } else {
+                    dataStoreRole = archiveSnapshotToSecondary ? snapshotHelper.getDataStoreRole(snapshot) : DataStoreRole.Primary;
+                }
 
                 List<SnapshotDataStoreVO> snapshotStoreRefs = _snapshotStoreDao.listReadyBySnapshot(snapshotId, dataStoreRole);
                 if (CollectionUtils.isEmpty(snapshotStoreRefs)) {
@@ -1854,6 +1864,7 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
                     SnapshotInfo backupedSnapshot = snapshotStrategy.backupSnapshot(snapshotOnPrimary);
                     if (backupedSnapshot != null) {
                         snapshotStrategy.postSnapshotCreation(snapshotOnPrimary);
+                        removeClvmPrimarySnapshotStoreRefIfNeeded(snapshotOnPrimary);
                         copyNewSnapshotToZones(snapshotOnPrimary.getId(), snapshotOnPrimary.getDataCenterId(), zoneIds);
                     }
                 }
@@ -1879,7 +1890,15 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
         }
     }
 
-    private void updateSnapshotPayload(long storagePoolId, CreateSnapshotPayload payload, boolean isKvmAndFileBasedStorage, Long clusterId) {
+    void removeClvmPrimarySnapshotStoreRefIfNeeded(SnapshotInfo snapshotOnPrimary) {
+        DataStore dataStore = snapshotOnPrimary.getDataStore();
+        StoragePoolVO pool = _storagePoolDao.findById(dataStore.getId());
+        if (pool != null && ClvmPoolManager.isClvmPoolType(pool.getPoolType())) {
+            _snapshotStoreDao.removeBySnapshotStore(snapshotOnPrimary.getId(), dataStore.getId(), dataStore.getRole());
+        }
+    }
+
+    private void updateSnapshotPayload(long storagePoolId, CreateSnapshotPayload payload, boolean isKvmAndFileBasedStorage, StoragePoolType poolType, Long clusterId) {
         StoragePoolVO storagePoolVO = _storagePoolDao.findById(storagePoolId);
 
         if (storagePoolVO.isManaged()) {
