@@ -166,22 +166,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 logger.error("Exception occurred while retrieving network interface for pool: " + storagePoolName, e);
                 throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP: " + e.getMessage(), e);
             }
-            String dataLIF = lifResult.first();
-            if (dataLIF == null || dataLIF.isEmpty()) {
-                throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
-            }
-            logger.info("Using Data LIF for storage access: " + dataLIF);
-            details.put(OntapStorageConstants.DATA_LIF, dataLIF);
-
-            // Persist LIF warning as a pool detail and fire a storage alert so the user is informed
-            if (lifResult.second() != null) {
-                String lifWarning = lifResult.second();
-                details.put(OntapStorageConstants.LIF_WARNING, lifWarning);
-                logger.warn("LIF selection warning for pool '" + storagePoolName + "': " + lifWarning);
-                String alertSubject = "ONTAP Storage Pool '" + storagePoolName + "': "
-                        + lifWarning.split(OntapStorageConstants.SEMICOLON)[0].trim();
-                OntapStorageUtils.sendStorageAlert(_alertMgr, zoneId, podId, alertSubject, lifWarning);
-            }
+            processDataLifSelection(lifResult, details, storagePoolName, zoneId, podId);
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
@@ -295,6 +280,26 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         }
 
         return capacityBytes;
+    }
+
+    private void processDataLifSelection(Pair<String, String> lifResult, Map<String, String> details,
+                                         String storagePoolName, Long zoneId, Long podId) {
+        String dataLIF = lifResult.first();
+        if (dataLIF == null || dataLIF.isEmpty()) {
+            throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP, cannot create primary storage");
+        }
+        logger.info("Using Data LIF for storage access: " + dataLIF);
+        details.put(OntapStorageConstants.DATA_LIF, dataLIF);
+
+        // Persist LIF warning as a pool detail and fire a storage alert so the user is informed
+        if (lifResult.second() != null) {
+            String lifWarning = lifResult.second();
+            details.put(OntapStorageConstants.LIF_WARNING, lifWarning);
+            logger.warn("LIF selection warning for pool '" + storagePoolName + "': " + lifWarning);
+            String alertSubject = "ONTAP Storage Pool '" + storagePoolName + "': "
+                    + lifWarning.split(OntapStorageConstants.SEMICOLON)[0].trim();
+            OntapStorageUtils.sendStorageAlert(_alertMgr, zoneId, podId, alertSubject, lifWarning);
+        }
     }
 
     @Override

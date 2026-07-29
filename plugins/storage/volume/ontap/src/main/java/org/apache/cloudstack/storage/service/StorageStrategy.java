@@ -24,11 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
@@ -215,7 +210,6 @@ public abstract class StorageStrategy {
             }
             logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
             this.aggregates = List.of(aggr);
-            break;
         }
         if (this.aggregates == null || this.aggregates.isEmpty()) {
             logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
