@@ -18,8 +18,11 @@
  */
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.utils.exception.CloudRuntimeException;
-import feign.FeignException;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
@@ -40,33 +43,31 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
-
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import org.mockito.Mock;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
+import com.cloud.utils.exception.CloudRuntimeException;
+
+import feign.FeignException;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -165,7 +166,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        AccessGroup updateAccessGroup(AccessGroup accessGroup) {
+        public AccessGroup updateAccessGroup(AccessGroup accessGroup) {
             return null;
         }
 
@@ -924,6 +925,26 @@ public class StorageStrategyTest {
         completedJob.setUuid("delete-job-1");
         completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
         when(jobFeignClient.getJobByUUID(anyString(), eq("delete-job-1"))).thenReturn(completedJob);
+
+        storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
+
+        verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
+    }
+
+    @Test
+    void testDeleteFlexVolSnapshotForCloudStackVolume_AlreadyAbsentOnOntap() {
+        Job job = new Job();
+        job.setUuid("delete-job-missing");
+        JobResponse response = new JobResponse();
+        response.setJob(job);
+        when(snapshotFeignClient.deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1")))
+                .thenReturn(response);
+
+        Job failedJob = new Job();
+        failedJob.setUuid("delete-job-missing");
+        failedJob.setState(OntapStorageConstants.JOB_FAILURE);
+        failedJob.setMessage("entry doesn't exist");
+        when(jobFeignClient.getJobByUUID(anyString(), eq("delete-job-missing"))).thenReturn(failedJob);
 
         storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
 

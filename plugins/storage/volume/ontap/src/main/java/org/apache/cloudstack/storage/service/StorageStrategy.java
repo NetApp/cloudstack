@@ -19,13 +19,16 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.utils.exception.CloudRuntimeException;
-import feign.FeignException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
-import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
+import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
@@ -48,10 +51,9 @@ import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import com.cloud.utils.exception.CloudRuntimeException;
+
+import feign.FeignException;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -615,7 +617,7 @@ public abstract class StorageStrategy {
      * @param accessGroup the access group to update
      * @return the updated AccessGroup object
      */
-    abstract AccessGroup updateAccessGroup(AccessGroup accessGroup);
+    public abstract AccessGroup updateAccessGroup(AccessGroup accessGroup);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -805,21 +807,35 @@ public abstract class StorageStrategy {
         logger.info("deleteFlexVolSnapshotForCloudStackVolume: issuing ONTAP REST delete for snapshot [{}] "
                 + "(uuid={}) on FlexVol [{}]", snapshotName, snapshotUuid, flexVolUuid);
 
-        JobResponse jobResponse = snapshotFeignClient.deleteSnapshot(getAuthHeader(), flexVolUuid, snapshotUuid);
+        try {
+            JobResponse jobResponse = snapshotFeignClient.deleteSnapshot(getAuthHeader(), flexVolUuid, snapshotUuid);
 
-        if (jobResponse == null || jobResponse.getJob() == null) {
-            logger.debug("deleteFlexVolSnapshotForCloudStackVolume: no async job returned for snapshot [{}] "
-                    + "(uuid={}); treating HTTP success as completion", snapshotName, snapshotUuid);
-        } else {
-            logger.debug("deleteFlexVolSnapshotForCloudStackVolume: polling ONTAP delete job [{}] for snapshot [{}]",
-                    jobResponse.getJob().getUuid(), snapshotName);
+            if (jobResponse == null || jobResponse.getJob() == null) {
+                logger.debug("deleteFlexVolSnapshotForCloudStackVolume: no async job returned for snapshot [{}] "
+                        + "(uuid={}); treating HTTP success as completion", snapshotName, snapshotUuid);
+            } else {
+                logger.debug("deleteFlexVolSnapshotForCloudStackVolume: polling ONTAP delete job [{}] for snapshot [{}]",
+                        jobResponse.getJob().getUuid(), snapshotName);
+            }
+
+            pollJobIfPresent(jobResponse, "delete FlexVol snapshot [" + snapshotName + "] uuid [" + snapshotUuid + "]",
+                    OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_MAX_RETRIES,
+                    OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_POLL_INTERVAL_MS);
+
+            logger.info("deleteFlexVolSnapshotForCloudStackVolume: ONTAP FlexVol snapshot [{}] (uuid={}) removed from [{}]",
+                    snapshotName, snapshotUuid, flexVolUuid);
+        } catch (Exception e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                logger.warn("deleteFlexVolSnapshotForCloudStackVolume: ONTAP snapshot [{}] (uuid={}) on FlexVol [{}] "
+                        + "already absent; treating delete as success: {}", snapshotName, snapshotUuid, flexVolUuid,
+                        e.getMessage());
+                return;
+            }
+            if (e instanceof CloudRuntimeException) {
+                throw (CloudRuntimeException) e;
+            }
+            throw new CloudRuntimeException("Failed to delete ONTAP FlexVol snapshot [" + snapshotName + "]: "
+                    + e.getMessage(), e);
         }
-
-        pollJobIfPresent(jobResponse, "delete FlexVol snapshot [" + snapshotName + "] uuid [" + snapshotUuid + "]",
-                OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_MAX_RETRIES,
-                OntapStorageConstants.ONTAP_SNAPSHOT_DELETE_JOB_POLL_INTERVAL_MS);
-
-        logger.info("deleteFlexVolSnapshotForCloudStackVolume: ONTAP FlexVol snapshot [{}] (uuid={}) removed from [{}]",
-                snapshotName, snapshotUuid, flexVolUuid);
     }
 }

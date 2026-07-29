@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.utils;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.utils.StringUtils;
 import com.cloud.utils.exception.CloudRuntimeException;
+import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Lun;
@@ -237,6 +238,34 @@ public class OntapStorageUtils {
             remainder = remainder.substring(0, slashIdx);
         }
         return remainder.isEmpty() ? null : remainder;
+    }
+
+    /**
+     * Returns true when the exception indicates the ONTAP Object was already removed.
+     * Delete workflows treat a missing backend object as idempotent success.
+     */
+    public static boolean isOntapObjectNotFoundError(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        if(error instanceof FeignException) {
+            FeignException feignException = (FeignException) error;
+            if (feignException.status() == 404) {
+                return true;
+            }
+        }
+        String message = error.getMessage();
+        if (message != null) {
+            String lower = message.toLowerCase();
+            if (lower.contains("404") || lower.contains("not found") || lower.contains("does not exist")
+                    || lower.contains("entry doesn't exist")) {
+                return true;
+            }
+        } else {
+            logger.warn("Error message is null for exception: {}", error.getClass().getName());
+            return false;
+        }
+        return false;
     }
 
 }
