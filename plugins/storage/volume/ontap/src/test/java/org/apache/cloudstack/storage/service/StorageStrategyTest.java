@@ -969,4 +969,17 @@ public class StorageStrategyTest {
 
         verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
     }
+
+        @Test
+        void testDeleteFlexVolSnapshotForCloudStackVolume_Feign404_TreatedAsSuccess() {
+                FeignException notFoundException = mock(FeignException.class);
+                when(notFoundException.status()).thenReturn(404);
+                when(snapshotFeignClient.deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1")))
+                                .thenThrow(notFoundException);
+
+                storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
+
+                verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
+                verify(jobFeignClient, never()).getJobByUUID(anyString(), anyString());
+        }
 }
