@@ -94,7 +94,7 @@ Before running any test:
    ```
 4. **ONTAP SVM** with NFS3 service and/or iSCSI service enabled, and at least one data LIF per protocol.
 5. **KVM cluster** registered in CloudStack. For iSCSI tests, every KVM host must have iSCSI configured (its `storageUrl` starts with `iqn.`).
-6. **`ontap.cfg` populated** — see the [Configuration](#configuration) section.
+6. **`ontap.cfg` populated** — see the [Configuration](#configuration--ontapcfg) section.
 
 ### Python / Marvin setup
 

@@ -56,7 +56,7 @@ Prerequisites:
 Running:
   nosetests --with-marvin \\
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
-      test/integration/plugins/ontap/test_ontap_iscsi_pool_with_volumes.py -v
+    test/integration/plugins/ontap/iscsi/pool/test_pool_with_volumes.py -v
 """
 
 import base64

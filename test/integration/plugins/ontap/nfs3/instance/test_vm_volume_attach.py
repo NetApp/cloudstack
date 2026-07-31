@@ -41,7 +41,7 @@ Prerequisites:
 Running:
   nosetests --with-marvin \\
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
-      test/integration/plugins/ontap/test_ontap_vm_volume_attach.py -v
+    test/integration/plugins/ontap/nfs3/instance/test_vm_volume_attach.py -v
 
 Note: Tests share class-level state (sequential).  Always run the full suite.
 """

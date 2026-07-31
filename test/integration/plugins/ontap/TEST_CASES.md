@@ -61,7 +61,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 **File:** `nfs3/pool/test_pool_with_volumes.py`
 **Class:** `TestOntapNFS3PoolWithVolumes`
-**Tag:** `nfs3_workflow`
+**Tag:** `nfs3_with_volumes`
 **Total:** 7 tests | **Scope:** cluster-scoped NFS3 pool with a live CloudStack volume throughout
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |

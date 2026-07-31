@@ -39,7 +39,7 @@ Prerequisites:
 Running:
   nosetests --with-marvin \\
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
-      test/integration/plugins/ontap/test_ontap_zone_scoped_pool.py -v
+    test/integration/plugins/ontap/nfs3/pool/test_zone_scoped_pool.py -v
 
 Note: Tests 01-04 share class-level state (sequential).  Running a single test
 with -m "test_NN" will invoke setUpClass but the guard assertion will fail
