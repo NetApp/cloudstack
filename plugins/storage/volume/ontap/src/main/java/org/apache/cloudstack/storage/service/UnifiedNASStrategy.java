@@ -184,7 +184,7 @@ public class UnifiedNASStrategy extends NASStrategy {
                 nasFeignClient.deleteExportPolicyById(authHeader, exportPolicyId);
                 logger.info("deleteAccessGroup: Successfully deleted export policy '{}'", exportPolicyName);
             } catch (FeignException e) {
-                if (e.status() == 404) {
+                if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                     logger.warn("deleteAccessGroup: Export policy '{}' not found in ONTAP, treating as no-op", exportPolicyName);
                     return;
                 }
