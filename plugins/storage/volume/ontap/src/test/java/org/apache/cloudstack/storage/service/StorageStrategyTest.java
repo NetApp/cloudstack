@@ -644,6 +644,25 @@ public class StorageStrategyTest {
         assertTrue(ex.getMessage().contains("Failed to delete volume"));
     }
 
+    @Test
+    public void testDeleteStorageVolume_notFound_404_returnsWithoutThrowing() {
+        // Setup
+        Volume volume = new Volume();
+        volume.setName("test-volume");
+        volume.setUuid("vol-uuid-1");
+
+        FeignException feignEx = mock(FeignException.class);
+        when(feignEx.status()).thenReturn(404);
+        when(volumeFeignClient.deleteVolume(anyString(), eq("vol-uuid-1")))
+                .thenThrow(feignEx);
+
+        // Execute - 404 means volume already gone on ONTAP, treated as no-op
+        storageStrategy.deleteStorageVolume(volume);
+
+        // Verify the delete was attempted
+        verify(volumeFeignClient).deleteVolume(anyString(), eq("vol-uuid-1"));
+    }
+
     // ========== getStoragePath() Tests ==========
 
     @Test
@@ -950,4 +969,17 @@ public class StorageStrategyTest {
 
         verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
     }
+
+        @Test
+        void testDeleteFlexVolSnapshotForCloudStackVolume_Feign404_TreatedAsSuccess() {
+                FeignException notFoundException = mock(FeignException.class);
+                when(notFoundException.status()).thenReturn(404);
+                when(snapshotFeignClient.deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1")))
+                                .thenThrow(notFoundException);
+
+                storageStrategy.deleteFlexVolSnapshotForCloudStackVolume("fv-uuid-1", "snap-uuid-1", "snap-name-1");
+
+                verify(snapshotFeignClient).deleteSnapshot(anyString(), eq("fv-uuid-1"), eq("snap-uuid-1"));
+                verify(jobFeignClient, never()).getJobByUUID(anyString(), anyString());
+        }
 }
