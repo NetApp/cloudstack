@@ -77,7 +77,7 @@ from marvin.cloudstackAPI import (
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details
+from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
 
 logger = logging.getLogger("TestOntapVMVolumeAttach")
 
@@ -164,13 +164,14 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
     @classmethod
     def setUpClass(cls):
+        super(TestOntapVMVolumeAttach, cls).setUpClass()
         testclient = super(
             TestOntapVMVolumeAttach, cls
         ).getClsTestClient()
 
         cls.apiClient = testclient.getApiClient()
         cls.dbConnection = testclient.getDbConnection()
-        config = testclient.getParsedTestDataConfig()
+        config = get_datacenter_config(testclient, cls)
 
         ontap_cfg = config.get("ontap", {})
         pool_cfg = config.get("storagePool", {})
@@ -690,17 +691,23 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
         cmd = detachVolumeAPI.detachVolumeCmd()
         cmd.id = vol.id
-        # The hypervisor may briefly mark the device as busy; retry up to 3×.
+
+        max_timeout = 180
+        interval = 10
+        deadline = time.time() + max_timeout
         last_exc = None
-        for attempt in range(3):
+        while True:
             try:
                 self.apiClient.detachVolume(cmd)
                 last_exc = None
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt < 2:
-                    time.sleep(30)
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                time.sleep(min(interval, remaining))
+                interval = min(interval * 2, max_timeout)
         if last_exc is not None:
             raise last_exc
 

@@ -28,6 +28,7 @@ Provides:
 import logging
 import random
 import requests
+import sys
 import time
 import urllib3
 from urllib.parse import urlparse
@@ -42,6 +43,7 @@ from marvin.cloudstackAPI import (
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
 from marvin.cloudstackTestCase import cloudstackTestCase
+from marvin.jsonHelper import jsonDump
 from marvin.lib.base import Account, DiskOffering
 from marvin.sshClient import SshClient
 from marvin.lib.common import get_domain, get_zone, list_clusters, list_storage_pools
@@ -50,6 +52,56 @@ from marvin.lib.utils import cleanup_resources
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger("OntapTestBase")
+
+
+def configure_console_logging(log, level=logging.INFO):
+    """Send INFO/WARNING/ERROR from *log* to stdout for live test-run visibility."""
+    if any(isinstance(h, logging.StreamHandler) for h in log.handlers):
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    handler.setLevel(level)
+    log.addHandler(handler)
+    if log.level == logging.NOTSET or log.level > level:
+        log.setLevel(level)
+    log.propagate = False
+
+
+def enable_live_logging(test_cls):
+    """Attach stdout handlers to OntapTestBase and the test module logger."""
+    configure_console_logging(logger)
+    if test_cls is not None:
+        mod = sys.modules.get(test_cls.__module__)
+        if mod is not None:
+            mod_logger = getattr(mod, "logger", None)
+            if mod_logger is not None:
+                configure_console_logging(mod_logger)
+
+
+def log_progress(log, level, msg, *args):
+    """Log to Marvin files and stdout so long polls remain visible."""
+    text = msg % args if args else msg
+    getattr(log, level)(text)
+    print("[%s] %s" % (level.upper(), text), flush=True)
+
+
+def get_datacenter_config(testclient, test_cls):
+    """
+    Return the --marvin-config file (e.g. ontap.cfg) as a plain dict.
+
+    Marvin injects the datacenter config as ``test_cls.config``.  The separate
+    ``getParsedTestDataConfig()`` API defaults to test_data.py and does not
+    contain ontap/cloudstack/zones sections from ontap.cfg.
+    """
+    if getattr(test_cls, "config", None):
+        return jsonDump.dump(test_cls.config)
+    cfg = testclient.getParsedTestDataConfig() or {}
+    if cfg.get("ontap") or cfg.get("cloudstack") or cfg.get("zones"):
+        return cfg
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +301,40 @@ class OntapTestBase(cloudstackTestCase):
     # Subclass sets this to distinguish volume names, e.g. "OntapNFS3Vol"
     _vol_name_prefix = "OntapVol"
 
+    # ---- zone guard ----------------------------------------------------
+
+    @classmethod
+    def _ensure_zone(cls, config, zone_name, cluster_name):
+        """
+        Verify that the named zone and cluster already exist and return
+        (zone, cluster).  Raises RuntimeError with a clear message if the
+        zone is absent — run the setup_zone step first:
+
+          bash test/integration/plugins/ontap/run_tests.sh setup_zone
+        """
+        zone = get_zone(cls.apiClient, zone_name=zone_name)
+        if not zone:
+            raise RuntimeError(
+                "Zone '%s' not found. Create it first by running:\n"
+                "  bash test/integration/plugins/ontap/run_tests.sh setup_zone\n"
+                "Then re-run the tests."
+                % (zone_name or "<default>")
+            )
+        clusters = (list_clusters(cls.apiClient, name=cluster_name)
+                    if cluster_name else list_clusters(cls.apiClient))
+        if not clusters:
+            raise RuntimeError(
+                "No cluster found (filter: %r) in zone '%s'. "
+                "Verify the cluster was created by the setup_zone step."
+                % (cluster_name, zone.name)
+            )
+        return zone, clusters[0]
+
     # ---- shared setup helper -------------------------------------------
+
+    @classmethod
+    def setUpClass(cls):
+        enable_live_logging(cls)
 
     @classmethod
     def _setup_cloudstack_resources(cls, config, account_testdata):
@@ -263,10 +348,7 @@ class OntapTestBase(cloudstackTestCase):
         cluster_name = cs_cfg.get("clusterName", None)
         domain_name = cs_cfg.get("domainName", "ROOT")
 
-        cls.zone = get_zone(cls.apiClient, zone_name=zone_name)
-        clusters = (list_clusters(cls.apiClient, name=cluster_name)
-                    if cluster_name else list_clusters(cls.apiClient))
-        cls.cluster = clusters[0]
+        cls.zone, cls.cluster = cls._ensure_zone(config, zone_name, cluster_name)
         cls.domain = get_domain(cls.apiClient, domain_name=domain_name)
 
         cls.account = Account.create(cls.apiClient, account_testdata, admin=1)
@@ -477,15 +559,43 @@ class OntapTestBase(cloudstackTestCase):
 
     def _poll_pool_state(self, pool_id, target_state, timeout=120, interval=5):
         """Poll listStoragePools until the pool reaches target_state or timeout."""
-        deadline = time.time() + timeout
+        start = time.time()
+        deadline = start + timeout
+        attempt = 0
         current_state = "unknown"
+        log_progress(
+            logger, "info",
+            "Waiting for pool %s to reach state '%s' "
+            "(timeout=%ds, poll every %ds).",
+            pool_id, target_state, timeout, interval,
+        )
         while time.time() < deadline:
+            attempt += 1
+            elapsed = int(time.time() - start)
+            remaining = max(0, int(deadline - time.time()))
             pools = list_storage_pools(self.apiClient, id=pool_id)
             if pools:
                 current_state = pools[0].state
                 if current_state == target_state:
+                    log_progress(
+                        logger, "info",
+                        "Pool %s reached state '%s' after %ds (%d polls).",
+                        pool_id, target_state, elapsed, attempt,
+                    )
                     return pools[0]
+            log_progress(
+                logger, "info",
+                "Pool poll #%d: pool %s state=%s (want %s) "
+                "[elapsed %ds, ~%ds left]",
+                attempt, pool_id, current_state, target_state,
+                elapsed, remaining,
+            )
             time.sleep(interval)
+        log_progress(
+            logger, "error",
+            "Pool %s did not reach state '%s' within %ds (last: '%s').",
+            pool_id, target_state, timeout, current_state,
+        )
         self.fail(
             "Pool %s did not reach state '%s' within %ds (last: '%s')"
             % (pool_id, target_state, timeout, current_state)

@@ -129,35 +129,83 @@ The test classes read `storageIP`, `svmName`, `username`, and `password` from th
 
 ## Running the tests
 
-**Always run from the repo root** so that `PYTHONPATH` picks up `ontap_test_base.py`:
+**Always run from the repo root.** The recommended entry point is [`run_tests.sh`](run_tests.sh), which runs suites sequentially (required for shared test state) and writes unified reports under `results/`.
+
+### Protocol batch commands (recommended)
+
+Run all suites for one protocol in a single batch, then inspect consolidated results:
 
 ```bash
-# All ONTAP tests (takes ~60–90 min)
-PYTHONPATH=test/integration/plugins/ontap \
-python3 -m nose --with-marvin \
-    --marvin-config=test/integration/plugins/ontap/ontap.cfg \
-    test/integration/plugins/ontap/ -v
+# iSCSI only — 5 suites, ~30–45 min
+bash test/integration/plugins/ontap/run_tests.sh iscsi
 
+# NFS3 only — 5 suites, ~30–45 min
+bash test/integration/plugins/ontap/run_tests.sh nfs3
+
+# Full plugin validation: iSCSI batch, then NFS3 batch (~60–90 min)
+bash test/integration/plugins/ontap/run_tests.sh both
+
+# Default (setup_zone + iscsi + nfs3; excludes cleanup_zone)
+bash test/integration/plugins/ontap/run_tests.sh
+bash test/integration/plugins/ontap/run_tests.sh all
+```
+
+Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (last).
+
+| Command | What it runs |
+|---------|--------------|
+| `run_tests.sh iscsi` | All 5 iSCSI suites + unified iSCSI report |
+| `run_tests.sh nfs3` | All 5 NFS3 suites + unified NFS3 report |
+| `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
+| `run_tests.sh all` | `setup_zone`, then `both` (iSCSI before NFS3) |
+| `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
+| `run_tests.sh setup_zone` | Zone setup only |
+| `run_tests.sh cleanup_zone` | Zone teardown (manual; destructive) |
+
+### Results layout
+
+After a protocol batch, artifacts are under `test/integration/plugins/ontap/results/`:
+
+```
+results/<YYYYMMDD-HHMMSS>-iscsi/
+  run.meta.json       # protocol, timestamps, per-suite exit codes
+  summary.tsv         # all tests (tab-separated)
+  summary.json        # machine-readable aggregate (CI-friendly)
+  summary.txt         # human-readable TEST SUMMARY
+  suites/
+    iscsi_workflow/
+      stdout.log
+      results.txt     # copy of Marvin results
+      runinfo.txt
+    ...
+```
+
+Symlinks: `results/latest-iscsi`, `results/latest-nfs3`, `results/latest-both`.
+
+For `both` / `all`, the parent folder `results/<timestamp>-both/` contains `iscsi/` and `nfs3/` sub-batches plus a combined `summary.txt` at the top level.
+
+Marvin also writes raw logs to `/tmp/MarvinLogs/<run>/` during execution.
+
+### Manual nose commands
+
+```bash
 # Single suite (e.g. NFS3 pool lifecycle)
 PYTHONPATH=test/integration/plugins/ontap \
-python3 -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     test/integration/plugins/ontap/nfs3/pool/test_pool_lifecycle.py -v
 
-# By tag (e.g. all iSCSI workflow tests)
+# By tag
 PYTHONPATH=test/integration/plugins/ontap \
-python3 -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     -a tags=iscsi_workflow \
-    test/integration/plugins/ontap/ -v
+    test/integration/plugins/ontap/iscsi/pool/test_pool_lifecycle.py -v
 ```
 
-> **Important:** `PYTHONPATH=test/integration/plugins/ontap` is always required. The test files in subdirectories import `ontap_test_base` from the parent directory; without this prefix, Python cannot find it.
+> **Important:** `PYTHONPATH=test/integration/plugins/ontap` is always required. Test files import `ontap_test_base` from the parent directory.
 
-Test results are written to:
-- `/tmp/marvin_last_run.txt` — stdout/stderr summary
-- `/tmp/MarvinLogs/<timestamp>/results.txt` — per-test pass/fail
-- `/tmp/MarvinLogs/<timestamp>/runinfo.txt` — full trace with API call details
+> **Single-host lab:** Suites within a batch run **sequentially** (not in parallel). iSCSI completes before NFS3 starts in `both`/`all` so the one KVM host is not shared across protocol operations simultaneously.
 
 ---
 
@@ -282,7 +330,10 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
 | iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
-| `No ready KVM user template available` | Template still downloading | Wait for template `isready=true` in the CloudStack UI, then rerun |
+| `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
+| `setup_zone` steps 11–12 slow on first run | System VMs and template download after zone enable | Normal — first run may take up to ~60 min; re-runs pass quickly when already ready |
+| `cleanup_zone` pool delete fails | Pool stuck in Maintenance or KVM NFS mount stale | Re-run cleanup; check host connectivity; manually `umount /mnt/<pool-uuid>` on KVM if needed |
+| `deleteZone failed` after cleanup | VMs, pools, or hosts still present in zone | Re-run `cleanup_zone`; check CloudStack UI for remaining resources |
 
 ---
 

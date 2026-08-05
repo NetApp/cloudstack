@@ -66,7 +66,7 @@ from marvin.cloudstackAPI import (
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details
+from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
 
 logger = logging.getLogger("TestOntapNFS3VolumeLifecycle")
 
@@ -139,13 +139,14 @@ class TestOntapNFS3VolumeLifecycle(OntapTestBase):
 
     @classmethod
     def setUpClass(cls):
+        super(TestOntapNFS3VolumeLifecycle, cls).setUpClass()
         testclient = super(
             TestOntapNFS3VolumeLifecycle, cls
         ).getClsTestClient()
 
         cls.apiClient = testclient.getApiClient()
         cls.dbConnection = testclient.getDbConnection()
-        config = testclient.getParsedTestDataConfig()
+        config = get_datacenter_config(testclient, cls)
 
         ontap_cfg = config.get("ontap", {})
         pool_cfg = config.get("storagePool", {})

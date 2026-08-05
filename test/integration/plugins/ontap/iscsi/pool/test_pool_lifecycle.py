@@ -64,7 +64,7 @@ from marvin.cloudstackAPI import (
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase
+from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config, log_progress
 
 logger = logging.getLogger("TestOntapISCSIPoolLifecycle")
 
@@ -149,13 +149,14 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
 
     @classmethod
     def setUpClass(cls):
+        super(TestOntapISCSIPoolLifecycle, cls).setUpClass()
         testclient = super(
             TestOntapISCSIPoolLifecycle, cls
         ).getClsTestClient()
 
         cls.apiClient = testclient.getApiClient()
         cls.dbConnection = testclient.getDbConnection()
-        config = testclient.getParsedTestDataConfig()
+        config = get_datacenter_config(testclient, cls)
 
         ontap_cfg = config.get("ontap", {})
         pool_cfg = config.get("storagePool", {})
@@ -508,6 +509,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         """
         pool = self._create_pool()
         self.__class__.pool = pool
+        log_progress(
+            logger, "info",
+            "test_07: created storage pool name='%s' id=%s state=%s type=%s",
+            pool.name, pool.id, pool.state, pool.type,
+        )
 
         self.assertEqual(
             pool.state, "Up",
@@ -521,6 +527,15 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         vol = self._create_volume(pool.id)
         self.__class__.volume = vol
         self.assertIsNotNone(vol, "createVolume returned None")
+        log_progress(
+            logger, "info",
+            "test_07: created CloudStack volume name='%s' id=%s state=%s "
+            "on pool='%s' (id=%s) account='%s' domain='%s' — "
+            "switch to this account in the UI to see the volume",
+            getattr(vol, "name", "?"), getattr(vol, "id", "?"),
+            getattr(vol, "state", "?"), pool.name, pool.id,
+            self.account.name, self.domain.name,
+        )
 
         # ONTAP: FlexVol must still be online after volume allocation
         ontap_vol = self.ontap.get_volume(pool.name)

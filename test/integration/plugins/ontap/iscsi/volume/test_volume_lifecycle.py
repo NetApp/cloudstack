@@ -67,7 +67,7 @@ from marvin.cloudstackException import CloudstackAPIException
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase
+from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
 
 logger = logging.getLogger("TestOntapISCSIVolumeLifecycle")
 
@@ -151,13 +151,14 @@ class TestOntapISCSIVolumeLifecycle(OntapTestBase):
 
     @classmethod
     def setUpClass(cls):
+        super(TestOntapISCSIVolumeLifecycle, cls).setUpClass()
         testclient = super(
             TestOntapISCSIVolumeLifecycle, cls
         ).getClsTestClient()
 
         cls.apiClient = testclient.getApiClient()
         cls.dbConnection = testclient.getDbConnection()
-        config = testclient.getParsedTestDataConfig()
+        config = get_datacenter_config(testclient, cls)
 
         ontap_cfg = config.get("ontap", {})
         pool_cfg = config.get("storagePool", {})

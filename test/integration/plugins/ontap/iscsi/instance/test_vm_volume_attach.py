@@ -91,7 +91,7 @@ from marvin.cloudstackAPI import (
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase
+from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
 
 logger = logging.getLogger("TestOntapVMVolumeAttachISCSI")
 
@@ -200,13 +200,14 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
     @classmethod
     def setUpClass(cls):
+        super(TestOntapVMVolumeAttachISCSI, cls).setUpClass()
         testclient = super(
             TestOntapVMVolumeAttachISCSI, cls
         ).getClsTestClient()
 
         cls.apiClient = testclient.getApiClient()
         cls.dbConnection = testclient.getDbConnection()
-        config = testclient.getParsedTestDataConfig()
+        config = get_datacenter_config(testclient, cls)
 
         ontap_cfg = config.get("ontap", {})
         pool_cfg = config.get("storagePool", {})
@@ -654,15 +655,27 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_02 must pass first")
 
-        # Allow the guest OS to fully initialize the iSCSI device after VM
-        # start before requesting a hot-detach.  Without this pause, the
-        # libvirt device-removal handshake can time out because the guest
-        # hasn't finished its early-boot device scan.
-        time.sleep(20)
-
         cmd = detachVolumeAPI.detachVolumeCmd()
         cmd.id = self.__class__.volume.id
-        self.apiClient.detachVolume(cmd)
+
+        max_timeout = 180
+        interval = 10
+        deadline = time.time() + max_timeout
+        last_exc = None
+        while True:
+            try:
+                self.apiClient.detachVolume(cmd)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                time.sleep(min(interval, remaining))
+                interval = min(interval * 2, max_timeout)
+        if last_exc is not None:
+            raise last_exc
 
         # Poll until virtualmachineid is cleared
         result = self._poll_volume_field(
