@@ -47,6 +47,9 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     private static final Map<String, KVMStoragePool> MapStorageUuidToStoragePool = new HashMap<>();
 
+    /** iscsiadm's ISCSI_ERR_NO_OBJS_FOUND: returned by "-m session" when no session is established. */
+    private static final int ISCSI_ERR_NO_OBJS_FOUND = 21;
+
     @Override
     public KVMStoragePool createStoragePool(String uuid, String host, int port, String path, String userInfo, StoragePoolType storagePoolType, Map<String, String> details, boolean isPrimaryStorage) {
         IscsiAdmStoragePool storagePool = new IscsiAdmStoragePool(uuid, host, port, storagePoolType, this);
@@ -126,6 +129,8 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         final int port = pool.getSourcePort();
         final String iqn = getIqn(volumeUuid);
 
+        final boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host, port);
+
         // Always try to login; treat benign outcomes as success (idempotent)
         iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
         iScsiAdmCmd.add("-m", "node");
@@ -139,8 +144,11 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             return false;
         }
 
-        // If the session already existed, a newly mapped LUN won't be visible until a rescan.
-        if (result != null) {
+        // Login output alone is unreliable when already logged in (empty output => null).
+        final boolean sessionPreExisted = sessionAlreadyActive || (result != null);
+
+        if (sessionPreExisted) {
+            logger.info("sessionPreExisted : performing rescan explicitely");
             rescanIscsiSessions(iqn, host, port);
         }
 
@@ -155,6 +163,11 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         // this method could still return (it should not block indefinitely) (the race condition
         // isn't solved here, but made highly unlikely to be a problem).
         waitForDiskToBecomeAvailable(volumeUuid, pool);
+
+        if (getPhysicalDisk(volumeUuid, pool).getSize() <= 0) {
+            logger.warn("iSCSI device not ready for target {} at {}:{} after wait", volumeUuid, host, port);
+            return false;
+        }
 
         return true;
     }
@@ -192,6 +205,37 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             return true;
         }
         logger.debug("Failed to log in to iSCSI target {}: {}", volumeUuid, result);
+        return false;
+    }
+
+    /**
+     * Checks whether a session to the given target and portal is already established.
+     *
+     * "iscsiadm -m session" exits with ISCSI_ERR_NO_OBJS_FOUND when no session exists, which is a
+     * normal outcome here, so that exit value is ignored and the output is taken from the parser.
+     */
+    private boolean isIscsiSessionActive(String iqn, String host, int port) {
+        Script sessionCmd = new Script(true, "iscsiadm", 0, logger);
+        sessionCmd.add("-m", "session");
+
+        OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
+
+        sessionCmd.executeIgnoreExitValue(parser, ISCSI_ERR_NO_OBJS_FOUND);
+
+        String sessions = parser.getLines();
+
+        if (StringUtils.isBlank(sessions)) {
+            return false;
+        }
+
+        String portal = host + ":" + port;
+
+        for (String line : sessions.split("\n")) {
+            if (line.contains(iqn) && line.contains(portal)) {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -290,8 +334,17 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     private long getDeviceSize(String deviceByPath) {
         try {
-            if (!Files.exists(Paths.get(deviceByPath))) {
-                logger.debug("Device by-path does not exist yet: " + deviceByPath);
+            Path devicePath = Paths.get(deviceByPath);
+            if (!Files.exists(devicePath)) {
+                logger.debug("Device by-path does not exist yet: {}", deviceByPath);
+                return 0L;
+            }
+            if (Files.isRegularFile(devicePath)) {
+                logger.warn("Removing corrupt regular file at iSCSI by-path {} (expected block device symlink)", deviceByPath);
+                return 0L;
+            }
+            if (!Files.isSymbolicLink(devicePath)) {
+                logger.warn("Path {} exists but is not an iSCSI block device symlink", deviceByPath);
                 return 0L;
             }
         } catch (Exception ex) {
