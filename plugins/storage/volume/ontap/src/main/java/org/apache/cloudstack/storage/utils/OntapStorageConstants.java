@@ -90,6 +90,7 @@ public class OntapStorageConstants {
     public static final String SEMICOLON = ";";
     public static final String COMMA = ",";
     public static final String HYPHEN = "-";
+    public static final String DOT = ".";
 
     public static final String VOLUME_PATH_PREFIX = "/vol/";
 
@@ -130,4 +131,20 @@ public class OntapStorageConstants {
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";
+
+    // ASUP (AutoSupport) / EMS telemetry
+    public static final String ADVANCED_CONFIG_KEY_CATEGORY = "Advanced";
+    public static final String ASUP_CATEGORY = "provisioning";
+    public static final String ASUP_SEVERITY = "notice";
+    public static final String ASUP_EVENT_SOURCE = "CloudStack ONTAP plugin";
+    public static final String ASUP_EVENT_ID_HEARTBEAT = "0";
+    public static final String ASUP_EVENT_ID_STORAGE_POOL = "1";
+    public static final String ASUP_UNKNOWN = "unknown";
+    public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
+    public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
+    public static final String ASUP_ENABLED_DEFAULT = "true";
+    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.";
+    public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
+    public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
+    public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.";
 }

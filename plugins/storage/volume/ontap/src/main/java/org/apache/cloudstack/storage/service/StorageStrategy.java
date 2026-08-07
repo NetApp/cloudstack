@@ -26,20 +26,25 @@ import java.util.Objects;
 
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
+import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
+import org.apache.cloudstack.storage.feign.client.EmsFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.Cluster;
+import org.apache.cloudstack.storage.feign.model.EmsApplicationLog;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.feign.model.Version;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -74,6 +79,8 @@ public abstract class StorageStrategy {
     protected SANFeignClient sanFeignClient;
     protected NASFeignClient nasFeignClient;
     protected SnapshotFeignClient snapshotFeignClient;
+    protected ClusterFeignClient clusterFeignClient;
+    protected EmsFeignClient emsFeignClient;
 
     protected OntapStorage storage;
 
@@ -105,6 +112,74 @@ public abstract class StorageStrategy {
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
         this.snapshotFeignClient = feignClientFactory.createClient(SnapshotFeignClient.class, baseURL);
+        this.clusterFeignClient = feignClientFactory.createClient(ClusterFeignClient.class, baseURL);
+        this.emsFeignClient = feignClientFactory.createClient(EmsFeignClient.class, baseURL);
+    }
+
+    /**
+     * Fetches the full ONTAP {@link Cluster} object (name, uuid, version) in a single REST call,
+     * for ASUP telemetry. Best-effort: returns {@code null} if it cannot be retrieved, and callers
+     * must never fail a storage operation because of it.
+     *
+     * @return the ONTAP {@link Cluster}, or {@code null} if it cannot be resolved
+     */
+    public Cluster getClusterInfo() {
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            return clusterFeignClient.getCluster(authHeader, true);
+        } catch (Exception e) {
+            logger.warn("getClusterInfo: failed to fetch ONTAP cluster info for storage IP {}: {}",
+                    storage.getStorageIP(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extracts a clean, parser-friendly ONTAP version string from a {@link Cluster}.
+     *
+     * <p>Prefers the compact "generation.major.minor" numeric form (e.g. "9.17.1"), which avoids
+     * the colon/date noise in {@code version.full}. Falls back to the verbose {@code version.full}
+     * banner only when the numeric fields are unavailable.</p>
+     *
+     * @param cluster the cluster (may be {@code null})
+     * @return the ONTAP version string, or {@code null} if it cannot be resolved
+     */
+    public String getClusterVersion(Cluster cluster) {
+        if (cluster == null || cluster.getVersion() == null) {
+            return null;
+        }
+        Version version = cluster.getVersion();
+        if (version.getGeneration() != null && version.getMajor() != null && version.getMinor() != null) {
+            return version.getGeneration() + OntapStorageConstants.DOT + version.getMajor()
+                    + OntapStorageConstants.DOT + version.getMinor();
+        }
+        if (version.getFull() != null && !version.getFull().isEmpty()) {
+            return version.getFull();
+        }
+        return null;
+    }
+
+    /**
+     * Pushes a single ASUP (AutoSupport) EMS application-log message to the ONTAP cluster.
+     *
+     * <p>This is strictly best-effort telemetry: any failure is logged and swallowed so that
+     * it can never affect a storage operation or the periodic scheduler.</p>
+     *
+     * @param message the EMS message to send
+     */
+    public void sendAsupMessage(EmsApplicationLog message) {
+        if (message == null) {
+            return;
+        }
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            emsFeignClient.sendEmsApplicationLog(authHeader, message);
+            logger.debug("sendAsupMessage: ASUP EMS message [event-id={}] sent to ONTAP cluster at {}",
+                    message.getEventId(), storage.getStorageIP());
+        } catch (Exception e) {
+            logger.error("sendAsupMessage: failed to send ASUP EMS message [event-id={}] to ONTAP cluster at {}: {}",
+                    message.getEventId(), storage.getStorageIP(), e.getMessage());
+        }
     }
 
     /**
