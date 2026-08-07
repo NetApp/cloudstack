@@ -50,6 +50,9 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
     /** iscsiadm's ISCSI_ERR_NO_OBJS_FOUND: returned by "-m session" when no session is established. */
     private static final int ISCSI_ERR_NO_OBJS_FOUND = 21;
 
+    /** iscsiadm's ISCSI_ERR_SESS_EXISTS: returned by "--login" when the session is already logged in (e.g. Ubuntu). */
+    private static final int ISCSI_SESSION_EXISTS_CODE = 15;
+
     @Override
     public KVMStoragePool createStoragePool(String uuid, String host, int port, String path, String userInfo, StoragePoolType storagePoolType, Map<String, String> details, boolean isPrimaryStorage) {
         IscsiAdmStoragePool storagePool = new IscsiAdmStoragePool(uuid, host, port, storagePoolType, this);
@@ -93,12 +96,16 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     @Override
     public boolean connectPhysicalDisk(String volumeUuid, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
+        final String host = pool.getSourceHost();
+        final int port = pool.getSourcePort();
+        final String iqn = getIqn(volumeUuid);
+
         // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 -o new
         Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
 
         iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", getIqn(volumeUuid));
-        iScsiAdmCmd.add("-p", pool.getSourceHost() + ":" + pool.getSourcePort());
+        iScsiAdmCmd.add("-T", iqn);
+        iScsiAdmCmd.add("-p", host + ":" + port);
         iScsiAdmCmd.add("-o", "new");
 
         String result = iScsiAdmCmd.execute();
@@ -125,13 +132,11 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             }
         }
 
-        final String host = pool.getSourceHost();
-        final int port = pool.getSourcePort();
-        final String iqn = getIqn(volumeUuid);
-
         final boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host, port);
+        logger.debug("iSCSI session active check for target {} at {}:{}: {}", iqn, host, port, sessionAlreadyActive);
 
-        // Always try to login; treat benign outcomes as success (idempotent)
+        // Always try to login; treat benign outcomes as success (idempotent).
+        // Ubuntu returns ISCSI_ERR_SESS_EXISTS (15) when already logged in; Oracle often returns 0 with no output.
         iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
         iScsiAdmCmd.add("-m", "node");
         iScsiAdmCmd.add("-T", iqn);
@@ -139,16 +144,17 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         iScsiAdmCmd.add("--login");
 
         result = iScsiAdmCmd.execute();
+        final boolean sessionPreExisted = (iScsiAdmCmd.getExitValue() == ISCSI_SESSION_EXISTS_CODE) || sessionAlreadyActive;
 
-        if (!handleLoginResult(result, volumeUuid)) {
+        if (!handleLoginResult(result, sessionPreExisted, volumeUuid)) {
             return false;
         }
 
-        // Login output alone is unreliable when already logged in (empty output => null).
-        final boolean sessionPreExisted = sessionAlreadyActive || (result != null);
-
+        // Newly mapped LUNs on an existing session are invisible until rescan.
+        // Prefer the pre-login session check (required on Oracle, where re-login exits 0).
+        // Also treat ISCSI_ERR_SESS_EXISTS as a hint (Ubuntu).
         if (sessionPreExisted) {
-            logger.info("sessionPreExisted : performing rescan explicitely");
+            logger.debug("iSCSI session for target {} at {}:{} pre-existed, performing rescan", iqn, host, port);
             rescanIscsiSessions(iqn, host, port);
         }
 
@@ -192,16 +198,19 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
 
     /**
      * Checks the result of an iscsiadm login command.
-     * Returns true if the login succeeded or session already exists, false on failure.
+     * Returns true if the session already existed (pre-check and/or ISCSI_ERR_SESS_EXISTS)
+     * or login succeeded with no error output, false on failure.
+     *
+     * sessionPreExisted must be checked first: on Ubuntu, re-login exits 15 with a non-null
+     * error message that would otherwise be treated as failure.
      */
-    boolean handleLoginResult(String result, String volumeUuid) {
-        if (result == null) {
-            logger.debug("Successfully logged in to iSCSI target {}", volumeUuid);
+    boolean handleLoginResult(String result, boolean sessionPreExisted, String volumeUuid) {
+        if (sessionPreExisted) {
+            logger.debug("iSCSI session already active for target {}", volumeUuid);
             return true;
         }
-        String msg = result.toLowerCase();
-        if (msg.contains("already present") || msg.contains("already logged in") || msg.contains("session exists")) {
-            logger.debug("iSCSI session already exists for target {}, proceeding", volumeUuid);
+        if (result == null) {
+            logger.debug("Successfully logged in to iSCSI target {}", volumeUuid);
             return true;
         }
         logger.debug("Failed to log in to iSCSI target {}: {}", volumeUuid, result);
