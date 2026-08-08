@@ -553,7 +553,27 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public void updateStoragePool(StoragePool storagePool, Map<String, String> details) {
+        long currentCapacityBytes = storagePool.getCapacityBytes();
+        long newCapacityBytes = Long.parseLong(details.get(PrimaryDataStoreLifeCycle.CAPACITY_BYTES));
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
 
+        Volume volume = new Volume();
+        volume.setUuid(poolDetails.get(OntapStorageConstants.VOLUME_UUID));
+        volume.setName(poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+        try {
+            if (volume.getUuid() == null || volume.getUuid().isEmpty() || volume.getName() == null || volume.getName().isEmpty()) {
+                logger.error("Volume UUID/Name not found in details for pool: {}, cannot resize", storagePool.getName());
+                throw new CloudRuntimeException("Volume UUID/Name not found in details, cannot resize ONTAP FlexVolume");
+            }
+            storageStrategy.updateStorageVolume(volume, newCapacityBytes);
+            logger.info("Successfully resized ONTAP FlexVolume '{}' (UUID: {}) for pool '{}' from {} bytes to {} bytes",
+                    volume.getName(), volume.getUuid(), storagePool.getName(), currentCapacityBytes, newCapacityBytes);
+        } catch (Exception e) {
+            logger.error(" Exception while resizing FlexVolume for pool: {}. Error: {}",
+                    storagePool.getName(), e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume for pool: " + storagePool.getName() + ". " + e.getMessage(), e);
+        }
     }
 
     @Override

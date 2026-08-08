@@ -1286,23 +1286,22 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
         }
 
         if (changes) {
-            StoragePoolVO storagePool = _storagePoolDao.findById(id);
-            DataStoreProvider dataStoreProvider = _dataStoreProviderMgr.getDataStoreProvider(storagePool.getStorageProviderName());
+            DataStoreProvider dataStoreProvider = _dataStoreProviderMgr.getDataStoreProvider(pool.getStorageProviderName());
             DataStoreLifeCycle dataStoreLifeCycle = dataStoreProvider.getDataStoreLifeCycle();
-
             if (dataStoreLifeCycle instanceof PrimaryDataStoreLifeCycle) {
                 if (updatedCapacityBytes != null) {
-                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, updatedCapacityBytes != null ? String.valueOf(updatedCapacityBytes) : null);
-                    _storagePoolDao.updateCapacityBytes(id, updatedCapacityBytes);
+                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, String.valueOf(updatedCapacityBytes));
+                    pool.setCapacityBytes(updatedCapacityBytes);
                 }
                 if (updatedCapacityIops != null) {
-                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, updatedCapacityIops != null ? String.valueOf(updatedCapacityIops) : null);
-                    _storagePoolDao.updateCapacityIops(id, updatedCapacityIops);
+                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, String.valueOf(updatedCapacityIops));
+                    pool.setCapacityIops(updatedCapacityIops);
                 }
                 if (cmd.getUrl() != null) {
                     details.put("url", cmd.getUrl());
                 }
-                _storagePoolDao.update(id, storagePool);
+                ((PrimaryDataStoreLifeCycle)dataStoreLifeCycle).updateStoragePool(pool, details);
+                _storagePoolDao.update(id, pool);
                 _storagePoolDao.updateDetails(id, details);
             }
         }

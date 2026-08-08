@@ -383,11 +383,25 @@ public abstract class StorageStrategy {
      * @param volume the volume to update
      * @return the updated Volume object
      */
-    public Volume updateStorageVolume(Volume volume) {
-        return null;
+    public Volume updateStorageVolume(Volume volume, Long newSizeBytes) {
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        Volume resizeRequest = new Volume();
+        resizeRequest.setSize(newSizeBytes);
+        try {
+            JobResponse jobResponse = volumeFeignClient.updateVolumeRebalancing(authHeader, volume.getUuid(), resizeRequest);
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 1000);
+            if (!jobSucceeded) {
+                logger.error("resize job failed for FlexVolume: " + volume.getName());
+                throw new CloudRuntimeException("resize job failed for FlexVolume: " + volume.getName());
+            }
+             logger.info("Volume is resized successfully for : " + volume.getName());
+        } catch (FeignException e) {
+            logger.error("Exception while resizing FlexVolume: " + volume.getName(), e);
+            throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume: " + e.getMessage(), e);
+        }
+        return volume;
     }
-
-    /**
+            /**
      * Delete ONTAP Flex-Volume
      * Eligible only for Unified ONTAP storage
      * throw exception in case of disaggregated ONTAP storage
