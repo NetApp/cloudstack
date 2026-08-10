@@ -528,12 +528,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     public void updateStoragePool(StoragePool storagePool, Map<String, String> details) {
         long currentCapacityBytes = storagePool.getCapacityBytes();
         long newCapacityBytes = Long.parseLong(details.get(PrimaryDataStoreLifeCycle.CAPACITY_BYTES));
-        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
-        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
 
         Volume volume = new Volume();
-        volume.setUuid(poolDetails.get(OntapStorageConstants.VOLUME_UUID));
-        volume.setName(poolDetails.get(OntapStorageConstants.VOLUME_NAME));
+        volume.setUuid(details.get(OntapStorageConstants.VOLUME_UUID));
+        volume.setName(details.get(OntapStorageConstants.VOLUME_NAME));
         try {
             if (volume.getUuid() == null || volume.getUuid().isEmpty() || volume.getName() == null || volume.getName().isEmpty()) {
                 logger.error("Volume UUID/Name not found in details for pool: {}, cannot resize", storagePool.getName());
