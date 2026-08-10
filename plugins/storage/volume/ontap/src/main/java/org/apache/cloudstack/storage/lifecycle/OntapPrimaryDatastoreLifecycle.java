@@ -42,6 +42,7 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.datastore.lifecycle.BasePrimaryDataStoreLifeCycleImpl;
+import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
@@ -143,10 +144,28 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             if (storageStrategy.getResolvedSvmUuid() != null && !storageStrategy.getResolvedSvmUuid().isEmpty()) {
                 details.put(OntapStorageConstants.SVM_UUID, storageStrategy.getResolvedSvmUuid());
             }
+            Aggregate aggregate;
+            try {
+                aggregate = storageStrategy.chooseAggregate(capacityBytes);
+            } catch (Exception e) {
+                logger.error("Exception occurred while choosing aggregate for pool: " + storagePoolName, e);
+                throw new CloudRuntimeException("Failed to choose ONTAP aggregate for pool: " + storagePoolName
+                        + ". Error: " + e.getMessage(), e);
+            }
+
+            Pair<String, String> lifResult;
+            try {
+                lifResult = storageStrategy.getNetworkInterface(aggregate);
+            } catch (Exception e) {
+                logger.error("Exception occurred while retrieving network interface for pool: " + storagePoolName, e);
+                throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP: " + e.getMessage(), e);
+            }
+            processDataLifSelection(lifResult, details, storagePoolName, zoneId, podId);
+
             logger.info("Creating ONTAP volume '" + storagePoolName + "' with size: " + capacityBytes + " bytes (" +
                     (capacityBytes / (1024 * 1024 * 1024)) + " GB)");
             try {
-                Volume volume = storageStrategy.createStorageVolume(storagePoolName, capacityBytes);
+                Volume volume = storageStrategy.createStorageVolume(storagePoolName, capacityBytes, aggregate);
                 if (volume == null) {
                     logger.error("createStorageVolume returned null for volume: " + storagePoolName);
                     throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName);
@@ -158,15 +177,6 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 logger.error("Exception occurred while creating ONTAP volume: " + storagePoolName, e);
                 throw new CloudRuntimeException("Failed to create ONTAP volume: " + storagePoolName + ". Error: " + e.getMessage(), e);
             }
-
-            Pair<String, String> lifResult;
-            try {
-                lifResult = storageStrategy.getNetworkInterface();
-            } catch (Exception e) {
-                logger.error("Exception occurred while retrieving network interface for pool: " + storagePoolName, e);
-                throw new CloudRuntimeException("Failed to retrieve Data LIF from ONTAP: " + e.getMessage(), e);
-            }
-            processDataLifSelection(lifResult, details, storagePoolName, zoneId, podId);
         } else {
             throw new CloudRuntimeException("ONTAP details validation failed, cannot create primary storage");
         }
