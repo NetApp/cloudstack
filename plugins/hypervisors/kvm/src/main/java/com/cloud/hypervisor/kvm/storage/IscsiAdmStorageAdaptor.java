@@ -150,7 +150,8 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             return false;
         }
 
-        // Newly mapped LUNs on an existing session are invisible until rescan.
+        // Newly mapped LUNs on an existing session are invisible until rescan, while a session
+        // created by the login above already exposes them.
         // Prefer the pre-login session check (required on Oracle, where re-login exits 0).
         // Also treat ISCSI_ERR_SESS_EXISTS as a hint (Ubuntu).
         if (sessionPreExisted) {
@@ -221,7 +222,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
      * Checks whether a session to the given target and portal is already established.
      *
      * "iscsiadm -m session" exits with ISCSI_ERR_NO_OBJS_FOUND when no session exists, which is a
-     * normal outcome here, so that exit value is ignored and the output is taken from the parser.
+     * normal outcome here. Any other non-zero exit is logged and treated as not confirmed active.
      */
     private boolean isIscsiSessionActive(String iqn, String host, int port) {
         Script sessionCmd = new Script(true, "iscsiadm", 0, logger);
@@ -230,6 +231,13 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
 
         sessionCmd.executeIgnoreExitValue(parser, ISCSI_ERR_NO_OBJS_FOUND);
+
+        int exitValue = sessionCmd.getExitValue();
+        if (exitValue != 0 && exitValue != ISCSI_ERR_NO_OBJS_FOUND) {
+            logger.warn("Unable to determine iSCSI session state for target {} at {}:{}: 'iscsiadm -m session' exited with {}",
+                    iqn, host, port, exitValue);
+            return false;
+        }
 
         String sessions = parser.getLines();
 
@@ -349,7 +357,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
                 return 0L;
             }
             if (Files.isRegularFile(devicePath)) {
-                logger.warn("Removing corrupt regular file at iSCSI by-path {} (expected block device symlink)", deviceByPath);
+                logger.warn("Found a corrupt regular file at iSCSI by-path {} (expected block device symlink); it must be removed manually", deviceByPath);
                 return 0L;
             }
             if (!Files.isSymbolicLink(devicePath)) {
