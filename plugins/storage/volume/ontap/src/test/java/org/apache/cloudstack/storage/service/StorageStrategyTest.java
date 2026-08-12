@@ -68,7 +68,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
@@ -832,12 +831,13 @@ public class StorageStrategyTest {
                 .thenReturn(interfaceResponse);
 
         // Execute
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
         // Verify
         assertNotNull(result);
-        assertEquals("192.168.1.50", result.first());
-        assertTrue(result.second() == null, "Expect no warning when a suitable LIF is found");
+        assertEquals("192.168.1.50", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) == null,
+                "Expect no warning when a suitable LIF is found");
         verify(networkFeignClient, times(1)).getNetworkIpInterfaces(anyString(), anyMap());
     }
 
@@ -873,12 +873,13 @@ public class StorageStrategyTest {
                 .thenReturn(interfaceResponse);
 
         // Execute
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
         // Verify
         assertNotNull(result);
-        assertEquals("192.168.1.51", result.first());
-        assertTrue(result.second() == null, "Expect no warning when a suitable LIF is found");
+        assertEquals("192.168.1.51", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) == null,
+                "Expect no warning when a suitable LIF is found");
     }
 
     @Test
@@ -1005,10 +1006,10 @@ public class StorageStrategyTest {
         when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
                 .thenReturn(wrapLifs(List.of(lif)));
 
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
-        assertEquals("10.0.0.1", result.first());
-        assertTrue(result.second() == null, "Tier 1 should produce no warning");
+        assertEquals("10.0.0.1", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) == null, "Tier 1 should produce no warning");
     }
 
     /**
@@ -1024,11 +1025,11 @@ public class StorageStrategyTest {
         when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
                 .thenReturn(wrapLifs(List.of(lif)));
 
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
-        assertEquals("10.0.0.2", result.first());
-        assertTrue(result.second() != null, "Tier 2 should produce a warning");
-        assertTrue(result.second().contains("node-a"));
+        assertEquals("10.0.0.2", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) != null, "Tier 2 should produce a warning");
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING).contains("node-a"));
     }
 
     /**
@@ -1045,13 +1046,13 @@ public class StorageStrategyTest {
         when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
                 .thenReturn(wrapLifs(List.of(lif)));
 
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
-        assertEquals("10.0.0.3", result.first());
-        assertTrue(result.second() != null, "Tier 3 fallback should produce a warning");
-        assertTrue(result.second().contains("node-a"),
+        assertEquals("10.0.0.3", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) != null, "Tier 3 fallback should produce a warning");
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING).contains("node-a"),
                 "Warning should mention the expected node");
-        assertTrue(result.second().contains("10.0.0.3"),
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING).contains("10.0.0.3"),
                 "Warning should mention the fallback LIF IP");
     }
 
@@ -1089,10 +1090,11 @@ public class StorageStrategyTest {
         when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
                 .thenReturn(wrapLifs(List.of(lifDown, lifFailover)));
 
-        Pair<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
 
-        assertEquals("10.0.0.6", result.first());
-        assertTrue(result.second() != null, "Should warn that the home-node LIF is not in use");
+        assertEquals("10.0.0.6", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) != null,
+                "Should warn that the home-node LIF is not in use");
     }
 
     // ========== Helper Methods ==========

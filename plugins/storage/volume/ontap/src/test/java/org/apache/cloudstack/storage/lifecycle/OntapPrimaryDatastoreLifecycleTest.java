@@ -49,7 +49,7 @@ import com.cloud.alert.AlertManager;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
-import com.cloud.utils.Pair;
+import java.util.HashMap;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -64,7 +64,6 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import java.util.HashMap;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
@@ -133,7 +132,8 @@ public class OntapPrimaryDatastoreLifecycleTest {
         node.setName("node-a");
         aggregate.setNode(node);
         when(storageStrategy.chooseAggregate(any())).thenReturn(aggregate);
-        when(storageStrategy.getNetworkInterface(any())).thenReturn(new Pair<>("testNetworkInterface", null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, "testNetworkInterface"));
 
         Volume volume = new Volume();
         volume.setUuid("test-volume-uuid");
@@ -424,7 +424,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_dataLifWithWarning() {
-        // Test when getNetworkInterface returns a warning in the Pair's second value
+        // Test when getNetworkInterface returns a warning in LIF_WARNING
         // This exercises the processDataLifSelection path for non-null warning
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
@@ -446,7 +446,9 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("details", detailsMap);
 
         String warningMessage = "LIF on node-b; expected on node-a;Details about LIF failover";
-        when(storageStrategy.getNetworkInterface(any())).thenReturn(new Pair<>("10.0.0.1", warningMessage));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(Map.of(
+                OntapStorageConstants.DATA_LIF, "10.0.0.1",
+                OntapStorageConstants.LIF_WARNING, warningMessage));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class);
              MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
@@ -461,7 +463,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_nullDataLif() {
-        // Test when lifResult.first() returns null
+        // Test when DATA_LIF is missing from the result map
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
         detailsMap.put(OntapStorageConstants.PASSWORD, "testPassword");
@@ -481,7 +483,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.getNetworkInterface(any())).thenReturn(new Pair<>(null, null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(new HashMap<>());
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -493,7 +495,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_emptyDataLif() {
-        // Test when lifResult.first() returns empty string
+        // Test when DATA_LIF is an empty string
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
         detailsMap.put(OntapStorageConstants.PASSWORD, "testPassword");
@@ -513,7 +515,8 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.getNetworkInterface(any())).thenReturn(new Pair<>("", null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, ""));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -642,7 +645,8 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("details", detailsMap);
 
         String expectedDataLif = "192.168.1.100";
-        when(storageStrategy.getNetworkInterface(any())).thenReturn(new Pair<>(expectedDataLif, null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, expectedDataLif));
         when(storageStrategy.getStoragePath()).thenReturn("/vol/testVolume");
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
