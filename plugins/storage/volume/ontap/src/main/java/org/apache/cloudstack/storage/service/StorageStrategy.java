@@ -51,7 +51,6 @@ import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
@@ -512,10 +511,10 @@ public abstract class StorageStrategy {
      *
      * @param aggregate the aggregate previously selected via {@link #chooseAggregate(Long)};
      *                  must include a node name for LIF affinity
-     * @return {@link Pair} where {@code first()} is the LIF's IP address and {@code second()} is
-     *         a warning message (null when no warning)
+     * @return map with {@link OntapStorageConstants#DATA_LIF} set to the LIF IP address, and
+     *         optionally {@link OntapStorageConstants#LIF_WARNING} when a non-ideal LIF was selected
      */
-    public Pair<String, String> getNetworkInterface(Aggregate aggregate) {
+    public Map<String, String> getNetworkInterface(Aggregate aggregate) {
         if (aggregate == null || aggregate.getNode() == null || aggregate.getNode().getName() == null
                 || aggregate.getNode().getName().isEmpty()) {
             throw new CloudRuntimeException("Aggregate with a node name is required to select a network interface");
@@ -566,7 +565,7 @@ public abstract class StorageStrategy {
                 String homeNode = iface.getLocation() != null && iface.getLocation().getHomeNode() != null
                         ? iface.getLocation().getHomeNode().getName() : null;
                 if (aggregateNode.equals(homeNode)) {
-                    return new Pair<>(iface.getIp().getAddress(), null);
+                    return networkInterfaceResult(iface.getIp().getAddress(), null);
                 }
                 // LIF has failed over and is currently running on the aggregate's node
                 // (home_node differs). Keep as a candidate; returned with a warning if no match is found earlier.
@@ -593,7 +592,7 @@ public abstract class StorageStrategy {
                 String warning = "No home-node LIF found for aggregate node '" + aggregateNode
                         + "'; using LIF '" + ip + "' currently running on that node (home node LIF may be down).";
                 logger.warn(warning);
-                return new Pair<>(ip, warning);
+                return networkInterfaceResult(ip, warning);
             }
 
             String ip = fallbackInterface.getIp().getAddress();
@@ -601,13 +600,22 @@ public abstract class StorageStrategy {
                     + "'; using fallback LIF '" + ip + "' on a different node."
                     + " I/O will traverse an inter-node path, increasing latency.";
             logger.warn(warning);
-            return new Pair<>(ip, warning);
+            return networkInterfaceResult(ip, warning);
         } catch (CloudRuntimeException e) {
             throw e;
         } catch (Exception e) {
             logger.error("Exception while retrieving network interfaces: ", e);
             throw new CloudRuntimeException("Failed to retrieve network interfaces: " + e.getMessage());
         }
+    }
+
+    private Map<String, String> networkInterfaceResult(String address, String warning) {
+        Map<String, String> result = new HashMap<>();
+        result.put(OntapStorageConstants.DATA_LIF, address);
+        if (warning != null) {
+            result.put(OntapStorageConstants.LIF_WARNING, warning);
+        }
+        return result;
     }
 
     /**
