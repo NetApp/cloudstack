@@ -160,7 +160,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
+                    volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL)));
                     logger.info("createAsync: Volume format set to [{}] for hypervisor [{}]", volumeVO.getFormat(), storagePool.getHypervisor());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
@@ -988,9 +988,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
 
-    private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType) {
+    private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType, String protocol) {
         if (HypervisorType.KVM.equals(hypervisorType)) {
-            return Storage.ImageFormat.QCOW2;
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
+                return Storage.ImageFormat.QCOW2;
+            } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
+                return Storage.ImageFormat.RAW;
+            }
+            throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] for ONTAP image format resolution");
         }
         throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
     }

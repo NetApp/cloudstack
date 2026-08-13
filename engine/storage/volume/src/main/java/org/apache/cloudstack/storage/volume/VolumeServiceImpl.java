@@ -764,7 +764,7 @@ public class VolumeServiceImpl implements VolumeService {
 
             volume.setPath(templateObjectTo.getPath());
 
-            if (templateObjectTo.getFormat() != null) {
+            if (templateObjectTo.getFormat() != null && volume.getFormat() != null) {
                 volume.setFormat(templateObjectTo.getFormat());
             }
 
