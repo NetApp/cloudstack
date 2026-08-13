@@ -1265,10 +1265,18 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
         boolean changes = false;
         Long updatedCapacityBytes = null;
         Long capacityBytes = cmd.getCapacityBytes();
+        // retrieve current details and merge/overlay input to capture changes
+        Map<String, String> details = null;
+        details = _storagePoolDetailsDao.listDetailsKeyPairs(id);
+        if (inputDetails != null) {
+            details.putAll(inputDetails);
+            changes = true;
+        }
 
         if (capacityBytes != null) {
             if (capacityBytes != pool.getCapacityBytes()) {
                 updatedCapacityBytes = capacityBytes;
+                 details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, String.valueOf(updatedCapacityBytes));
                 changes = true;
             }
         }
@@ -1278,34 +1286,25 @@ public class StorageManagerImpl extends ManagerBase implements StorageManager, C
         if (capacityIops != null) {
             if (!capacityIops.equals(pool.getCapacityIops())) {
                 updatedCapacityIops = capacityIops;
+                 details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, String.valueOf(updatedCapacityIops));
                 changes = true;
             }
-        }
-
-        // retrieve current details and merge/overlay input to capture changes
-        Map<String, String> details = null;
-        details = _storagePoolDetailsDao.listDetailsKeyPairs(id);
-        if (inputDetails != null) {
-            details.putAll(inputDetails);
-            changes = true;
         }
 
         if (changes) {
             DataStoreProvider dataStoreProvider = _dataStoreProviderMgr.getDataStoreProvider(pool.getStorageProviderName());
             DataStoreLifeCycle dataStoreLifeCycle = dataStoreProvider.getDataStoreLifeCycle();
             if (dataStoreLifeCycle instanceof PrimaryDataStoreLifeCycle) {
+                if (cmd.getUrl() != null) {
+                   details.put("url", cmd.getUrl());
+                }
+                ((PrimaryDataStoreLifeCycle)dataStoreLifeCycle).updateStoragePool(pool, details);
                 if (updatedCapacityBytes != null) {
-                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, String.valueOf(updatedCapacityBytes));
                     pool.setCapacityBytes(updatedCapacityBytes);
                 }
                 if (updatedCapacityIops != null) {
-                    details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, String.valueOf(updatedCapacityIops));
                     pool.setCapacityIops(updatedCapacityIops);
                 }
-                if (cmd.getUrl() != null) {
-                    details.put("url", cmd.getUrl());
-                }
-                ((PrimaryDataStoreLifeCycle)dataStoreLifeCycle).updateStoragePool(pool, details);
                 _storagePoolDao.update(id, pool);
                 _storagePoolDao.updateDetails(id, details);
             }
