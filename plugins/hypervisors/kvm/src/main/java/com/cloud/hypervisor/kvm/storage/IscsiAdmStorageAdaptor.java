@@ -132,31 +132,10 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
             }
         }
 
-        final boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host, port);
-        logger.debug("iSCSI session active check for target {} at {}:{}: {}", iqn, host, port, sessionAlreadyActive);
-
-        // Always try to login; treat benign outcomes as success (idempotent).
-        // Ubuntu returns ISCSI_ERR_SESS_EXISTS (15) when already logged in; Oracle often returns 0 with no output.
-        iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", iqn);
-        iScsiAdmCmd.add("-p", host + ":" + port);
-        iScsiAdmCmd.add("--login");
-
-        result = iScsiAdmCmd.execute();
-        final boolean sessionPreExisted = (iScsiAdmCmd.getExitValue() == ISCSI_SESSION_EXISTS_CODE) || sessionAlreadyActive;
-
-        if (!handleLoginResult(result, sessionPreExisted, volumeUuid)) {
+        // Login is always attempted (idempotent). Rescan runs only if the session already existed
+        // before login (Oracle re-login exits 0; Ubuntu may return ISCSI_ERR_SESS_EXISTS).
+        if (!loginOrRescanExistingSession(iqn, host, port, volumeUuid)) {
             return false;
-        }
-
-        // Newly mapped LUNs on an existing session are invisible until rescan, while a session
-        // created by the login above already exposes them.
-        // Prefer the pre-login session check (required on Oracle, where re-login exits 0).
-        // Also treat ISCSI_ERR_SESS_EXISTS as a hint (Ubuntu).
-        if (sessionPreExisted) {
-            logger.debug("iSCSI session for target {} at {}:{} pre-existed, performing rescan", iqn, host, port);
-            rescanIscsiSessions(iqn, host, port);
         }
 
         // There appears to be a race condition where logging in to the iSCSI volume via iscsiadm
@@ -169,9 +148,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         // After a certain number of tries and a certain waiting period in between tries,
         // this method could still return (it should not block indefinitely) (the race condition
         // isn't solved here, but made highly unlikely to be a problem).
-        waitForDiskToBecomeAvailable(volumeUuid, pool);
-
-        if (getPhysicalDisk(volumeUuid, pool).getSize() <= 0) {
+        if (!waitForDiskToBecomeAvailable(volumeUuid, pool)) {
             logger.warn("iSCSI device not ready for target {} at {}:{} after wait", volumeUuid, host, port);
             return false;
         }
@@ -198,16 +175,31 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
     }
 
     /**
-     * Checks the result of an iscsiadm login command.
-     * Returns true if the session already existed (pre-check and/or ISCSI_ERR_SESS_EXISTS)
-     * or login succeeded with no error output, false on failure.
+     * Checks existing session state, performs login, and rescans only if the session already existed.
      *
-     * sessionPreExisted must be checked first: on Ubuntu, re-login exits 15 with a non-null
-     * error message that would otherwise be treated as failure.
+     * Login is always attempted (idempotent). A pre-login session check is required on Oracle,
+     * where re-login often exits 0; Ubuntu may instead return ISCSI_ERR_SESS_EXISTS (15).
+     * Session-preexisted must be treated as success first: on Ubuntu, re-login exits 15 with a
+     * non-null error message that would otherwise be treated as failure.
+     *
+     * @return true if login succeeded (and rescan ran when needed), false on login failure
      */
-    boolean handleLoginResult(String result, boolean sessionPreExisted, String volumeUuid) {
+    private boolean loginOrRescanExistingSession(String iqn, String host, int port, String volumeUuid) {
+        boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host, port);
+        logger.debug("iSCSI session active check for target {} at {}:{}: {}", iqn, host, port, sessionAlreadyActive);
+
+        Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
+        iScsiAdmCmd.add("-m", "node");
+        iScsiAdmCmd.add("-T", iqn);
+        iScsiAdmCmd.add("-p", host + ":" + port);
+        iScsiAdmCmd.add("--login");
+
+        String result = iScsiAdmCmd.execute();
+        boolean sessionPreExisted = (iScsiAdmCmd.getExitValue() == ISCSI_SESSION_EXISTS_CODE) || sessionAlreadyActive;
+
         if (sessionPreExisted) {
-            logger.debug("iSCSI session already active for target {}", volumeUuid);
+            logger.debug("iSCSI session for target {} at {}:{} pre-existed, performing rescan", iqn, host, port);
+            rescanIscsiSessions(iqn, host, port);
             return true;
         }
         if (result == null) {
@@ -229,9 +221,7 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         sessionCmd.add("-m", "session");
 
         OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
-
         sessionCmd.executeIgnoreExitValue(parser, ISCSI_ERR_NO_OBJS_FOUND);
-
         int exitValue = sessionCmd.getExitValue();
         if (exitValue != 0 && exitValue != ISCSI_ERR_NO_OBJS_FOUND) {
             logger.warn("Unable to determine iSCSI session state for target {} at {}:{}: 'iscsiadm -m session' exited with {}",
@@ -240,13 +230,11 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         }
 
         String sessions = parser.getLines();
-
         if (StringUtils.isBlank(sessions)) {
             return false;
         }
 
         String portal = host + ":" + port;
-
         for (String line : sessions.split("\n")) {
             if (line.contains(iqn) && line.contains(portal)) {
                 return true;
@@ -270,19 +258,23 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         }
     }
 
-    private void waitForDiskToBecomeAvailable(String volumeUuid, KVMStoragePool pool) {
+    private boolean waitForDiskToBecomeAvailable(String volumeUuid, KVMStoragePool pool) {
         int numberOfTries = 10;
         int timeBetweenTries = 1000;
+        long deviceSize = 0;
 
-        while (getPhysicalDisk(volumeUuid, pool).getSize() == 0 && numberOfTries > 0) {
+        while ((deviceSize = getPhysicalDisk(volumeUuid, pool).getSize()) == 0 && numberOfTries > 0) {
             numberOfTries--;
 
             try {
                 Thread.sleep(timeBetweenTries);
-            } catch (Exception ex) {
-                // don't do anything
+            } catch (InterruptedException ex) {
+                logger.warn("Interrupted while waiting for iSCSI device {} to become available", volumeUuid, ex);
+                return false;
             }
         }
+
+        return deviceSize > 0;
     }
 
     private void waitForDiskToBecomeUnavailable(String host, int port, String iqn, String lun) {
