@@ -990,7 +990,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     private Storage.ImageFormat getImageFormatByHypervisorAndProtocol(HypervisorType hypervisorType, String protocol) {
         if (HypervisorType.KVM.equals(hypervisorType)) {
-            ProtocolType protocolType = ProtocolType.valueOf(protocol.toUpperCase());
+            ProtocolType protocolType = ProtocolType.valueOf(protocol);
             switch (protocolType) {
                 case NFS3:
                     return Storage.ImageFormat.QCOW2;
