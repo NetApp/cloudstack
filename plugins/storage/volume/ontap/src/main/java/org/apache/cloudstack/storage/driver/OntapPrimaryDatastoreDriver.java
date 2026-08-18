@@ -160,8 +160,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisor(storagePool.getHypervisor()));
-                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}]", volumeVO.getFormat(), storagePool.getHypervisor());
+                    volumeVO.setFormat(getImageFormat(storagePool));
+                    logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
@@ -364,8 +364,26 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return false;
     }
 
+    /**
+     * Resize is not implemented yet.
+     *
+     * <p>This reports the failure through the callback rather than throwing or returning silently.
+     * By the time the driver is called, {@code VolumeServiceImpl.resize} has already moved the volume
+     * to {@link com.cloud.storage.Volume.State#Resizing} and is blocked on {@code AsyncCallFuture.get()},
+     * which takes no timeout. Returning without completing the callback parks that job thread forever
+     * and strands the volume in {@code Resizing}; throwing completes the future but leaves the state
+     * behind. Going through the callback lets {@code resizeVolumeCallback} fire
+     * {@code Event.OperationFailed}, which returns the volume to {@code Ready}.</p>
+     */
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+        String errMsg = "Resizing a volume is not supported by the NetApp ONTAP storage plugin";
+        logger.warn("resize: {} - volume [{}]", errMsg, data != null ? data.getId() : null);
+
+        CreateCmdResult result = new CreateCmdResult(null, new Answer(null, false, errMsg));
+        result.setResult(errMsg);
+        callback.complete(result);
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -988,11 +1006,22 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
 
-    private Storage.ImageFormat getImageFormatByHypervisor(HypervisorType hypervisorType) {
-        if (HypervisorType.KVM.equals(hypervisorType)) {
-            return Storage.ImageFormat.QCOW2;
+    /**
+     * Resolves the image format to record against a volume on the given pool.
+     *
+     * <p>The format is a property of the backing object, not of the hypervisor. An iSCSI volume is a
+     * bare ONTAP LUN that the guest sees as a block device, so it is {@link Storage.ImageFormat#RAW};
+     * an NFS volume is a qcow2 file inside the FlexVol. Reporting RAW for a LUN is what lets core
+     * permit shrink and skip the qcow2-only host-side operations that do not apply to a block device.</p>
+     */
+    private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {
+        HypervisorType hypervisorType = storagePool.getHypervisor();
+        if (!HypervisorType.KVM.equals(hypervisorType)) {
+            throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
         }
-        throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
+        return Storage.StoragePoolType.OntapSAN.equals(storagePool.getPoolType())
+                ? Storage.ImageFormat.RAW
+                : Storage.ImageFormat.QCOW2;
     }
     /**
      * Persists snapshot metadata in snapshot_details table.

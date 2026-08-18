@@ -167,7 +167,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
-        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapSAN);
         when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -204,7 +204,9 @@ class OntapPrimaryDatastoreDriverTest {
 
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("lun-uuid-123"), eq(false));
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_NAME), eq("/vol/vol1/lun1"), eq(false));
-            verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
+            // A LUN is a block device, not a qcow2 file. Recording RAW is what lets core permit shrink
+            // and skip the qcow2-only host-side operations.
+            verify(volumeVO).setFormat(Storage.ImageFormat.RAW);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
@@ -248,9 +250,32 @@ class OntapPrimaryDatastoreDriverTest {
             CreateCmdResult result = resultCaptor.getValue();
             assertNotNull(result);
             assertTrue(result.isSuccess());
+            // NFS volumes really are qcow2 files inside the FlexVol, so they keep QCOW2 while
+            // iSCSI LUNs on an OntapSAN pool are recorded as RAW.
             verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
+    }
+
+    /**
+     * Resize is unimplemented, but it must still answer. VolumeServiceImpl.resize has already moved the
+     * volume to Resizing and is blocked on a future with no timeout, so returning without completing the
+     * callback would park the job thread and strand the volume. Reporting the failure through the
+     * callback is what lets resizeVolumeCallback fire OperationFailed and restore the volume to Ready.
+     */
+    @Test
+    void testResize_ReportsUnsupportedThroughTheCallback() {
+        when(volumeInfo.getId()).thenReturn(100L);
+        AsyncCompletionCallback<CreateCmdResult> resizeCallback = mock(AsyncCompletionCallback.class);
+
+        driver.resize(volumeInfo, resizeCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(resizeCallback).complete(resultCaptor.capture());
+
+        CreateCmdResult result = resultCaptor.getValue();
+        assertTrue(result.isFailed());
+        assertTrue(result.getResult().contains("not supported"));
     }
 
     @Test
