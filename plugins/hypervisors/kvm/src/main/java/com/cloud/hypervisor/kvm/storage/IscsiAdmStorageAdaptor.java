@@ -148,6 +148,9 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         // After a certain number of tries and a certain waiting period in between tries,
         // this method could still return (it should not block indefinitely) (the race condition
         // isn't solved here, but made highly unlikely to be a problem).
+        // If the by-path is missing or is a regular file (not the iSCSI block symlink), size
+        // stays 0. Return false so connect does not succeed and a raw file is not created at
+        // that by-path in place of the real LUN device.
         if (!waitForDiskToBecomeAvailable(volumeUuid, pool)) {
             logger.warn("iSCSI device not ready for target {} at {}:{} after wait", volumeUuid, host, port);
             return false;
@@ -233,10 +236,8 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         if (StringUtils.isBlank(sessions)) {
             return false;
         }
-
-        String portal = host + ":" + port;
         for (String line : sessions.split("\n")) {
-            if (line.contains(iqn) && line.contains(portal)) {
+            if (line.contains(iqn) && line.contains(host)) {
                 return true;
             }
         }
