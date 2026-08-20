@@ -236,6 +236,9 @@ public class IscsiAdmStorageAdaptor implements StorageAdaptor {
         if (StringUtils.isBlank(sessions)) {
             return false;
         }
+        // AllLinesParser uses BufferedReader.readLine() (strips \n, \r\n, and \r) and then
+        // appends "\n" after each session. split("\n") depends on that separator to walk
+        // one session per line when multiple sessions are listed.
         for (String line : sessions.split("\n")) {
             if (line.contains(iqn) && line.contains(host)) {
                 return true;
