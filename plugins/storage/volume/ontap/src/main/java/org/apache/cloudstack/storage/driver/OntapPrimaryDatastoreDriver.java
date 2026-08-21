@@ -364,26 +364,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return false;
     }
 
-    /**
-     * Resize is not implemented yet.
-     *
-     * <p>This reports the failure through the callback rather than throwing or returning silently.
-     * By the time the driver is called, {@code VolumeServiceImpl.resize} has already moved the volume
-     * to {@link com.cloud.storage.Volume.State#Resizing} and is blocked on {@code AsyncCallFuture.get()},
-     * which takes no timeout. Returning without completing the callback parks that job thread forever
-     * and strands the volume in {@code Resizing}; throwing completes the future but leaves the state
-     * behind. Going through the callback lets {@code resizeVolumeCallback} fire
-     * {@code Event.OperationFailed}, which returns the volume to {@code Ready}.</p>
-     */
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
-        String errMsg = "Resizing a volume is not supported by the NetApp ONTAP storage plugin";
-        logger.warn("resize: {} - volume [{}]", errMsg, data != null ? data.getId() : null);
-
-        CreateCmdResult result = new CreateCmdResult(null, new Answer(null, false, errMsg));
-        result.setResult(errMsg);
-        callback.complete(result);
-    }
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {

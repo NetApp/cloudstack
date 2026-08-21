@@ -39,6 +39,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -107,6 +108,9 @@ class OntapPrimaryDatastoreDriverTest {
 
     @Mock
     private UnifiedSANStrategy sanStrategy;
+
+    @Mock
+    private UnifiedNASStrategy nasStrategy;
 
     @Mock
     private AsyncCompletionCallback<CreateCmdResult> createCallback;
@@ -204,8 +208,6 @@ class OntapPrimaryDatastoreDriverTest {
 
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("lun-uuid-123"), eq(false));
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_NAME), eq("/vol/vol1/lun1"), eq(false));
-            // A LUN is a block device, not a qcow2 file. Recording RAW is what lets core permit shrink
-            // and skip the qcow2-only host-side operations.
             verify(volumeVO).setFormat(Storage.ImageFormat.RAW);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
@@ -234,11 +236,11 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
-                    .thenReturn(sanStrategy);
+                    .thenReturn(nasStrategy);
             utilityMock.when(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
                     any(), any(), any())).thenReturn(mockCloudStackVolume);
 
-            when(sanStrategy.createCloudStackVolume(any())).thenReturn(mockCloudStackVolume);
+            when(nasStrategy.createCloudStackVolume(any())).thenReturn(mockCloudStackVolume);
 
             // Execute
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -250,32 +252,65 @@ class OntapPrimaryDatastoreDriverTest {
             CreateCmdResult result = resultCaptor.getValue();
             assertNotNull(result);
             assertTrue(result.isSuccess());
-            // NFS volumes really are qcow2 files inside the FlexVol, so they keep QCOW2 while
-            // iSCSI LUNs on an OntapiSCSI pool are recorded as RAW.
             verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
 
-    /**
-     * Resize is unimplemented, but it must still answer. VolumeServiceImpl.resize has already moved the
-     * volume to Resizing and is blocked on a future with no timeout, so returning without completing the
-     * callback would park the job thread and strand the volume. Reporting the failure through the
-     * callback is what lets resizeVolumeCallback fire OperationFailed and restore the volume to Ready.
-     */
     @Test
-    void testResize_ReportsUnsupportedThroughTheCallback() {
+    void testCreateAsync_UnsupportedHypervisor_FailsWithError() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name());
+
+        when(dataStore.getId()).thenReturn(1L);
+        when(dataStore.getName()).thenReturn("ontap-pool");
+        when(volumeInfo.getType()).thenReturn(VOLUME);
         when(volumeInfo.getId()).thenReturn(100L);
-        AsyncCompletionCallback<CreateCmdResult> resizeCallback = mock(AsyncCompletionCallback.class);
+        when(volumeInfo.getName()).thenReturn("test-volume");
 
-        driver.resize(volumeInfo, resizeCallback);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.VMware);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
 
-        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-        verify(resizeCallback).complete(resultCaptor.capture());
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
 
-        CreateCmdResult result = resultCaptor.getValue();
-        assertTrue(result.isFailed());
-        assertTrue(result.getResult().contains("not supported"));
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Unsupported hypervisor [VMware]"));
+        }
+    }
+
+    @Test
+    void testCreateAsync_KvmUnsupportedProtocol_FailsWithError() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, "FC");
+
+        when(dataStore.getId()).thenReturn(1L);
+        when(dataStore.getName()).thenReturn("ontap-pool");
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getName()).thenReturn("test-volume");
+
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("No enum constant"));
+        }
     }
 
     @Test

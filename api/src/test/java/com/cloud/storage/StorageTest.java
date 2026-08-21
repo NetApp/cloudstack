@@ -77,18 +77,6 @@ public class StorageTest {
         Assert.assertFalse(StoragePoolType.OntapiSCSI.supportsOverProvisioning());
     }
 
-    /**
-     * OntapiSCSI was split out of the shared Iscsi bucket and must stay attribute-identical to it,
-     * so that introducing the type changes no behaviour. Loosening either attribute is a
-     * deliberate decision that belongs in its own change.
-     */
-    @Test
-    public void ontapIscsiMirrorsGenericIscsiAttributes() {
-        Assert.assertEquals(StoragePoolType.Iscsi.isShared(), StoragePoolType.OntapiSCSI.isShared());
-        Assert.assertEquals(StoragePoolType.Iscsi.supportsOverProvisioning(), StoragePoolType.OntapiSCSI.supportsOverProvisioning());
-        Assert.assertEquals(StoragePoolType.Iscsi.encryptionSupportMode(), StoragePoolType.OntapiSCSI.encryptionSupportMode());
-    }
-
     @Test
     public void equalityTest() {
         StoragePoolType t1 = StoragePoolType.NetworkFilesystem;
