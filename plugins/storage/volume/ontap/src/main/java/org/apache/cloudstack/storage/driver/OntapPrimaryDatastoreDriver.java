@@ -160,8 +160,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisorAndProtocol(storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL)));
-                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}] and protocol [{}]", volumeVO.getFormat(), storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL));
+                    volumeVO.setFormat(getImageFormat(storagePool));
+                    logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
@@ -987,20 +987,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
     }
 
-
-    private Storage.ImageFormat getImageFormatByHypervisorAndProtocol(HypervisorType hypervisorType, String protocol) {
-        if (HypervisorType.KVM.equals(hypervisorType)) {
-            ProtocolType protocolType = ProtocolType.valueOf(protocol);
-            switch (protocolType) {
-                case NFS3:
-                    return Storage.ImageFormat.QCOW2;
-                case ISCSI:
-                    return Storage.ImageFormat.RAW;
-                default:
-                    throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] for ONTAP image format resolution");
-            }
+    private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {
+        HypervisorType hypervisorType = storagePool.getHypervisor();
+        if (!HypervisorType.KVM.equals(hypervisorType)) {
+            throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
         }
-        throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
+        return Storage.StoragePoolType.OntapiSCSI.equals(storagePool.getPoolType())
+                ? Storage.ImageFormat.RAW
+                : Storage.ImageFormat.QCOW2;
     }
     /**
      * Persists snapshot metadata in snapshot_details table.
