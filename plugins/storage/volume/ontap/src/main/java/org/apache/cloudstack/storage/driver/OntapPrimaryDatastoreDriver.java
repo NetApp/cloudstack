@@ -987,15 +987,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
     }
 
-
-    /**
-     * Resolves the image format to record against a volume on the given pool.
-     *
-     * <p>The format is a property of the backing object, not of the hypervisor. An iSCSI volume is a
-     * bare ONTAP LUN that the guest sees as a block device, so it is {@link Storage.ImageFormat#RAW};
-     * an NFS volume is a qcow2 file inside the FlexVol. Reporting RAW for a LUN is what lets core
-     * permit shrink and skip the qcow2-only host-side operations that do not apply to a block device.</p>
-     */
     private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {
         HypervisorType hypervisorType = storagePool.getHypervisor();
         if (!HypervisorType.KVM.equals(hypervisorType)) {

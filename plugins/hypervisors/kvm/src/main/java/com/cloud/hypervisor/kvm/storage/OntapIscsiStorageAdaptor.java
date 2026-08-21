@@ -20,12 +20,10 @@ import com.cloud.storage.Storage.StoragePoolType;
 
 /**
  * Serves {@link StoragePoolType#OntapiSCSI} pools, which are ONTAP FlexVols exposed over iSCSI with one
- * LUN per CloudStack volume. The host-side handling is identical to a generic iSCSI target, so the
- * behaviour is inherited wholesale from {@link IscsiAdmStorageAdaptor}.
+ * LUN per CloudStack volume. The host-side handling is identical to a generic iSCSI target
  *
  * The class exists so that ONTAP-specific host behaviour can diverge here without altering the storage
- * path of the other vendors that register as {@link StoragePoolType#Iscsi} (SolidFire, Datera, Nexenta
- * and CloudByte), which all share the superclass.
+ * path of the other vendors that register as {@link StoragePoolType#Iscsi} which all share the superclass.
  *
  * This must stay in the {@code com.cloud.hypervisor.kvm.storage} package: {@link KVMStoragePoolManager}
  * discovers adaptors by a Reflections scan of that package alone, and an unregistered type silently
