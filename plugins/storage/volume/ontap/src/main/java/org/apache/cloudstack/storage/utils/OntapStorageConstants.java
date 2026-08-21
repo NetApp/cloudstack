@@ -140,11 +140,16 @@ public class OntapStorageConstants {
     public static final String ASUP_EVENT_ID_HEARTBEAT = "0";
     public static final String ASUP_EVENT_ID_STORAGE_POOL = "1";
     public static final String ASUP_UNKNOWN = "unknown";
+    /** Event-id 0 field: VM snapshots spanning multiple ONTAP pools (consistency group). */
+    public static final String ASUP_SNAPSHOT_ACROSS_POOL = "snapshot_across_pool";
     public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
-    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster.";
+    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable.";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 3600; // 1 hour
+    public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
-    public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin.";
+    public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
+            + "Allowed range: 3600-86400 (1 hour to 24 hours). Default: 43200 (12 hours).";
 }
