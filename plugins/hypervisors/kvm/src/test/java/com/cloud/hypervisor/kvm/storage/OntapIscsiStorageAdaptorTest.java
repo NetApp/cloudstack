@@ -30,25 +30,25 @@ import org.reflections.Reflections;
 
 import com.cloud.storage.Storage.StoragePoolType;
 
-public class OntapSanStorageAdaptorTest {
+public class OntapIscsiStorageAdaptorTest {
 
     @Test
-    public void getStoragePoolTypeReturnsOntapSan() {
-        assertEquals(StoragePoolType.OntapSAN, new OntapSanStorageAdaptor().getStoragePoolType());
+    public void getStoragePoolTypeReturnsOntapIscsi() {
+        assertEquals(StoragePoolType.OntapiSCSI, new OntapIscsiStorageAdaptor().getStoragePoolType());
     }
 
     @Test
-    public void createdPoolCarriesOntapSanTypeAndRawFormat() {
-        OntapSanStorageAdaptor adaptor = new OntapSanStorageAdaptor();
+    public void createdPoolCarriesOntapIscsiTypeAndRawFormat() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
 
-        KVMStoragePool pool = adaptor.createStoragePool("ontap-san-pool-uuid", "10.0.0.1", 3260, null, null,
-                StoragePoolType.OntapSAN, null, true);
+        KVMStoragePool pool = adaptor.createStoragePool("ontap-iscsi-pool-uuid", "10.0.0.1", 3260, null, null,
+                StoragePoolType.OntapiSCSI, null, true);
 
-        assertEquals(StoragePoolType.OntapSAN, pool.getType());
+        assertEquals(StoragePoolType.OntapiSCSI, pool.getType());
         // Attach builds a block-based disk off the physical disk format rather than the pool type,
-        // which is why splitting OntapSAN out of Iscsi leaves the generated domain XML unchanged.
+        // which is why splitting OntapiSCSI out of Iscsi leaves the generated domain XML unchanged.
         assertEquals(PhysicalDiskFormat.RAW, pool.getDefaultFormat());
-        assertSame(pool, adaptor.getStoragePool("ontap-san-pool-uuid"));
+        assertSame(pool, adaptor.getStoragePool("ontap-iscsi-pool-uuid"));
     }
 
     /**
@@ -65,13 +65,13 @@ public class OntapSanStorageAdaptorTest {
         Set<Class<? extends StorageAdaptor>> discovered =
                 new Reflections(scannedPackage).getSubTypesOf(StorageAdaptor.class);
 
-        assertTrue("OntapSanStorageAdaptor must live in " + scannedPackage + " to be discovered",
-                discovered.contains(OntapSanStorageAdaptor.class));
+        assertTrue("OntapIscsiStorageAdaptor must live in " + scannedPackage + " to be discovered",
+                discovered.contains(OntapIscsiStorageAdaptor.class));
         assertFalse("An abstract adaptor is skipped by the scan",
-                Modifier.isAbstract(OntapSanStorageAdaptor.class.getModifiers()));
+                Modifier.isAbstract(OntapIscsiStorageAdaptor.class.getModifiers()));
 
-        StorageAdaptor adaptor = OntapSanStorageAdaptor.class.getDeclaredConstructor().newInstance();
-        assertEquals(StoragePoolType.OntapSAN, adaptor.getStoragePoolType());
+        StorageAdaptor adaptor = OntapIscsiStorageAdaptor.class.getDeclaredConstructor().newInstance();
+        assertEquals(StoragePoolType.OntapiSCSI, adaptor.getStoragePoolType());
         assertEquals("The superclass must keep serving the other iSCSI vendors",
                 StoragePoolType.Iscsi, new IscsiAdmStorageAdaptor().getStoragePoolType());
     }

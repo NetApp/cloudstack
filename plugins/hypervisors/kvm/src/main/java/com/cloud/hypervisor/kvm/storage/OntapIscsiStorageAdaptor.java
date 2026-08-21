@@ -19,7 +19,7 @@ package com.cloud.hypervisor.kvm.storage;
 import com.cloud.storage.Storage.StoragePoolType;
 
 /**
- * Serves {@link StoragePoolType#OntapSAN} pools, which are ONTAP FlexVols exposed over iSCSI with one
+ * Serves {@link StoragePoolType#OntapiSCSI} pools, which are ONTAP FlexVols exposed over iSCSI with one
  * LUN per CloudStack volume. The host-side handling is identical to a generic iSCSI target, so the
  * behaviour is inherited wholesale from {@link IscsiAdmStorageAdaptor}.
  *
@@ -31,10 +31,10 @@ import com.cloud.storage.Storage.StoragePoolType;
  * discovers adaptors by a Reflections scan of that package alone, and an unregistered type silently
  * falls back to {@link LibvirtStorageAdaptor} rather than failing at startup.
  */
-public class OntapSanStorageAdaptor extends IscsiAdmStorageAdaptor {
+public class OntapIscsiStorageAdaptor extends IscsiAdmStorageAdaptor {
 
     @Override
     public StoragePoolType getStoragePoolType() {
-        return StoragePoolType.OntapSAN;
+        return StoragePoolType.OntapiSCSI;
     }
 }

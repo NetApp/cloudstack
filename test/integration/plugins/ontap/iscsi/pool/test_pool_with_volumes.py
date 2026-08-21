@@ -311,7 +311,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         Create an iSCSI primary storage pool and allocate a CloudStack data
         volume on it.
         Verifies:
-          - Pool state is Up; pool type is OntapSAN
+          - Pool state is Up; pool type is OntapiSCSI
           - ONTAP: FlexVol is online
           - ONTAP: at least one igroup exists (one per cluster host with IQN)
           - ONTAP: after createVolume, a LUN exists in the FlexVol
@@ -324,8 +324,8 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
             "Pool state should be 'Up', got '%s'" % pool.state
         )
         self.assertEqual(
-            pool.type, "OntapSAN",
-            "Pool type should be 'OntapSAN', got '%s'" % pool.type
+            pool.type, "OntapiSCSI",
+            "Pool type should be 'OntapiSCSI', got '%s'" % pool.type
         )
 
         # ONTAP: FlexVol must be online

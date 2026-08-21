@@ -167,7 +167,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
-        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapSAN);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
         when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -251,7 +251,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertNotNull(result);
             assertTrue(result.isSuccess());
             // NFS volumes really are qcow2 files inside the FlexVol, so they keep QCOW2 while
-            // iSCSI LUNs on an OntapSAN pool are recorded as RAW.
+            // iSCSI LUNs on an OntapiSCSI pool are recorded as RAW.
             verify(volumeVO).setFormat(Storage.ImageFormat.QCOW2);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }

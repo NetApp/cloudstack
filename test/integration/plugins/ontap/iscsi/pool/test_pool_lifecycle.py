@@ -276,7 +276,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
     def test_01_create_primary_storage_pool(self):
         """
         Create an iSCSI primary storage pool and verify:
-          - CloudStack state is Up, type is OntapSAN
+          - CloudStack state is Up, type is OntapiSCSI
           - ONTAP: FlexVol exists and is online
           - ONTAP: one igroup per cluster host exists with the correct IQN initiator
         """
@@ -288,8 +288,8 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "Pool state should be 'Up', got '%s'" % pool.state
         )
         self.assertEqual(
-            pool.type, "OntapSAN",
-            "Pool type should be 'OntapSAN', got '%s'" % pool.type
+            pool.type, "OntapiSCSI",
+            "Pool type should be 'OntapiSCSI', got '%s'" % pool.type
         )
 
         # ONTAP: FlexVol must be online
@@ -502,7 +502,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         Create a new iSCSI pool and allocate a CloudStack data volume.
         For iSCSI, createAsync creates a LUN inside the pool's ONTAP FlexVol.
         Verifies:
-          - pool.state is Up, type is OntapSAN
+          - pool.state is Up, type is OntapiSCSI
           - createVolume returns a non-None volume object
           - ONTAP: FlexVol is still online
           - ONTAP: at least one LUN is present in the FlexVol
@@ -520,8 +520,8 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "Pool state should be 'Up', got '%s'" % pool.state
         )
         self.assertEqual(
-            pool.type, "OntapSAN",
-            "Pool type should be 'OntapSAN', got '%s'" % pool.type
+            pool.type, "OntapiSCSI",
+            "Pool type should be 'OntapiSCSI', got '%s'" % pool.type
         )
 
         vol = self._create_volume(pool.id)

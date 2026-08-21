@@ -49,7 +49,7 @@ public class StorageTest {
         Assert.assertTrue(StoragePoolType.ManagedNFS.isShared());
         Assert.assertTrue(StoragePoolType.DatastoreCluster.isShared());
         Assert.assertTrue(StoragePoolType.Linstor.isShared());
-        Assert.assertTrue(StoragePoolType.OntapSAN.isShared());
+        Assert.assertTrue(StoragePoolType.OntapiSCSI.isShared());
     }
 
     @Test
@@ -74,19 +74,19 @@ public class StorageTest {
         Assert.assertFalse(StoragePoolType.ManagedNFS.supportsOverProvisioning());
         Assert.assertTrue(StoragePoolType.DatastoreCluster.supportsOverProvisioning());
         Assert.assertTrue(StoragePoolType.Linstor.supportsOverProvisioning());
-        Assert.assertFalse(StoragePoolType.OntapSAN.supportsOverProvisioning());
+        Assert.assertFalse(StoragePoolType.OntapiSCSI.supportsOverProvisioning());
     }
 
     /**
-     * OntapSAN was split out of the shared Iscsi bucket and must stay attribute-identical to it,
+     * OntapiSCSI was split out of the shared Iscsi bucket and must stay attribute-identical to it,
      * so that introducing the type changes no behaviour. Loosening either attribute is a
      * deliberate decision that belongs in its own change.
      */
     @Test
-    public void ontapSanMirrorsIscsiAttributes() {
-        Assert.assertEquals(StoragePoolType.Iscsi.isShared(), StoragePoolType.OntapSAN.isShared());
-        Assert.assertEquals(StoragePoolType.Iscsi.supportsOverProvisioning(), StoragePoolType.OntapSAN.supportsOverProvisioning());
-        Assert.assertEquals(StoragePoolType.Iscsi.encryptionSupportMode(), StoragePoolType.OntapSAN.encryptionSupportMode());
+    public void ontapIscsiMirrorsGenericIscsiAttributes() {
+        Assert.assertEquals(StoragePoolType.Iscsi.isShared(), StoragePoolType.OntapiSCSI.isShared());
+        Assert.assertEquals(StoragePoolType.Iscsi.supportsOverProvisioning(), StoragePoolType.OntapiSCSI.supportsOverProvisioning());
+        Assert.assertEquals(StoragePoolType.Iscsi.encryptionSupportMode(), StoragePoolType.OntapiSCSI.encryptionSupportMode());
     }
 
     @Test

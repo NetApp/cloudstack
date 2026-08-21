@@ -424,7 +424,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         """
         Create an iSCSI primary storage pool on ONTAP.
         Verifies:
-          - Pool reaches 'Up' state; type is 'OntapSAN'
+          - Pool reaches 'Up' state; type is 'OntapiSCSI'
           - ONTAP: FlexVol is online
           - ONTAP: igroup exists for every host in the cluster that has an IQN
         """
@@ -433,8 +433,8 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
         self.assertEqual(pool.state, "Up",
                          "Pool state should be 'Up', got '%s'" % pool.state)
-        self.assertEqual(pool.type, "OntapSAN",
-                         "Pool type should be 'OntapSAN', got '%s'" % pool.type)
+        self.assertEqual(pool.type, "OntapiSCSI",
+                         "Pool type should be 'OntapiSCSI', got '%s'" % pool.type)
 
         ontap_vol = self.ontap.get_volume(pool.name)
         self.assertIsNotNone(

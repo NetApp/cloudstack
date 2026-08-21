@@ -227,10 +227,10 @@ public class OntapPrimaryDatastoreLifecycleTest {
     }
 
     @Test
-    public void testInitialize_iscsiPoolUsesOntapSanType() {
+    public void testInitialize_iscsiPoolUsesOntapIscsiType() {
         when(storageStrategy.getStoragePath()).thenReturn("iqn.1992-08.com.netapp:sn.abc123");
 
-        assertEquals(Storage.StoragePoolType.OntapSAN, initializeAndCapturePoolType("ISCSI"));
+        assertEquals(Storage.StoragePoolType.OntapiSCSI, initializeAndCapturePoolType("ISCSI"));
     }
 
     @Test
