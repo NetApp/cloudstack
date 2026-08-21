@@ -18,6 +18,7 @@
  */
 package org.apache.cloudstack.storage.asup;
 
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.storage.Snapshot;
 import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.Volume;
@@ -55,6 +56,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -145,6 +147,8 @@ class OntapAsupManagerTest {
         List<EmsApplicationLog> msgs = cap.getAllValues();
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT,    msgs.get(0).getEventId());
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, msgs.get(1).getEventId());
+        assertTrue(msgs.get(0).getEventDescription().contains("\"snapshot_across_pool\":true"),
+                msgs.get(0).getEventDescription());
     }
 
     @Test
@@ -212,7 +216,7 @@ class OntapAsupManagerTest {
         String desc = capturePoolMessage();
         assertTrue(desc.contains("ontap-pool-1"),          "should contain pool name");
         assertTrue(desc.contains("cluster-uuid-1"),        "should contain cluster UUID");
-        assertTrue(desc.contains("csVolumeSnapshotCount"), "should contain csVolumeSnapshotCount");
+        assertTrue(desc.contains("volumeSnapshotCount"), "should contain volumeSnapshotCount");
         assertTrue(desc.contains("vmSnapshotCount"),       "should contain vmSnapshotCount");
     }
 
@@ -229,7 +233,7 @@ class OntapAsupManagerTest {
         }
 
         String desc = capturePoolMessage();
-        assertTrue(desc.contains("\"csVolumeSnapshotCount\":0"), "desc=" + desc);
+        assertTrue(desc.contains("\"volumeSnapshotCount\":0"), "desc=" + desc);
         assertTrue(desc.contains("\"vmSnapshotCount\":0"),       "desc=" + desc);
     }
 
@@ -255,7 +259,7 @@ class OntapAsupManagerTest {
         }
 
         String desc = capturePoolMessage();
-        assertTrue(desc.contains("\"csVolumeSnapshotCount\":2"), "Destroyed must be excluded; desc=" + desc);
+        assertTrue(desc.contains("\"volumeSnapshotCount\":2"), "Destroyed must be excluded; desc=" + desc);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -426,8 +430,47 @@ class OntapAsupManagerTest {
     }
 
     @Test
+    void asupIntervalSeconds_descriptionIncludesAllowedRange() {
+        String description = OntapAsupManager.AsupIntervalSeconds.description();
+        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS)));
+        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS)));
+    }
+
+    @Test
     void asupEnabled_defaultIsTrue() {
         assertEquals("true", OntapAsupManager.AsupEnabled.defaultValue());
+    }
+
+    @Test
+    void validateAsupInterval_acceptsMinMaxAndDefault() {
+        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
+        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
+        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS));
+    }
+
+    @Test
+    void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("3599"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("86401"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("0"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("abc"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval(""));
+    }
+
+    @Test
+    void clampAsupIntervalSeconds_fallsBackOutsideRange() {
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(null));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(0));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(3599));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(86401));
+        assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
+        assertEquals(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
+                OntapAsupManager.clampAsupIntervalSeconds(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
     }
 
     // ──────────────────────────────────────────────────────────────────────────

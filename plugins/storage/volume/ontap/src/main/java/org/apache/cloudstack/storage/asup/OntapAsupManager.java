@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.asup;
 
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.storage.Volume;
 import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.VolumeVO;
@@ -33,6 +34,7 @@ import com.cloud.utils.net.NetUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
+import org.apache.cloudstack.framework.config.ValidatedConfigKey;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.cloudstack.poll.BackgroundPollManager;
 import org.apache.cloudstack.poll.BackgroundPollTask;
@@ -51,6 +53,7 @@ import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.function.Consumer;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -81,12 +84,15 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             OntapStorageConstants.ASUP_ENABLED_DESCRIPTION,
             true, ConfigKey.Scope.Global);
 
-    public static final ConfigKey<Integer> AsupIntervalSeconds = new ConfigKey<>(
+    @SuppressWarnings("unchecked")
+    public static final ConfigKey<Integer> AsupIntervalSeconds = new ValidatedConfigKey<>(
             OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Integer.class,
             OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
             String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
             OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            true, ConfigKey.Scope.Global);
+            true, ConfigKey.Scope.Global, null,
+            // ValidatedConfigKey.validateValue() passes the raw string, not an Integer.
+            (Consumer<Integer>) (Consumer<?>) (Object raw) -> validateAsupInterval(raw == null ? null : String.valueOf(raw)));
 
     /** Time (in seconds) to wait while acquiring the single-emitter global lock. */
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
@@ -249,10 +255,11 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
 
     /**
      * Builds the heartbeat (event-id 0) description as a JSON object carrying the CloudStack and
-     * ONTAP versions, the management-server operating system platform, plus the ONTAP cluster UUID.
+     * ONTAP versions, the management-server operating system platform, the ONTAP cluster UUID,
+     * and whether this plugin can snapshot a VM whose disks span multiple ONTAP pools.
      * Example: {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":
      * "4.23.0.0","platform":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1",
-     * "clusterUuid":"..."}}
+     * "clusterUuid":"...","snapshot_across_pool":true}}
      */
     private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion,
             String clusterUuid) {
@@ -262,6 +269,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         payload.put("platform", getOperatingSystem());
         payload.put("ontapVersion", defaultUnknown(ontapVersion));
         payload.put("clusterUuid", defaultUnknown(clusterUuid));
+        // Capability flag: OntapVMSnapshotStrategy uses a consistency group when a VM's disks
+        // sit on more than one FlexVol. Always true for this plugin; no extra ONTAP REST call.
+        payload.put(OntapStorageConstants.ASUP_SNAPSHOT_ACROSS_POOL, Boolean.TRUE);
         return toJson(payload);
     }
 
@@ -273,8 +283,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * "poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
      * "ontapVolumeUuid":"...","rootDiskCount":12,"dataDiskCount":18,
      * "totalProvisionedSizeBytes":322122547200,
-     * "csVolumeSnapshotCount":5,"csVolumeSnapshotProvisionedSizeBytes":107374182400,
-     * "vmSnapshotCount":3,"vmSnapshotSizeBytes":322122547200}}</p>
+     * "volumeSnapshotCount":5,"vmSnapshotCount":3}}</p>
      */
     private String buildPoolDescription(StoragePoolVO pool, Map<String, String> details,
             String clusterUuid) {
@@ -295,9 +304,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * <ul>
      *     <li>{@code rootDiskCount} - number of ROOT (boot) disks physically on this pool</li>
      *     <li>{@code dataDiskCount} - number of DATADISK disks physically on this pool</li>
-     *     <li>{@code attachedVmCount} - number of distinct VMs that have at least one volume on
-     *         this pool; always &ge; {@code rootDiskCount} because a VM's root disk may live on a
-     *         different pool while one of its data disks resides here</li>
+     *     <li>{@code attachedVmCount} - number of distinct VMs whose ROOT disk is on this pool
+     *         and is attached ({@code instance_id} is not null). Detached ROOT disks and VMs that
+     *         only have a DATADISK on this pool are not counted</li>
      *     <li>{@code totalProvisionedSizeBytes} - sum of those volumes' provisioned (logical) sizes
      *         in bytes; for thin-provisioned volumes this is the logical size requested at
      *         creation time, not the physical space consumed on ONTAP</li>
@@ -324,9 +333,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
                     .filter(v -> Volume.Type.ROOT.equals(v.getVolumeType())).count();
             long dataDiskCount = cstackVolumes.stream()
                     .filter(v -> Volume.Type.DATADISK.equals(v.getVolumeType())).count();
-            // Count distinct VMs that have at least one volume on this pool.
-            // A VM whose root disk is on a different pool but has a data disk here is still counted,
+            // VMs that boot from this pool: attached ROOT disks only.
             long attachedVmCount = cstackVolumes.stream()
+                    .filter(v -> Volume.Type.ROOT.equals(v.getVolumeType()))
                     .map(VolumeVO::getInstanceId)
                     .filter(id -> id != null)
                     .distinct()
@@ -346,17 +355,12 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     /**
      * Computes and adds two groups of snapshot telemetry to the pool description payload.
      *
-     * <p><b>Volume-snapshot metrics</b> ({@code csVolumeSnapshotCount},
-     * {@code csVolumeSnapshotSizeBytes}): counts all non-destroyed CloudStack
-     * volume-level snapshots for volumes on this pool.  Where an ONTAP-side size has been
-     * recorded in {@code snapshot_details} (key {@code ontap_snap_size}) that value is used;
-     * otherwise the source volume's provisioned size is used as a conservative upper bound.</p>
+     * <p><b>Volume-snapshot metrics</b> ({@code volumeSnapshotCount}): counts all
+     * non-destroyed CloudStack volume-level snapshots for volumes on this pool.</p>
      *
-     * <p><b>VM-snapshot metrics</b> ({@code vmSnapshotCount},
-     * {@code vmSnapshotSizeBytes}): counts all active (non-expunging, non-removed) VM
-     * snapshots for VMs that have at least one volume on this pool.  Because ONTAP stores
-     * VM snapshots as FlexVol-level snapshots, the ONTAP-space estimate is computed as
-     * {@code sum(poolVolumes.size) × vmSnapshotCount} — a pool-level approximation.</p>
+     * <p><b>VM-snapshot metrics</b> ({@code vmSnapshotCount}): counts all active
+     * (non-expunging, non-removed) VM snapshots for VMs that have at least one volume on
+     * this pool.</p>
      *
      * <p>Best-effort: any failure leaves the fields out without breaking telemetry.</p>
      */
@@ -366,14 +370,14 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Adds {@code csVolumeSnapshotCount} to the payload.
+     * Adds {@code volumeSnapshotCount} to the payload.
      * Counts all non-destroyed CloudStack volume-level snapshots for volumes on this pool.
      */
     private void addVolumeSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload) {
         try {
             List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
             if (volumes == null || volumes.isEmpty()) {
-                payload.put("csVolumeSnapshotCount", 0);
+                payload.put("volumeSnapshotCount", 0);
                 return;
             }
 
@@ -392,7 +396,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
                 }
             }
 
-            payload.put("csVolumeSnapshotCount", snapCount);
+            payload.put("volumeSnapshotCount", snapCount);
         } catch (Exception e) {
             logger.warn("ONTAP ASUP: failed to compute volume-snapshot metrics for pool [{}]: {}",
                     pool.getId(), e.getMessage());
@@ -525,6 +529,53 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
+     * Rejects {@code ontap.asup.interval} values that are not integers in
+     * [{@link OntapStorageConstants#ASUP_MIN_INTERVAL_SECONDS},
+     * {@link OntapStorageConstants#ASUP_MAX_INTERVAL_SECONDS}].
+     * Invoked by {@link ValidatedConfigKey} when the setting is saved in Global Settings.
+     */
+    static void validateAsupInterval(String value) {
+        if (StringUtils.isBlank(value)) {
+            throw new InvalidParameterValueException(asupIntervalRangeMessage());
+        }
+        final int parsed;
+        try {
+            parsed = Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            throw new InvalidParameterValueException(
+                    OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY + " must be an integer. "
+                            + asupIntervalRangeMessage());
+        }
+        if (parsed < OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS
+                || parsed > OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS) {
+            throw new InvalidParameterValueException(asupIntervalRangeMessage());
+        }
+    }
+
+    /**
+     * Returns a usable interval for the poller. Out-of-range or missing DB values
+     * (for example set outside the API) fall back to the default so ASUP is not
+     * sent every poll cycle.
+     */
+    static int clampAsupIntervalSeconds(Integer configured) {
+        if (configured == null
+                || configured < OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS
+                || configured > OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS) {
+            return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+        }
+        return configured;
+    }
+
+    static String asupIntervalRangeMessage() {
+        return String.format(
+                "%s must be between %d and %d seconds (1 hour to 24 hours). Default: %d (12 hours).",
+                OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
+                OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
+                OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
+                OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS);
+    }
+
+    /**
      * Background poll task that runs the ASUP push within a managed CloudStack context.
      *
      * <p>Wakes every {@link #ASUP_POLL_CHECK_INTERVAL_MS} ms. On each wakeup it reads
@@ -536,10 +587,14 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         @Override
         protected void runInContext() {
             try {
-                int intervalSeconds = AsupIntervalSeconds.value() != null
-                        ? AsupIntervalSeconds.value() : OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
-                if (intervalSeconds <= 0) {
-                    intervalSeconds = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+                Integer configured = AsupIntervalSeconds.value();
+                int intervalSeconds = clampAsupIntervalSeconds(configured);
+                if (configured != null && configured != intervalSeconds) {
+                    logger.warn("ONTAP ASUP: {} value [{}] is outside [{}-{}]; using default [{}]",
+                            OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY, configured,
+                            OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
+                            OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
+                            intervalSeconds);
                 }
                 Duration configuredInterval = Duration.ofSeconds(intervalSeconds);
                 Instant now = Instant.now();
