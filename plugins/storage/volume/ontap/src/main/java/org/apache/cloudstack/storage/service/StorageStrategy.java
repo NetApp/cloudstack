@@ -51,7 +51,6 @@ import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
@@ -76,12 +75,6 @@ public abstract class StorageStrategy {
     protected SnapshotFeignClient snapshotFeignClient;
 
     protected OntapStorage storage;
-
-    /**
-     * Holds the node name of the aggregate chosen during createStorageVolume().
-     * Used by getNetworkInterface() to prefer a LIF homed on the same node.
-     */
-    private String chosenAggregateNode;
 
     /**
      * Presents aggregate object for the unified storage, not eligible for disaggregated
@@ -220,19 +213,16 @@ public abstract class StorageStrategy {
     // Common methods like create/delete etc., should be here
 
     /**
-     * Creates ONTAP Flex-Volume
-     * Eligible only for Unified ONTAP storage
-     * throw exception in case of disaggregated ONTAP storage
+     * Selects the best aggregate for a volume of the given size from candidates populated by
+     * {@link #connect(boolean)} with aggregate validation enabled.
      *
-     * @param volumeName the name of the volume to create
-     * @param size the size of the volume in bytes
-     * @return the created Volume object
+     * <p>Picks the online aggregate with the largest available block space that can fit
+     * {@code size}. The returned aggregate includes node information for LIF affinity.</p>
+     *
+     * @param size requested volume size in bytes
+     * @return the chosen aggregate detail response
      */
-    public Volume createStorageVolume(String volumeName, Long size) {
-        logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
-
-        this.chosenAggregateNode = null;
-
+    public Aggregate chooseAggregate(Long size) {
         String svmName = storage.getSvmName();
         if (aggregates == null || aggregates.isEmpty()) {
             logger.error("No aggregates available to create volume on SVM " + svmName);
@@ -243,18 +233,6 @@ public abstract class StorageStrategy {
         }
 
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-
-        // Generate the Create Volume Request
-        Volume volumeRequest = new Volume();
-        Svm svm = new Svm();
-        svm.setName(svmName);
-        Nas nas = new Nas();
-        nas.setPath(OntapStorageConstants.SLASH + volumeName);
-
-        volumeRequest.setName(volumeName);
-        volumeRequest.setSvm(svm);
-
-        // Pick the best aggregate for this specific request (largest available, online, and sufficient space).
         long maxAvailableAggregateSpaceBytes = -1L;
         Aggregate aggrChosen = null;
         for (Aggregate aggr : aggregates) {
@@ -298,13 +276,55 @@ public abstract class StorageStrategy {
             logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
             throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume operations.");
         }
-        logger.info("Selected aggregate: " + aggrChosen.getName() + " for volume operations.");
+        if (aggrChosen.getNode() == null || aggrChosen.getNode().getName() == null
+                || aggrChosen.getNode().getName().isEmpty()) {
+            logger.error("Selected aggregate " + aggrChosen.getName() + " does not have a node name.");
+            throw new CloudRuntimeException("Selected aggregate " + aggrChosen.getName()
+                    + " does not have a node name required for LIF affinity.");
+        }
+        logger.info("Selected aggregate: " + aggrChosen.getName() + " on node "
+                + aggrChosen.getNode().getName() + " for volume operations.");
+        return aggrChosen;
+    }
 
-        this.chosenAggregateNode = aggrChosen.getNode() != null ? aggrChosen.getNode().getName() : null;
+    /**
+     * Creates ONTAP Flex-Volume on the given aggregate.
+     * Eligible only for Unified ONTAP storage
+     * throw exception in case of disaggregated ONTAP storage
+     *
+     * @param volumeName the name of the volume to create
+     * @param size the size of the volume in bytes
+     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(Long)}
+     * @return the created Volume object
+     */
+    public Volume createStorageVolume(String volumeName, Long size, Aggregate aggregate) {
+        logger.info("Creating volume: " + volumeName + " of size: " + size + " bytes");
+
+        String svmName = storage.getSvmName();
+        if (size == null || size <= 0) {
+            throw new CloudRuntimeException("Invalid volume size provided: " + size);
+        }
+        if (aggregate == null || aggregate.getName() == null || aggregate.getUuid() == null) {
+            throw new CloudRuntimeException("Aggregate is required to create volume on SVM " + svmName);
+        }
+
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+
+        // Generate the Create Volume Request
+        Volume volumeRequest = new Volume();
+        Svm svm = new Svm();
+        svm.setName(svmName);
+        Nas nas = new Nas();
+        nas.setPath(OntapStorageConstants.SLASH + volumeName);
+
+        volumeRequest.setName(volumeName);
+        volumeRequest.setSvm(svm);
+
+        logger.info("Creating volume on aggregate: " + aggregate.getName() + " for volume operations.");
 
         Aggregate aggr = new Aggregate();
-        aggr.setName(aggrChosen.getName());
-        aggr.setUuid(aggrChosen.getUuid());
+        aggr.setName(aggregate.getName());
+        aggr.setUuid(aggregate.getUuid());
         volumeRequest.setAggregates(List.of(aggr));
         volumeRequest.setSize(size);
         volumeRequest.setNas(nas);
@@ -480,19 +500,26 @@ public abstract class StorageStrategy {
 
     /**
      * Selects the best available data LIF for storage I/O, preferring one homed on the same node
-     * as the chosen aggregate to avoid inter-node traffic.
+     * as the given aggregate to avoid inter-node traffic.
      *
      * <p>Selection order:</p>
      * <ol>
-     *   <li>LIF whose {@code location.home_node} matches the chosen aggregate's node — no warning</li>
+     *   <li>LIF whose {@code location.home_node} matches the aggregate's node — no warning</li>
      *   <li>LIF currently running on that node (e.g. after failover) — returned with a warning</li>
-     *   <li>Any UP and enabled LIF — returned with a warning when aggregate node is known</li>
+     *   <li>Any UP and enabled LIF — returned with a warning</li>
      * </ol>
      *
-     * @return {@link Pair} where {@code first()} is the LIF's IP address and {@code second()} is
-     *         a warning message (null when no warning)
+     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(Long)};
+     *                  must include a node name for LIF affinity
+     * @return map with {@link OntapStorageConstants#DATA_LIF} set to the LIF IP address, and
+     *         optionally {@link OntapStorageConstants#LIF_WARNING} when a non-ideal LIF was selected
      */
-    public Pair<String, String> getNetworkInterface() {
+    public Map<String, String> getNetworkInterface(Aggregate aggregate) {
+        if (aggregate == null || aggregate.getNode() == null || aggregate.getNode().getName() == null
+                || aggregate.getNode().getName().isEmpty()) {
+            throw new CloudRuntimeException("Aggregate with a node name is required to select a network interface");
+        }
+        String aggregateNode = aggregate.getNode().getName();
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {
             Map<String, Object> queryParams = new HashMap<>();
@@ -534,21 +561,19 @@ public abstract class StorageStrategy {
                 if (!isIPv4Address(iface.getIp().getAddress())) {
                     continue;
                 }
-                if (chosenAggregateNode != null) {
-                    // LIF is homed on the aggregate's node
-                    String homeNode = iface.getLocation() != null && iface.getLocation().getHomeNode() != null
-                            ? iface.getLocation().getHomeNode().getName() : null;
-                    if (chosenAggregateNode.equals(homeNode)) {
-                        return new Pair<>(iface.getIp().getAddress(), null);
-                    }
-                    // LIF has failed over and is currently running on the aggregate's node
-                    // (home_node differs). Keep as a candidate; returned with a warning if no match is found earlier.
-                    if (currentNodeInterface == null) {
-                        String currentNode = iface.getLocation() != null && iface.getLocation().getNode() != null
-                                ? iface.getLocation().getNode().getName() : null;
-                        if (chosenAggregateNode.equals(currentNode)) {
-                            currentNodeInterface = iface;
-                        }
+                // LIF is homed on the aggregate's node
+                String homeNode = iface.getLocation() != null && iface.getLocation().getHomeNode() != null
+                        ? iface.getLocation().getHomeNode().getName() : null;
+                if (aggregateNode.equals(homeNode)) {
+                    return networkInterfaceResult(iface.getIp().getAddress(), null);
+                }
+                // LIF has failed over and is currently running on the aggregate's node
+                // (home_node differs). Keep as a candidate; returned with a warning if no match is found earlier.
+                if (currentNodeInterface == null) {
+                    String currentNode = iface.getLocation() != null && iface.getLocation().getNode() != null
+                            ? iface.getLocation().getNode().getName() : null;
+                    if (aggregateNode.equals(currentNode)) {
+                        currentNodeInterface = iface;
                     }
                 }
                 if (fallbackInterface == null) {
@@ -564,25 +589,33 @@ public abstract class StorageStrategy {
 
             if (currentNodeInterface != null) {
                 String ip = currentNodeInterface.getIp().getAddress();
-                String warning = "No home-node LIF found for aggregate node '" + chosenAggregateNode
+                String warning = "No home-node LIF found for aggregate node '" + aggregateNode
                         + "'; using LIF '" + ip + "' currently running on that node (home node LIF may be down).";
                 logger.warn(warning);
-                return new Pair<>(ip, warning);
+                return networkInterfaceResult(ip, warning);
             }
 
             String ip = fallbackInterface.getIp().getAddress();
-            if (chosenAggregateNode == null) {
-                return new Pair<>(ip, null);
-            }
-            String warning = "No operational LIF found on aggregate's home node '" + chosenAggregateNode
+            String warning = "No operational LIF found on aggregate's home node '" + aggregateNode
                     + "'; using fallback LIF '" + ip + "' on a different node."
                     + " I/O will traverse an inter-node path, increasing latency.";
             logger.warn(warning);
-            return new Pair<>(ip, warning);
+            return networkInterfaceResult(ip, warning);
+        } catch (CloudRuntimeException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Exception while retrieving network interfaces: ", e);
             throw new CloudRuntimeException("Failed to retrieve network interfaces: " + e.getMessage());
         }
+    }
+
+    private Map<String, String> networkInterfaceResult(String address, String warning) {
+        Map<String, String> result = new HashMap<>();
+        result.put(OntapStorageConstants.DATA_LIF, address);
+        if (warning != null) {
+            result.put(OntapStorageConstants.LIF_WARNING, warning);
+        }
+        return result;
     }
 
     /**

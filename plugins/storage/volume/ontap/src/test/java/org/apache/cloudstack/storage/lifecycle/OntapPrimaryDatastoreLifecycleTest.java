@@ -30,6 +30,7 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import com.cloud.dc.dao.ClusterDao;
 import com.cloud.exception.InvalidParameterValueException;
@@ -49,19 +50,21 @@ import com.cloud.alert.AlertManager;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
-import com.cloud.utils.Pair;
+import java.util.HashMap;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.withSettings;
+import org.mockito.InOrder;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import java.util.HashMap;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
@@ -123,12 +126,20 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_clusterDao.findById(1L)).thenReturn(clusterVO);
 
         when(storageStrategy.connect()).thenReturn(true);
-        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("testNetworkInterface", null));
+        Aggregate aggregate = new Aggregate();
+        aggregate.setName("aggr1");
+        aggregate.setUuid("aggr-uuid-1");
+        Aggregate.Node node = new Aggregate.Node();
+        node.setName("node-a");
+        aggregate.setNode(node);
+        when(storageStrategy.chooseAggregate(any())).thenReturn(aggregate);
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, "testNetworkInterface"));
 
         Volume volume = new Volume();
         volume.setUuid("test-volume-uuid");
         volume.setName("testVolume");
-        when(storageStrategy.createStorageVolume(any(), any())).thenReturn(volume);
+        when(storageStrategy.createStorageVolume(any(), any(), any())).thenReturn(volume);
 
         // Setup for attachCluster tests
         // Configure dataStore mock with necessary methods (works for both DataStore and PrimaryDataStoreInfo)
@@ -444,7 +455,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_dataLifWithWarning() {
-        // Test when getNetworkInterface returns a warning in the Pair's second value
+        // Test when getNetworkInterface returns a warning in LIF_WARNING
         // This exercises the processDataLifSelection path for non-null warning
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
@@ -466,7 +477,9 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("details", detailsMap);
 
         String warningMessage = "LIF on node-b; expected on node-a;Details about LIF failover";
-        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("10.0.0.1", warningMessage));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(Map.of(
+                OntapStorageConstants.DATA_LIF, "10.0.0.1",
+                OntapStorageConstants.LIF_WARNING, warningMessage));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class);
              MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
@@ -481,7 +494,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Test
     public void testInitialize_nullDataLif() {
-        // Test when lifResult.first() returns null
+        // Test when DATA_LIF is missing from the result map
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
         detailsMap.put(OntapStorageConstants.PASSWORD, "testPassword");
@@ -501,18 +514,19 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>(null, null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(new HashMap<>());
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
             Exception ex = assertThrows(CloudRuntimeException.class, () -> ontapPrimaryDatastoreLifecycle.initialize(dsInfos));
             assertTrue(ex.getMessage().contains("Failed to retrieve Data LIF from ONTAP, cannot create primary storage"));
+            verify(storageStrategy, never()).createStorageVolume(any(), any(), any());
         }
     }
 
     @Test
     public void testInitialize_emptyDataLif() {
-        // Test when lifResult.first() returns empty string
+        // Test when DATA_LIF is an empty string
         HashMap<String, String> detailsMap = new HashMap<>();
         detailsMap.put(OntapStorageConstants.USERNAME, "testUser");
         detailsMap.put(OntapStorageConstants.PASSWORD, "testPassword");
@@ -532,12 +546,14 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("", null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, ""));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
             Exception ex = assertThrows(CloudRuntimeException.class, () -> ontapPrimaryDatastoreLifecycle.initialize(dsInfos));
             assertTrue(ex.getMessage().contains("Failed to retrieve Data LIF from ONTAP, cannot create primary storage"));
+            verify(storageStrategy, never()).createStorageVolume(any(), any(), any());
         }
     }
 
@@ -563,13 +579,14 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.getNetworkInterface()).thenThrow(new RuntimeException("ONTAP API error"));
+        when(storageStrategy.getNetworkInterface(any())).thenThrow(new RuntimeException("ONTAP API error"));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
             Exception ex = assertThrows(CloudRuntimeException.class, () -> ontapPrimaryDatastoreLifecycle.initialize(dsInfos));
             assertTrue(ex.getMessage().contains("Failed to retrieve Data LIF from ONTAP"));
             assertTrue(ex.getCause() != null && ex.getCause().getMessage().contains("ONTAP API error"));
+            verify(storageStrategy, never()).createStorageVolume(any(), any(), any());
         }
     }
 
@@ -595,7 +612,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.createStorageVolume(any(), any())).thenReturn(null);
+        when(storageStrategy.createStorageVolume(any(), any(), any())).thenReturn(null);
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -626,7 +643,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("isTagARule", false);
         dsInfos.put("details", detailsMap);
 
-        when(storageStrategy.createStorageVolume(any(), any())).thenThrow(new RuntimeException("Volume creation failed"));
+        when(storageStrategy.createStorageVolume(any(), any(), any())).thenThrow(new RuntimeException("Volume creation failed"));
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
@@ -659,12 +676,19 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("details", detailsMap);
 
         String expectedDataLif = "192.168.1.100";
-        when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>(expectedDataLif, null));
+        when(storageStrategy.getNetworkInterface(any())).thenReturn(
+                Map.of(OntapStorageConstants.DATA_LIF, expectedDataLif));
         when(storageStrategy.getStoragePath()).thenReturn("/vol/testVolume");
 
         try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
             ontapPrimaryDatastoreLifecycle.initialize(dsInfos);
+
+            // Verify LIF selection completes before FlexVol creation
+            InOrder inOrder = inOrder(storageStrategy);
+            inOrder.verify(storageStrategy).chooseAggregate(any());
+            inOrder.verify(storageStrategy).getNetworkInterface(any());
+            inOrder.verify(storageStrategy).createStorageVolume(any(), any(), any());
 
             // Verify that createPrimaryDataStore was called and host parameter contains the DATA_LIF
             verify(_dataStoreHelper, times(1)).createPrimaryDataStore(any());
