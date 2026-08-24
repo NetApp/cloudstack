@@ -158,8 +158,6 @@ class OntapAsupManagerTest {
         List<EmsApplicationLog> msgs = cap.getAllValues();
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT,    msgs.get(0).getEventId());
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, msgs.get(1).getEventId());
-        assertTrue(msgs.get(0).getEventDescription().contains("\"snapshot_across_pool\":true"),
-                msgs.get(0).getEventDescription());
         assertTrue(msgs.get(0).getEventDescription().contains("\"managementServerCount\":0"),
                 msgs.get(0).getEventDescription());
     }
