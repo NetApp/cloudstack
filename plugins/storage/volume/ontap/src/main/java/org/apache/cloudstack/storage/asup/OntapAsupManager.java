@@ -21,7 +21,6 @@ package org.apache.cloudstack.storage.asup;
 
 import com.cloud.cluster.ManagementServerHostVO;
 import com.cloud.cluster.dao.ManagementServerHostDao;
-import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.server.ManagementService;
 import com.cloud.storage.Volume;
 import com.cloud.storage.SnapshotVO;
@@ -35,9 +34,6 @@ import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.net.NetUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.cloudstack.framework.config.ConfigKey;
-import org.apache.cloudstack.framework.config.Configurable;
-import org.apache.cloudstack.framework.config.ValidatedConfigKey;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.cloudstack.poll.BackgroundPollManager;
 import org.apache.cloudstack.poll.BackgroundPollTask;
@@ -47,6 +43,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.EmsApplicationLog;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.utils.OntapConfigurationManager;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.commons.collections.CollectionUtils;
@@ -56,13 +53,13 @@ import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.function.Consumer;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Periodic ASUP (AutoSupport) telemetry pusher for the NetApp ONTAP plugin.
@@ -79,32 +76,19 @@ import java.util.Set;
  *         snapshot telemetry (counts by state, total provisioned size).</li>
  * </ul>
  */
-public class OntapAsupManager extends ManagerBase implements Configurable {
-
-    public static final ConfigKey<Boolean> AsupEnabled = new ConfigKey<>(
-            OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Boolean.class,
-            OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY, OntapStorageConstants.ASUP_ENABLED_DEFAULT,
-            OntapStorageConstants.ASUP_ENABLED_DESCRIPTION,
-            true, ConfigKey.Scope.Global);
-
-    public static final ConfigKey<Integer> AsupIntervalSeconds = new ValidatedConfigKey<>(
-            OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Integer.class,
-            OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
-            String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
-            OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            true, ConfigKey.Scope.Global, null, asupIntervalValidator());
-
-    /** Time (in seconds) to wait while acquiring the single-emitter global lock. */
+public class OntapAsupManager extends ManagerBase {
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
 
     /**
-     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask} (1 hour). The task wakes on
-     * this cadence and checks whether the configured push interval ({@link #AsupIntervalSeconds})
+     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask}. The task wakes on this cadence
+     * and checks whether the configured push interval
+     * ({@link OntapConfigurationManager#AsupIntervalSeconds})
      * has elapsed. This decouples the scheduler's fixed delay from the live config value,
      * so changes made in the CloudStack UI take effect without a management-server restart
      * (within one wakeup).
      */
-    static final long ASUP_POLL_CHECK_INTERVAL_MS = 60_000L;
+    static final long ASUP_POLL_CHECK_INTERVAL_MS =
+            TimeUnit.SECONDS.toMillis(OntapStorageConstants.ASUP_POLL_CHECK_INTERVAL_SECONDS);
 
     /**
      * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
@@ -167,7 +151,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      *
      * <p>Wakes every {@link #ASUP_POLL_CHECK_INTERVAL_MS} ms. If ASUP is disabled the
      * wakeup returns immediately without advancing {@link #lastPushTime}. Otherwise it
-     * reads the live {@link #AsupIntervalSeconds} and only pushes if that interval has
+     * reads the live {@link OntapConfigurationManager#AsupIntervalSeconds} and only pushes if that interval has
      * elapsed. Interval and enable changes in the UI take effect within one check cycle
      * — no restart required.</p>
      */
@@ -175,11 +159,13 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         @Override
         protected void runInContext() {
             try {
-                if (Boolean.FALSE.equals(AsupEnabled.value())) {
-                    logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); skipping this cycle.", AsupEnabled.key());
+                if (Boolean.FALSE.equals(OntapConfigurationManager.AsupEnabled.value())) {
+                    logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); skipping this cycle.",
+                            OntapConfigurationManager.AsupEnabled.key());
                     return;
                 }
-                Duration configuredInterval = Duration.ofSeconds(getAsupIntervalSeconds(AsupIntervalSeconds.value()));
+                Duration configuredInterval = Duration.ofSeconds(
+                        getAsupIntervalSeconds(OntapConfigurationManager.AsupIntervalSeconds.value()));
                 Instant now = Instant.now();
                 if (Duration.between(lastPushTime, now).compareTo(configuredInterval) < 0) {
                     return; // configured interval has not elapsed yet
@@ -204,8 +190,9 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * only one node emits per cycle.</p>
      */
     protected void pushAsupTelemetry() {
-        if (Boolean.FALSE.equals(AsupEnabled.value())) {
-            logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); skipping this cycle.", AsupEnabled.key());
+        if (Boolean.FALSE.equals(OntapConfigurationManager.AsupEnabled.value())) {
+            logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); skipping this cycle.",
+                    OntapConfigurationManager.AsupEnabled.key());
             return;
         }
         List<StoragePoolVO> pools = storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME);
@@ -318,7 +305,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * <p>Example: {@code {"message":"CloudStack storage pool backed by ONTAP volume",
      * "poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
      * "ontapVolumeUuid":"...","rootDiskCount":12,"dataDiskCount":18,
-     * "totalLogicalSizeBytes":322122547200,"multiPoolVm":false,
+     * "totalLogicalSizeBytes":322122547200,"multiPrimaryStoragePoolVm":false,
      * "volumeSnapshotCount":5,"vmSnapshotCount":3}}</p>
      */
     private String buildPoolDescription(StoragePoolVO pool, Map<String, String> details,
@@ -331,7 +318,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         payload.put(OntapStorageConstants.ASUP_SVM, defaultUnknown(details.get(OntapStorageConstants.SVM_NAME)));
         payload.put(OntapStorageConstants.ASUP_ONTAP_VOLUME_UUID, defaultUnknown(details.get(OntapStorageConstants.VOLUME_UUID)));
         addStoragePoolUsage(pool, payload);
-        addMultiPoolVm(pool, payload);
+        hasMultiPrimaryStoragePoolVm(pool, payload);
         addSnapshotMetrics(pool, payload);
         return toJson(payload);
     }
@@ -378,15 +365,16 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
     }
 
     /**
-     * Adds {@code multiPoolVm}: true when at least one VM with ROOT on this pool also has
-     * an attached DATADISK on a different pool. Uses a single {@code LIMIT 1} existence query.
+     * Adds {@code hasMultiPrimaryStoragePoolVm}: true when at least one VM with ROOT on this
+     * pool also has an attached DATADISK on a different primary storage pool. Uses a single
+     * {@code LIMIT 1} existence query.
      */
-    private void addMultiPoolVm(StoragePoolVO pool, Map<String, Object> payload) {
+    private void hasMultiPrimaryStoragePoolVm(StoragePoolVO pool, Map<String, Object> payload) {
         try {
-            payload.put(OntapStorageConstants.ASUP_MULTI_POOL_VM,
-                    volumeDao.hasMultiPoolVm(pool.getId()));
+            payload.put(OntapStorageConstants.ASUP_MULTI_PRIMARY_STORAGE_POOL_VM,
+                    volumeDao.hasMultiPrimaryStoragePoolVm(pool.getId()));
         } catch (Exception e) {
-            logger.warn("ONTAP ASUP: failed to compute multiPoolVm for pool [{}]: {}",
+            logger.warn("ONTAP ASUP: failed to compute multiPrimaryStoragePoolVm for pool [{}]: {}",
                     pool.getId(), e.getMessage());
         }
     }
@@ -552,52 +540,6 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
         return StringUtils.isBlank(value) ? OntapStorageConstants.ASUP_UNKNOWN : value;
     }
 
-    @Override
-    public String getConfigComponentName() {
-        return OntapAsupManager.class.getSimpleName();
-    }
-
-    @Override
-    public ConfigKey<?>[] getConfigKeys() {
-        return new ConfigKey<?>[] {AsupEnabled, AsupIntervalSeconds};
-    }
-
-    /**
-     * {@link ValidatedConfigKey#validateValue(String)} always passes the raw config string,
-     * even when the key type is {@link Integer}. Adapt that to {@code Consumer<Integer>}.
-     */
-    @SuppressWarnings("unchecked")
-    private static Consumer<Integer> asupIntervalValidator() {
-        Consumer<Object> validator = OntapAsupManager::validateAsupInterval;
-        return (Consumer<Integer>) (Consumer<?>) validator;
-    }
-
-    /**
-     * Rejects {@code ontap.asup.interval} values that are not integers in
-     * [{@link OntapStorageConstants#ASUP_MIN_INTERVAL_SECONDS},
-     * {@link OntapStorageConstants#ASUP_MAX_INTERVAL_SECONDS}].
-     * Invoked by {@link ValidatedConfigKey} when the setting is saved in Global Settings.
-     * {@code raw} is the saved string (or null).
-     */
-    static void validateAsupInterval(Object raw) {
-        String value = raw == null ? null : String.valueOf(raw).trim();
-        if (StringUtils.isBlank(value)) {
-            throw new InvalidParameterValueException(asupIntervalRangeMessage());
-        }
-        final int parsed;
-        try {
-            parsed = Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            throw new InvalidParameterValueException(
-                    OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY + " must be an integer. "
-                            + asupIntervalRangeMessage());
-        }
-        if (parsed < OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS
-                || parsed > OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS) {
-            throw new InvalidParameterValueException(asupIntervalRangeMessage());
-        }
-    }
-
     /**
      * Returns a usable interval for the poller. Out-of-range or missing DB values
      * (for example set outside the API) fall back to the default so ASUP is not
@@ -617,14 +559,5 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
             return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
         }
         return configured;
-    }
-
-    static String asupIntervalRangeMessage() {
-        return String.format(
-                "%s must be between %d and %d seconds (3 hours to 24 hours). Default: %d (12 hours).",
-                OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
-                OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
-                OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
-                OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS);
     }
 }

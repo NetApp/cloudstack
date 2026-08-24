@@ -39,6 +39,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.EmsApplicationLog;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.utils.OntapConfigurationManager;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -230,7 +231,7 @@ class OntapAsupManagerTest {
         assertTrue(desc.contains("cluster-uuid-1"),        "should contain cluster UUID");
         assertTrue(desc.contains("volumeSnapshotCount"), "should contain volumeSnapshotCount");
         assertTrue(desc.contains("vmSnapshotCount"),       "should contain vmSnapshotCount");
-        assertTrue(desc.contains("\"multiPoolVm\":false"), "desc=" + desc);
+        assertTrue(desc.contains("\"multiPrimaryStoragePoolVm\":false"), "desc=" + desc);
     }
 
     @Test
@@ -251,12 +252,12 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void poolMessage_multiPoolVm_trueWhenDaoReportsSpan() {
+    void poolMessage_multiPrimaryStoragePoolVm_trueWhenDaoReportsSpan() {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
         when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
         when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
-        when(volumeDao.hasMultiPoolVm(1L)).thenReturn(true);
+        when(volumeDao.hasMultiPrimaryStoragePoolVm(1L)).thenReturn(true);
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
@@ -264,7 +265,7 @@ class OntapAsupManagerTest {
         }
 
         String desc = capturePoolMessage();
-        assertTrue(desc.contains("\"multiPoolVm\":true"), "desc=" + desc);
+        assertTrue(desc.contains("\"multiPrimaryStoragePoolVm\":true"), "desc=" + desc);
     }
 
     @Test
@@ -457,35 +458,35 @@ class OntapAsupManagerTest {
     @Test
     void asupIntervalSeconds_defaultIsProductionValue() {
         assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
-                OntapAsupManager.AsupIntervalSeconds.defaultValue());
+                OntapConfigurationManager.AsupIntervalSeconds.defaultValue());
     }
 
     @Test
     void asupIntervalSeconds_descriptionIncludesAllowedRange() {
-        String description = OntapAsupManager.AsupIntervalSeconds.description();
+        String description = OntapConfigurationManager.AsupIntervalSeconds.description();
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS)));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS)));
     }
 
     @Test
     void asupEnabled_defaultIsTrue() {
-        assertEquals("true", OntapAsupManager.AsupEnabled.defaultValue());
+        assertEquals("true", OntapConfigurationManager.AsupEnabled.defaultValue());
     }
 
     @Test
     void validateAsupInterval_acceptsMinMaxAndDefault() {
-        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
-        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
-        OntapAsupManager.validateAsupInterval(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS));
+        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
+        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
+        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS));
     }
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("59"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("86401"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("0"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("abc"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval(""));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("59"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("86401"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("0"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("abc"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue(""));
     }
 
     @Test

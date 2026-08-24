@@ -160,7 +160,7 @@ public class OntapStorageConstants {
     public static final String ASUP_MANAGEMENT_SERVER_COUNT = "managementServerCount";
     /** Event-id 0 field: VM snapshots spanning multiple ONTAP pools (consistency group). */
     public static final String ASUP_SNAPSHOT_ACROSS_POOL = "snapshot_across_pool";
-    public static final String ASUP_MULTI_POOL_VM = "multiPoolVm";
+    public static final String ASUP_MULTI_PRIMARY_STORAGE_POOL_VM = "multiPrimaryStoragePoolVm";
     public static final String ASUP_ROOT_DISK_COUNT = "rootDiskCount";
     public static final String ASUP_DATA_DISK_COUNT = "dataDiskCount";
     public static final String ASUP_TOTAL_LOGICAL_SIZE_BYTES = "totalLogicalSizeBytes";
@@ -169,11 +169,29 @@ public class OntapStorageConstants {
     public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
-    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable.";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
     public static final int ASUP_MIN_INTERVAL_SECONDS = 60; // 1 minute
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
-    public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
-            + "Allowed range: 10800-86400 (3 hours to 24 hours). Default: 43200 (12 hours).";
+
+    /** Wakeup cadence of the ASUP poll task; also the upper bound on how long a config change takes to apply. */
+    public static final int ASUP_POLL_CHECK_INTERVAL_SECONDS = 60; // 1 minute
+
+    /**
+     * Global Settings shows a generic "takes effect within 30 seconds" toast for every dynamic
+     * key (the config cache TTL). The ASUP keys are only re-read once per poll wakeup, so the
+     * descriptions state the real bound.
+     */
+    private static final String ASUP_CONFIG_APPLY_NOTE = String.format(
+            "Applied on the next ASUP poll check (within %d seconds); no management server restart required.",
+            ASUP_POLL_CHECK_INTERVAL_SECONDS);
+
+    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the "
+            + "CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable. "
+            + ASUP_CONFIG_APPLY_NOTE;
+    public static final String ASUP_INTERVAL_DESCRIPTION = String.format(
+            "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
+                    + "Allowed range: %d-%d. Default: %d. %s",
+            ASUP_MIN_INTERVAL_SECONDS, ASUP_MAX_INTERVAL_SECONDS, ASUP_DEFAULT_INTERVAL_SECONDS,
+            ASUP_CONFIG_APPLY_NOTE);
 }

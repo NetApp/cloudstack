@@ -96,7 +96,7 @@ public class VolumeDaoImpl extends GenericDaoBase<VolumeVO, Long> implements Vol
     protected static final String SELECT_HYPERTYPE_FROM_CLUSTER_VOLUME = "SELECT c.hypervisor_type from volumes v, storage_pool s, cluster c where v.pool_id = s.id and s.cluster_id = c.id and v.id = ?";
     protected static final String SELECT_HYPERTYPE_FROM_ZONE_VOLUME = "SELECT s.hypervisor from volumes v, storage_pool s where v.pool_id = s.id and v.id = ?";
     protected static final String SELECT_POOLSCOPE = "SELECT s.scope from storage_pool s, volumes v where s.id = v.pool_id and v.id = ?";
-    private static final String HAS_MULTI_POOL_VM =
+    private static final String HAS_MULTI_PRIMARY_STORAGE_POOL_VM =
             "SELECT 1 FROM volumes root INNER JOIN volumes data ON data.instance_id = root.instance_id "
                     + "WHERE root.pool_id = ? AND root.volume_type = 'ROOT' AND root.instance_id IS NOT NULL "
                     + "AND root.removed IS NULL AND root.state NOT IN ('Destroy', 'Expunged') "
@@ -1006,16 +1006,16 @@ public class VolumeDaoImpl extends GenericDaoBase<VolumeVO, Long> implements Vol
 
     @Override
     @DB
-    public boolean hasMultiPoolVm(long poolId) {
+    public boolean hasMultiPrimaryStoragePoolVm(long poolId) {
         TransactionLegacy txn = TransactionLegacy.currentTxn();
-        try (PreparedStatement pstmt = txn.prepareAutoCloseStatement(HAS_MULTI_POOL_VM)) {
+        try (PreparedStatement pstmt = txn.prepareAutoCloseStatement(HAS_MULTI_PRIMARY_STORAGE_POOL_VM)) {
             pstmt.setLong(1, poolId);
             pstmt.setLong(2, poolId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 return rs.next();
             }
         } catch (SQLException e) {
-            throw new CloudRuntimeException("DB Exception on: " + HAS_MULTI_POOL_VM, e);
+            throw new CloudRuntimeException("DB Exception on: " + HAS_MULTI_PRIMARY_STORAGE_POOL_VM, e);
         }
     }
 
