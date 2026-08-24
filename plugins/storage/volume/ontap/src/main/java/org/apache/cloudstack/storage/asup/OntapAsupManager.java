@@ -104,7 +104,7 @@ public class OntapAsupManager extends ManagerBase implements Configurable {
      * so changes made in the CloudStack UI take effect without a management-server restart
      * (within one wakeup).
      */
-    static final long ASUP_POLL_CHECK_INTERVAL_MS = 3_600_000L;
+    static final long ASUP_POLL_CHECK_INTERVAL_MS = 60_000L;
 
     /**
      * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
