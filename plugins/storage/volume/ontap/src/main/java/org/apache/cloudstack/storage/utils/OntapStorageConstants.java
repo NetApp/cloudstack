@@ -171,7 +171,7 @@ public class OntapStorageConstants {
     public static final String ASUP_ENABLED_DEFAULT = "true";
     public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable.";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_SECONDS = 10800; // 3 hours
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 60; // 1 minute
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
     public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
