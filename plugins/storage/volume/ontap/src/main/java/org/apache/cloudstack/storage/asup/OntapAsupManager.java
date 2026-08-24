@@ -21,6 +21,7 @@ package org.apache.cloudstack.storage.asup;
 
 import com.cloud.cluster.ManagementServerHostVO;
 import com.cloud.cluster.dao.ManagementServerHostDao;
+import com.cloud.event.EventTypes;
 import com.cloud.server.ManagementService;
 import com.cloud.storage.Volume;
 import com.cloud.storage.SnapshotVO;
@@ -30,10 +31,13 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.vm.snapshot.VMSnapshot;
 import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
+import com.cloud.utils.Ternary;
 import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.net.NetUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.cloudstack.framework.config.ConfigKey;
+import org.apache.cloudstack.framework.messagebus.MessageBus;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.cloudstack.poll.BackgroundPollManager;
 import org.apache.cloudstack.poll.BackgroundPollTask;
@@ -133,6 +137,8 @@ public class OntapAsupManager extends ManagerBase {
     private ManagementService managementService;
     @Inject
     private ManagementServerHostDao managementServerHostDao;
+    @Inject
+    private MessageBus messageBus;
 
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
@@ -142,8 +148,29 @@ public class OntapAsupManager extends ManagerBase {
         // tasks during its own start-phase and rejects late submissions. Using the shared
         // scheduler means this plugin does not create or manage its own thread.
         backgroundPollManager.submitTask(new OntapAsupPollTask());
+        // re-run the existing poll check when our
+        // dynamic keys change so the new value is applied without waiting for the next wakeup.
+        messageBus.subscribe(EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, this::onAsupConfigEdited);
         logger.info("OntapAsupManager configured; ASUP poll task submitted to BackgroundPollManager");
         return true;
+    }
+
+    /**
+     * CloudStack publishes this after invalidating the config cache. Reuses
+     * {@link OntapAsupPollTask} so enable/interval rules stay in one place.
+     */
+    @SuppressWarnings("unchecked")
+    private void onAsupConfigEdited(String senderAddress, String subject, Object args) {
+        if (!(args instanceof Ternary)) {
+            return;
+        }
+        String updatedKey = ((Ternary<String, ConfigKey.Scope, Long>) args).first();
+        if (!OntapConfigurationManager.AsupEnabled.key().equals(updatedKey)
+                && !OntapConfigurationManager.AsupIntervalSeconds.key().equals(updatedKey)) {
+            return;
+        }
+        logger.debug("ONTAP ASUP: [{}] was updated; re-evaluating now.", updatedKey);
+        new OntapAsupPollTask().run();
     }
 
     /**
@@ -152,8 +179,8 @@ public class OntapAsupManager extends ManagerBase {
      * <p>Wakes every {@link #ASUP_POLL_CHECK_INTERVAL_MS} ms. If ASUP is disabled the
      * wakeup returns immediately without advancing {@link #lastPushTime}. Otherwise it
      * reads the live {@link OntapConfigurationManager#AsupIntervalSeconds} and only pushes if that interval has
-     * elapsed. Interval and enable changes in the UI take effect within one check cycle
-     * — no restart required.</p>
+     * elapsed. Interval and enable changes in the UI also trigger this check via
+     * {@link #onAsupConfigEdited}.</p>
      */
     protected class OntapAsupPollTask extends ManagedContextRunnable implements BackgroundPollTask {
         @Override
