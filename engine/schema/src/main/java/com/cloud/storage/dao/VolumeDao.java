@@ -184,10 +184,10 @@ public interface VolumeDao extends GenericDao<VolumeVO, Long>, StateDao<Volume.S
 
     /**
      * Returns true if any VM with a non-destroyed ROOT volume on {@code poolId} also has a
-     * non-destroyed DATADISK on a different pool. Existence check only ({@code LIMIT 1});
-     * does not load volumes into memory.
+     * non-destroyed DATADISK on a different primary storage pool. Existence check only
+     * ({@code LIMIT 1}); does not load volumes into memory.
      */
-    boolean hasMultiPoolVm(long poolId);
+    boolean hasMultiPrimaryStoragePoolVm(long poolId);
 
     /**
      *  Retrieves volume by its externalId
