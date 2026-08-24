@@ -145,16 +145,35 @@ public class OntapStorageConstants {
     public static final String ASUP_EVENT_ID_HEARTBEAT = "0";
     public static final String ASUP_EVENT_ID_STORAGE_POOL = "1";
     public static final String ASUP_UNKNOWN = "unknown";
+    /** Event-id 0/1 JSON field: short human-readable description of the message. */
+    public static final String ASUP_MESSAGE = "message";
+    public static final String ASUP_HEARTBEAT_MESSAGE = "CloudStack connected to Unified ONTAP cluster";
+    public static final String ASUP_POOL_MESSAGE = "CloudStack storage pool backed by Unified ONTAP volume";
+    public static final String ASUP_POOL_NAME = "poolName";
+    public static final String ASUP_PROTOCOL = "protocol";
+    public static final String ASUP_SVM = "svm";
+    public static final String ASUP_ONTAP_VOLUME_UUID = "ontapVolumeUuid";
+    public static final String ASUP_CLOUDSTACK_VERSION = "cloudstackVersion";
+    public static final String ASUP_PLATFORM = "platform";
+    public static final String ASUP_ONTAP_VERSION = "ontapVersion";
+    public static final String ASUP_CLUSTER_UUID = "clusterUuid";
+    public static final String ASUP_MANAGEMENT_SERVER_COUNT = "managementServerCount";
     /** Event-id 0 field: VM snapshots spanning multiple ONTAP pools (consistency group). */
     public static final String ASUP_SNAPSHOT_ACROSS_POOL = "snapshot_across_pool";
+    public static final String ASUP_MULTI_POOL_VM = "multiPoolVm";
+    public static final String ASUP_ROOT_DISK_COUNT = "rootDiskCount";
+    public static final String ASUP_DATA_DISK_COUNT = "dataDiskCount";
+    public static final String ASUP_TOTAL_LOGICAL_SIZE_BYTES = "totalLogicalSizeBytes";
+    public static final String ASUP_VOLUME_SNAPSHOT_COUNT = "volumeSnapshotCount";
+    public static final String ASUP_VM_SNAPSHOT_COUNT = "vmSnapshotCount";
     public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
     public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable.";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_SECONDS = 3600; // 1 hour
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 10800; // 3 hours
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
     public static final String ASUP_INTERVAL_DESCRIPTION = "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
-            + "Allowed range: 3600-86400 (1 hour to 24 hours). Default: 43200 (12 hours).";
+            + "Allowed range: 10800-86400 (3 hours to 24 hours). Default: 43200 (12 hours).";
 }

@@ -18,7 +18,10 @@
  */
 package org.apache.cloudstack.storage.asup;
 
+import com.cloud.cluster.ManagementServerHostVO;
+import com.cloud.cluster.dao.ManagementServerHostDao;
 import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.server.ManagementService;
 import com.cloud.storage.Snapshot;
 import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.Volume;
@@ -28,6 +31,8 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.vm.snapshot.VMSnapshot;
 import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
+import org.apache.cloudstack.framework.config.ConfigKey;
+import org.apache.cloudstack.framework.config.impl.ConfigDepotImpl;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -45,6 +50,7 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
@@ -80,6 +86,8 @@ class OntapAsupManagerTest {
     @Mock private VolumeDao volumeDao;
     @Mock private SnapshotDao snapshotDao;
     @Mock private VMSnapshotDao vmSnapshotDao;
+    @Mock private ManagementService managementService;
+    @Mock private ManagementServerHostDao managementServerHostDao;
 
     @InjectMocks
     private OntapAsupManager asupManager;
@@ -108,18 +116,20 @@ class OntapAsupManagerTest {
         mockCluster = mock(Cluster.class);
         lenient().when(mockCluster.getUuid()).thenReturn("cluster-uuid-1");
         lenient().when(mockCluster.getName()).thenReturn("ontap-cluster-1");
+        lenient().when(managementService.getVersion()).thenReturn("4.23.0.0-SNAPSHOT");
+        lenient().when(managementServerHostDao.listAll()).thenReturn(Collections.emptyList());
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // pushAsupForAllStoragePools – no pools
+    // pushAsupTelemetry – no pools
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    void pushAsupForAllPools_noOntapPools_sendsNoMessages() {
+    void pushAsupTelemetry_noOntapPools_sendsNoMessages() {
         when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
                 .thenReturn(Collections.emptyList());
 
-        asupManager.pushAsupForAllStoragePools();
+        asupManager.pushAsupTelemetry();
 
         verify(mockStrategy, never()).sendAsupMessage(any());
     }
@@ -137,7 +147,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         // heartbeat (event-id 0) + pool (event-id 1) = 2 messages
@@ -148,6 +158,8 @@ class OntapAsupManagerTest {
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT,    msgs.get(0).getEventId());
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, msgs.get(1).getEventId());
         assertTrue(msgs.get(0).getEventDescription().contains("\"snapshot_across_pool\":true"),
+                msgs.get(0).getEventDescription());
+        assertTrue(msgs.get(0).getEventDescription().contains("\"managementServerCount\":0"),
                 msgs.get(0).getEventDescription());
     }
 
@@ -163,7 +175,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", clustersHeartbeated);
+            asupManager.pushAsupForStoragePool(pool, clustersHeartbeated);
         }
 
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
@@ -178,7 +190,7 @@ class OntapAsupManagerTest {
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenThrow(new RuntimeException("connection refused"));
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         verify(mockStrategy, never()).sendAsupMessage(any());
@@ -191,7 +203,7 @@ class OntapAsupManagerTest {
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenThrow(new RuntimeException("no details"));
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         verify(mockStrategy, never()).sendAsupMessage(any());
@@ -210,7 +222,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
@@ -218,6 +230,7 @@ class OntapAsupManagerTest {
         assertTrue(desc.contains("cluster-uuid-1"),        "should contain cluster UUID");
         assertTrue(desc.contains("volumeSnapshotCount"), "should contain volumeSnapshotCount");
         assertTrue(desc.contains("vmSnapshotCount"),       "should contain vmSnapshotCount");
+        assertTrue(desc.contains("\"multiPoolVm\":false"), "desc=" + desc);
     }
 
     @Test
@@ -229,12 +242,29 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
         assertTrue(desc.contains("\"volumeSnapshotCount\":0"), "desc=" + desc);
         assertTrue(desc.contains("\"vmSnapshotCount\":0"),       "desc=" + desc);
+    }
+
+    @Test
+    void poolMessage_multiPoolVm_trueWhenDaoReportsSpan() {
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
+        when(volumeDao.hasMultiPoolVm(1L)).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+        }
+
+        String desc = capturePoolMessage();
+        assertTrue(desc.contains("\"multiPoolVm\":true"), "desc=" + desc);
     }
 
     @Test
@@ -255,7 +285,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
@@ -286,7 +316,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
@@ -309,7 +339,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
@@ -328,7 +358,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         String desc = capturePoolMessage();
@@ -350,7 +380,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         // heartbeat + pool both sent even when DAO fails
@@ -377,8 +407,8 @@ class OntapAsupManagerTest {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
 
             HashSet<String> clustersHeartbeated = new HashSet<>();
-            asupManager.pushAsupForStoragePool(pool,  "4.20.0", "mgmt-host", clustersHeartbeated);
-            asupManager.pushAsupForStoragePool(pool2, "4.20.0", "mgmt-host", clustersHeartbeated);
+            asupManager.pushAsupForStoragePool(pool,  clustersHeartbeated);
+            asupManager.pushAsupForStoragePool(pool2, clustersHeartbeated);
         }
 
         // 1 heartbeat + 2 pool messages = 3 total
@@ -404,7 +434,7 @@ class OntapAsupManagerTest {
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
             u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, "4.20.0", "mgmt-host", new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
         }
 
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
@@ -415,7 +445,8 @@ class OntapAsupManagerTest {
             assertEquals(OntapStorageConstants.ASUP_CATEGORY,     msg.getCategory());
             assertEquals(OntapStorageConstants.ASUP_SEVERITY,     msg.getSeverity());
             assertFalse(msg.getAutosupportRequired(), "autosupport_required should be false");
-            assertEquals("mgmt-host", msg.getComputerName());
+            assertEquals(asupManager.getComputerName(), msg.getComputerName());
+            assertEquals(asupManager.getCloudStackVersion(), msg.getAppVersion());
         }
     }
 
@@ -450,7 +481,7 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("3599"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("10799"));
         assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("86401"));
         assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("0"));
         assertThrows(InvalidParameterValueException.class, () -> OntapAsupManager.validateAsupInterval("abc"));
@@ -458,19 +489,19 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void clampAsupIntervalSeconds_fallsBackOutsideRange() {
+    void getAsupIntervalSeconds_fallsBackOutsideRange() {
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(null));
+                asupManager.getAsupIntervalSeconds(null));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(0));
+                asupManager.getAsupIntervalSeconds(0));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(3599));
+                asupManager.getAsupIntervalSeconds(10799));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(86401));
+                asupManager.getAsupIntervalSeconds(86401));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
+                asupManager.getAsupIntervalSeconds(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
         assertEquals(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
-                OntapAsupManager.clampAsupIntervalSeconds(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
+                asupManager.getAsupIntervalSeconds(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -481,6 +512,25 @@ class OntapAsupManagerTest {
     void pollTask_getDelay_returnsFixedCheckInterval() {
         OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
         assertEquals(OntapAsupManager.ASUP_POLL_CHECK_INTERVAL_MS, task.getDelay());
+    }
+
+    @Test
+    void pollTask_whenDisabled_doesNotAdvanceLastPushTime() throws Exception {
+        Instant original = Instant.EPOCH;
+        asupManager.lastPushTime = original;
+        ConfigDepotImpl previousDepot = getConfigDepot();
+        try {
+            ConfigDepotImpl depot = mock(ConfigDepotImpl.class);
+            when(depot.getConfigStringValue(eq(OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY),
+                    eq(ConfigKey.Scope.Global), isNull())).thenReturn("false");
+            setConfigDepot(depot);
+            OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+            task.run();
+        } finally {
+            setConfigDepot(previousDepot);
+        }
+        assertEquals(original, asupManager.lastPushTime);
+        verify(storagePoolDao, never()).findPoolsByProvider(any());
     }
 
     @Test
@@ -506,10 +556,21 @@ class OntapAsupManagerTest {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    void getCloudStackVersion_returnsNonBlank() {
-        String v = asupManager.getCloudStackVersion();
-        assertNotNull(v);
-        assertFalse(v.isEmpty());
+    void getCloudStackVersion_returnsManagementServiceVersion() {
+        assertEquals("4.23.0.0-SNAPSHOT", asupManager.getCloudStackVersion());
+    }
+
+    @Test
+    void getCloudStackVersion_blank_returnsUnknown() {
+        when(managementService.getVersion()).thenReturn("  ");
+        assertEquals(OntapStorageConstants.ASUP_UNKNOWN, asupManager.getCloudStackVersion());
+    }
+
+    @Test
+    void getManagementServerCount_returnsRegisteredHostCount() {
+        when(managementServerHostDao.listAll()).thenReturn(Arrays.asList(
+                mock(ManagementServerHostVO.class), mock(ManagementServerHostVO.class)));
+        assertEquals(2, asupManager.getManagementServerCount());
     }
 
     @Test
@@ -562,6 +623,18 @@ class OntapAsupManagerTest {
         SnapshotVO snap = mock(SnapshotVO.class);
         when(snap.getState()).thenReturn(state);
         return snap;
+    }
+
+    private static ConfigDepotImpl getConfigDepot() throws Exception {
+        Field field = ConfigKey.class.getDeclaredField("s_depot");
+        field.setAccessible(true);
+        return (ConfigDepotImpl) field.get(null);
+    }
+
+    private static void setConfigDepot(ConfigDepotImpl depot) throws Exception {
+        Field field = ConfigKey.class.getDeclaredField("s_depot");
+        field.setAccessible(true);
+        field.set(null, depot);
     }
 
     /** Creates a mock VMSnapshotVO with the given state and removed timestamp. */
