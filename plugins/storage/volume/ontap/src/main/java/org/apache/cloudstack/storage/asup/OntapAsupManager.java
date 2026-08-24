@@ -84,12 +84,11 @@ public class OntapAsupManager extends ManagerBase {
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
 
     /**
-     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask}. The task wakes on this cadence
-     * and checks whether the configured push interval
-     * ({@link OntapConfigurationManager#AsupIntervalSeconds})
-     * has elapsed. This decouples the scheduler's fixed delay from the live config value,
-     * so changes made in the CloudStack UI take effect without a management-server restart
-     * (within one wakeup).
+     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask} (2 hours). The task wakes on
+     * this cadence and checks whether the live configured push interval
+     * ({@link OntapConfigurationManager#AsupIntervalSeconds}) has elapsed. UI edits of that
+     * interval are applied immediately via the configuration-edit event; this delay is only
+     * the background check so a due push is still noticed with no UI click.
      */
     static final long ASUP_POLL_CHECK_INTERVAL_MS =
             TimeUnit.SECONDS.toMillis(OntapStorageConstants.ASUP_POLL_CHECK_INTERVAL_SECONDS);
@@ -307,11 +306,10 @@ public class OntapAsupManager extends ManagerBase {
 
     /**
      * Builds the heartbeat (event-id 0) description as a JSON object carrying the CloudStack and
-     * ONTAP versions, the management-server operating system platform, the ONTAP cluster UUID,
-     * and whether this plugin can snapshot a VM whose disks span multiple ONTAP pools.
+     * ONTAP versions, the management-server operating system platform, and the ONTAP cluster UUID.
      * Example: {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":
      * "4.23.0.0","platform":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1",
-     * "clusterUuid":"...","managementServerCount":2,"snapshot_across_pool":true}}
+     * "clusterUuid":"...","managementServerCount":2}}
      */
     private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion,
             String clusterUuid) {
