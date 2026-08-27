@@ -136,29 +136,35 @@ The test classes read `storageIP`, `svmName`, `username`, and `password` from th
 Run all suites for one protocol in a single batch, then inspect consolidated results:
 
 ```bash
-# iSCSI only — 5 suites, ~30–45 min
+# iSCSI only — 6 suites, ~40–60 min
 bash test/integration/plugins/ontap/run_tests.sh iscsi
 
-# NFS3 only — 5 suites, ~30–45 min
+# NFS3 only — 6 suites, ~40–60 min
 bash test/integration/plugins/ontap/run_tests.sh nfs3
 
-# Full plugin validation: iSCSI batch, then NFS3 batch (~60–90 min)
+# Full plugin validation: iSCSI batch, then NFS3 batch
 bash test/integration/plugins/ontap/run_tests.sh both
 
 # Default (setup_zone + iscsi + nfs3; excludes cleanup_zone)
 bash test/integration/plugins/ontap/run_tests.sh
 bash test/integration/plugins/ontap/run_tests.sh all
+
+# Template-cache suites only
+bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache
+bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache
 ```
 
-Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (last).
+Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach → template cache (last).
 
 | Command | What it runs |
 |---------|--------------|
-| `run_tests.sh iscsi` | All 5 iSCSI suites + unified iSCSI report |
-| `run_tests.sh nfs3` | All 5 NFS3 suites + unified NFS3 report |
+| `run_tests.sh iscsi` | All 6 iSCSI suites + unified iSCSI report |
+| `run_tests.sh nfs3` | All 6 NFS3 suites + unified NFS3 report |
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
 | `run_tests.sh all` | `setup_zone`, then `both` (iSCSI before NFS3) |
 | `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
+| `run_tests.sh nfs3_template_cache` | NFS3 template-cache suite only |
+| `run_tests.sh iscsi_template_cache` | iSCSI template-cache suite only |
 | `run_tests.sh setup_zone` | Zone setup only |
 | `run_tests.sh cleanup_zone` | Zone teardown (manual; destructive) |
 
@@ -309,11 +315,13 @@ self.assertEqual(result.state, "Maintenance")
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
+| NFS3 Template Cache | `nfs3/template/test_template_cache.py` | 6 | ROOT on tagged pool; seed/reuse cache; survive VM delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
+| iSCSI Template Cache | `iscsi/template/test_template_cache.py` | 6 | ROOT on tagged pool; `cs_tmpl_*` LUN cache seed/reuse |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
 
