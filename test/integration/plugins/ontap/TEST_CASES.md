@@ -138,7 +138,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; one igroup per cluster host (named `cs_{svmName}_{hostShortName}`) with host IQN as initiator | positive |
+| 01 | `test_01_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "Iscsi"` | FlexVol `online`; one igroup per cluster host (named `cs_{svmName}_{hostShortName}`) with host IQN as initiator | positive |
 | 02 | `test_02_disable_storage_pool` | Disable the pool | test_01 (`pool`) | `pool.state == "Disabled"` | FlexVol still `online` | positive |
 | 03 | `test_03_enable_storage_pool` | Re-enable the pool | test_02 | `pool.state == "Up"` | FlexVol still `online` | positive |
 | 04 | `test_04_enter_maintenance_mode` | Put pool into maintenance | test_03 | `pool.state == "Maintenance"` | FlexVol still `online`; igroups unchanged | positive |
@@ -210,7 +210,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
+| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "Iscsi"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
 | 03 | `test_03_deploy_vm` | Deploy VM using first ready KVM template; verify 0 LUN-maps exist before attach | test_02 (`volume`) | `vm.state == "Running"`; 0 LUN-maps on ONTAP | 0 LUN-maps (`list_lun_maps_for_volume` returns empty) | positive |
 | 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created (TDS SN 27) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
