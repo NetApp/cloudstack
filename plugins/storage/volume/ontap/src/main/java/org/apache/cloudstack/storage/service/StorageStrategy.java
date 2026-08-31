@@ -316,7 +316,8 @@ public abstract class StorageStrategy {
             }
             String jobUUID = jobResponse.getJob().getUuid();
 
-            Boolean jobSucceeded = jobPollForSuccess(jobUUID,10, 1000);
+            Boolean jobSucceeded = jobPollForSuccess(jobUUID, OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES,
+                    OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
             if (!jobSucceeded) {
                 logger.error("Volume creation job failed for volume: " + volumeName);
                 throw new CloudRuntimeException("Volume creation job failed for volume: " + volumeName);
@@ -390,7 +391,8 @@ public abstract class StorageStrategy {
             Volume resizeRequest = new Volume();
             resizeRequest.setSize(volume.getSize());
             JobResponse jobResponse = volumeFeignClient.updateVolume(authHeader, volume.getUuid(), resizeRequest);
-            pollJobIfPresent(jobResponse, "resize FlexVolume [" + volume.getUuid() + "]", 10, 1000);
+            pollJobIfPresent(jobResponse, "resize FlexVolume [" + volume.getUuid() + "]",
+                    OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES, OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
             logger.info("FlexVolume '{}' (UUID: {}) resized successfully to {} bytes", volume.getName(), volume.getUuid(), volume.getSize());
         } catch (FeignException e) {
             if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
@@ -416,7 +418,8 @@ public abstract class StorageStrategy {
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {
             JobResponse jobResponse = volumeFeignClient.deleteVolume(authHeader, volume.getUuid());
-            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(), 10, 1000);
+            Boolean jobSucceeded = jobPollForSuccess(jobResponse.getJob().getUuid(),
+                    OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES, OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
             if (!jobSucceeded) {
                 logger.error("Volume deletion job failed for volume: " + volume.getName());
                 throw new CloudRuntimeException("Volume deletion job failed for volume: " + volume.getName());
