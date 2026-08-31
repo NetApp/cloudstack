@@ -88,6 +88,9 @@ public class UnifiedNASStrategy extends NASStrategy {
                 logger.error("createCloudStackVolume: " + errMsg);
                 throw new CloudRuntimeException(errMsg);
             }
+            if (cloudstackVolume.getFile() != null && cloudstackVolume.getFile().getQosPolicy() != null) {
+                updateCloudStackVolume(cloudstackVolume);
+            }
             return cloudstackVolume;
         }catch (Exception e) {
             logger.error("createCloudStackVolume: error occured " + e);
@@ -96,8 +99,19 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        return null;
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null
+                || cloudstackVolume.getFlexVolumeUuid() == null || cloudstackVolume.getFile() == null) {
+            throw new CloudRuntimeException("Invalid NFS volume QoS update request");
+        }
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(cloudstackVolume.getFile().getQosPolicy());
+        String filePath = cloudstackVolume.getVolumeInfo().getUuid();
+        nasFeignClient.updateFile(getAuthHeader(), cloudstackVolume.getFlexVolumeUuid(), filePath, fileInfo);
+        logger.info("Applied QoS policy [{}] to NFS volume file [{}]",
+                cloudstackVolume.getFile().getQosPolicy() != null
+                        ? cloudstackVolume.getFile().getQosPolicy().getName() : null, filePath);
+        return cloudstackVolume;
     }
 
     @Override

@@ -192,7 +192,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(sanStrategy);
             utilityMock.when(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
-                    any(), any(), any())).thenReturn(requestVolume);
+                    any(), any(), any(), any())).thenReturn(requestVolume);
             when(sanStrategy.createCloudStackVolume(any())).thenReturn(responseVolume);
 
             // Execute
@@ -238,7 +238,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(nasStrategy);
             utilityMock.when(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
-                    any(), any(), any())).thenReturn(mockCloudStackVolume);
+                    any(), any(), any(), any())).thenReturn(mockCloudStackVolume);
 
             when(nasStrategy.createCloudStackVolume(any())).thenReturn(mockCloudStackVolume);
 

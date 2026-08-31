@@ -25,9 +25,11 @@ import java.util.Map;
 import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
@@ -60,8 +62,10 @@ public class OntapStorageUtils {
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
     }
 
-    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details, DataObject volumeObject) {
+    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details,
+                                                                           DataObject volumeObject, VolumeQosPolicy qosPolicy) {
         CloudStackVolume cloudStackVolumeRequest = null;
+        VolumeQosPolicy qosPolicyReference = toQosPolicyReference(qosPolicy);
 
         String protocol = details.get(OntapStorageConstants.PROTOCOL);
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
@@ -69,7 +73,13 @@ public class OntapStorageUtils {
             case NFS3:
                 cloudStackVolumeRequest = new CloudStackVolume();
                 cloudStackVolumeRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                cloudStackVolumeRequest.setFlexVolumeUuid(details.get(OntapStorageConstants.VOLUME_UUID));
                 cloudStackVolumeRequest.setVolumeInfo(volumeObject);
+                if (qosPolicyReference != null) {
+                    FileInfo fileInfo = new FileInfo();
+                    fileInfo.setQosPolicy(qosPolicyReference);
+                    cloudStackVolumeRequest.setFile(fileInfo);
+                }
                 break;
             case ISCSI:
                 Svm svm = new Svm();
@@ -92,6 +102,7 @@ public class OntapStorageUtils {
 
                 String osType = getOSTypeFromHypervisor(storagePool.getHypervisor().name());
                 lunRequest.setOsType(Lun.OsTypeEnum.valueOf(osType));
+                lunRequest.setQosPolicy(qosPolicyReference);
 
                 cloudStackVolumeRequest.setLun(lunRequest);
                 break;
@@ -100,6 +111,16 @@ public class OntapStorageUtils {
 
         }
         return cloudStackVolumeRequest;
+    }
+
+    private static VolumeQosPolicy toQosPolicyReference(VolumeQosPolicy qosPolicy) {
+        if (qosPolicy == null) {
+            return null;
+        }
+        VolumeQosPolicy reference = new VolumeQosPolicy();
+        reference.setName(qosPolicy.getName());
+        reference.setUuid(qosPolicy.getUuid());
+        return reference;
     }
 
     public static boolean isValidName(String name) {
@@ -175,6 +196,17 @@ public class OntapStorageUtils {
     public static String getLunName(String volName, String lunName) {
         //LUN name in ONTAP unified format: "/vol/VolumeName/LunName"
         return OntapStorageConstants.VOLUME_PATH_PREFIX + volName + OntapStorageConstants.SLASH + lunName;
+    }
+
+    /**
+     * Builds a reusable SVM-scoped QoS policy name: cs_{min}to{max}iops_svm_{svmName}.
+     * Dots in the SVM name are replaced with underscores (ONTAP QoS names cannot contain '.').
+     */
+    public static String buildQosPolicyName(String svmName, Long minIops, Long maxIops) {
+        String sanitizedSvmName = svmName == null ? "" : svmName.replace(".", OntapStorageConstants.UNDERSCORE);
+        return OntapStorageConstants.QOS_POLICY_NAME_PREFIX + minIops
+                + OntapStorageConstants.QOS_POLICY_NAME_TO + maxIops
+                + OntapStorageConstants.QOS_POLICY_NAME_IOPS_SVM + sanitizedSvmName;
     }
 
     /**

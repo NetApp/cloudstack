@@ -101,6 +101,11 @@ public class OntapStorageConstants {
     public static final String LUN_DOT_NAME = "lun.name";
     public static final String IQN = "iqn";
     public static final String LUN_DOT_UUID = "lun.uuid";
+    public static final String QOS_POLICY_NAME = "qosPolicyName";
+    public static final String QOS_POLICY_UUID = "qosPolicyUuid";
+    public static final String QOS_POLICY_NAME_PREFIX = "cs_";
+    public static final String QOS_POLICY_NAME_TO = "to";
+    public static final String QOS_POLICY_NAME_IOPS_SVM = "iops_svm_";
     public static final String LOGICAL_UNIT_NUMBER = "logical_unit_number";
     public static final String IGROUP_DOT_NAME = "igroup.name";
     public static final String IGROUP_DOT_UUID = "igroup.uuid";

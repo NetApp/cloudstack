@@ -26,6 +26,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class VolumeQosPolicy {
+    @JsonProperty("fixed")
+    private Fixed fixed;
+
     @JsonProperty("max_throughput_iops")
     private Integer maxThroughputIops = null;
 
@@ -40,6 +43,17 @@ public class VolumeQosPolicy {
 
     @JsonProperty("uuid")
     private String uuid = null;
+
+    @JsonProperty("svm")
+    private Svm svm;
+
+    public Fixed getFixed() {
+        return fixed;
+    }
+
+    public void setFixed(Fixed fixed) {
+        this.fixed = fixed;
+    }
 
     public Integer getMaxThroughputIops() {
         return maxThroughputIops;
@@ -79,5 +93,50 @@ public class VolumeQosPolicy {
 
     public void setUuid(String uuid) {
         this.uuid = uuid;
+    }
+
+    public Svm getSvm() {
+        return svm;
+    }
+
+    public void setSvm(Svm svm) {
+        this.svm = svm;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class Fixed {
+        @JsonProperty("capacity_shared")
+        private Boolean capacityShared;
+
+        @JsonProperty("min_throughput_iops")
+        private Long minThroughputIops;
+
+        @JsonProperty("max_throughput_iops")
+        private Long maxThroughputIops;
+
+        public Boolean getCapacityShared() {
+            return capacityShared;
+        }
+
+        public void setCapacityShared(Boolean capacityShared) {
+            this.capacityShared = capacityShared;
+        }
+
+        public Long getMinThroughputIops() {
+            return minThroughputIops;
+        }
+
+        public void setMinThroughputIops(Long minThroughputIops) {
+            this.minThroughputIops = minThroughputIops;
+        }
+
+        public Long getMaxThroughputIops() {
+            return maxThroughputIops;
+        }
+
+        public void setMaxThroughputIops(Long maxThroughputIops) {
+            this.maxThroughputIops = maxThroughputIops;
+        }
     }
 }
