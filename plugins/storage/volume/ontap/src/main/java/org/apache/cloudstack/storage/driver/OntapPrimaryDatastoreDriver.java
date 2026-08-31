@@ -212,7 +212,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private CloudStackVolume createCloudStackVolume(StoragePoolVO storagePool, VolumeInfo volumeObject, Map<String, String> details) {
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
         validatePoolIopsCapacityForCreate(storagePool, volumeObject.getMinIops());
-        VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details.get(OntapStorageConstants.SVM_NAME),
+        VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
                 volumeObject.getMinIops(), volumeObject.getMaxIops());
         CloudStackVolume cloudStackVolumeRequest = OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
                 storagePool, details, volumeObject, qosPolicy);
@@ -229,17 +229,38 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
     }
 
-    private VolumeQosPolicy createQosPolicyIfNeeded(StorageStrategy storageStrategy, String svmName,
+    private VolumeQosPolicy createQosPolicyIfNeeded(StorageStrategy storageStrategy, Map<String, String> details,
                                                      Long minIops, Long maxIops) {
         if (!hasQosLimits(minIops, maxIops)) {
             return null;
         }
-        String policyName = OntapStorageUtils.buildQosPolicyName(svmName, minIops, maxIops);
+        validateMinIopsSupport(details, minIops);
+        String policyName = OntapStorageUtils.buildQosPolicyName(
+                details.get(OntapStorageConstants.SVM_NAME), minIops, maxIops);
         return storageStrategy.createVolumeQosPolicy(policyName, minIops, maxIops);
     }
 
+    private void validateMinIopsSupport(Map<String, String> details, Long minIops) {
+        if (!isPositive(minIops)) {
+            return;
+        }
+        String isAff = details.get(OntapStorageConstants.IS_AFF);
+        if (isAff == null) {
+            throw new CloudRuntimeException(
+                    "ONTAP pool is missing the isAFF platform detail required to validate minimum IOPS");
+        }
+        if (!Boolean.parseBoolean(isAff)) {
+            throw new CloudRuntimeException(
+                    "Minimum IOPS is not supported on FAS/non-AFF ONTAP platforms; only maximum IOPS is supported");
+        }
+    }
+
     private boolean hasQosLimits(Long minIops, Long maxIops) {
-        return minIops != null && minIops > 0 && maxIops != null && maxIops > 0;
+        return isPositive(minIops) || isPositive(maxIops);
+    }
+
+    private static boolean isPositive(Long iops) {
+        return iops != null && iops > 0;
     }
 
     private void validatePoolIopsCapacityForCreate(StoragePoolVO storagePool, Long requestedMinIops) {
@@ -483,7 +504,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             if (hasQosLimits(payload.newMinIops, payload.newMaxIops)) {
                 VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy,
-                        details.get(OntapStorageConstants.SVM_NAME), payload.newMinIops, payload.newMaxIops);
+                        details, payload.newMinIops, payload.newMaxIops);
                 if (previousPolicyUuid == null || !previousPolicyUuid.equals(qosPolicy.getUuid())) {
                     attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
                     persistQosPolicyDetails(volume.getId(), qosPolicy);

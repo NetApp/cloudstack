@@ -204,8 +204,10 @@ public class OntapStorageUtils {
      */
     public static String buildQosPolicyName(String svmName, Long minIops, Long maxIops) {
         String sanitizedSvmName = svmName == null ? "" : svmName.replace(".", OntapStorageConstants.UNDERSCORE);
-        return OntapStorageConstants.QOS_POLICY_NAME_PREFIX + minIops
-                + OntapStorageConstants.QOS_POLICY_NAME_TO + maxIops
+        long min = minIops != null && minIops > 0 ? minIops : 0;
+        long max = maxIops != null && maxIops > 0 ? maxIops : 0;
+        return OntapStorageConstants.QOS_POLICY_NAME_PREFIX + min
+                + OntapStorageConstants.QOS_POLICY_NAME_TO + max
                 + OntapStorageConstants.QOS_POLICY_NAME_IOPS_SVM + sanitizedSvmName;
     }
 

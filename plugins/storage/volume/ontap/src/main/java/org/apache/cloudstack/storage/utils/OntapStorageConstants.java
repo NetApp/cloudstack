@@ -69,6 +69,8 @@ public class OntapStorageConstants {
     public static final String STATE = "state";
     public static final String AGGREGATE_NODE = "node";
     public static final String AGGREGATE_SPACE = "space";
+    public static final String IS_ALL_FLASH_OPTIMIZED = "is_all_flash_optimized";
+    public static final String IS_AFF = "isAFF";
     public static final String DATA_NFS = "data_nfs";
     public static final String DATA_ISCSI = "data_iscsi";
     public static final String IP_ADDRESS = "ip.address";

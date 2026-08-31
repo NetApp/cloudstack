@@ -60,6 +60,7 @@ import static org.mockito.Mockito.withSettings;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -127,6 +128,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_clusterDao.findById(1L)).thenReturn(clusterVO);
 
         when(storageStrategy.connect()).thenReturn(true);
+        when(storageStrategy.isAff()).thenReturn(true);
         when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("testNetworkInterface", null));
 
         Volume volume = new Volume();
@@ -192,6 +194,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         try(MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
             storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
             ontapPrimaryDatastoreLifecycle.initialize(dsInfos);
+            assertEquals(Boolean.TRUE.toString(), detailsMap.get(OntapStorageConstants.IS_AFF));
         }
     }
 

@@ -104,6 +104,32 @@ public class Cluster {
         this.disaggregated = disaggregated;
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class Node {
+        @JsonProperty("name")
+        private String name;
+
+        @JsonProperty("is_all_flash_optimized")
+        private Boolean allFlashOptimized;
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Boolean getAllFlashOptimized() {
+            return allFlashOptimized;
+        }
+
+        public void setAllFlashOptimized(Boolean allFlashOptimized) {
+            this.allFlashOptimized = allFlashOptimized;
+        }
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(getName(), getUuid());

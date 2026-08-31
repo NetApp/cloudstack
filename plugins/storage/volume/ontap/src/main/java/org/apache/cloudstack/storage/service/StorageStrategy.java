@@ -26,6 +26,7 @@ import java.util.Objects;
 
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
+import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
@@ -35,6 +36,7 @@ import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
@@ -73,6 +75,7 @@ public abstract class StorageStrategy {
     protected SvmFeignClient svmFeignClient;
     protected JobFeignClient jobFeignClient;
     protected NetworkFeignClient networkFeignClient;
+    protected ClusterFeignClient clusterFeignClient;
     protected QosFeignClient qosFeignClient;
     protected SANFeignClient sanFeignClient;
     protected NASFeignClient nasFeignClient;
@@ -105,6 +108,7 @@ public abstract class StorageStrategy {
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
         this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
+        this.clusterFeignClient = feignClientFactory.createClient(ClusterFeignClient.class, baseURL);
         this.qosFeignClient = feignClientFactory.createClient(QosFeignClient.class, baseURL);
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
@@ -810,6 +814,22 @@ public abstract class StorageStrategy {
         return createdPolicy;
     }
 
+    public boolean isAff() {
+        OntapResponse<Cluster.Node> response = clusterFeignClient.getNodes(getAuthHeader(),
+                Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.IS_ALL_FLASH_OPTIMIZED));
+        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+            throw new CloudRuntimeException(
+                    "Unable to determine whether the ONTAP cluster is AFF or FAS");
+        }
+
+        for (Cluster.Node node : response.getRecords()) {
+            if (!Boolean.TRUE.equals(node.getAllFlashOptimized())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public void updateVolumeQosPolicy(String policyUuid, Long minIops, Long maxIops) {
         if (policyUuid == null || policyUuid.isEmpty()) {
             throw new CloudRuntimeException("QoS policy UUID is required");
@@ -853,8 +873,13 @@ public abstract class StorageStrategy {
         if (includeCapacityShared) {
             fixed.setCapacityShared(false);
         }
-        fixed.setMinThroughputIops(minIops);
-        fixed.setMaxThroughputIops(maxIops);
+        // ONTAP rejects a policy whose throughput limit is zero, so only unlimited-side values are omitted.
+        if (minIops != null && minIops > 0) {
+            fixed.setMinThroughputIops(minIops);
+        }
+        if (maxIops != null && maxIops > 0) {
+            fixed.setMaxThroughputIops(maxIops);
+        }
 
         VolumeQosPolicy policy = new VolumeQosPolicy();
         policy.setName(policyName);

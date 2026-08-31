@@ -147,6 +147,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
         boolean isValid = storageStrategy.connect();
         if (isValid) {
+            details.put(OntapStorageConstants.IS_AFF, Boolean.toString(storageStrategy.isAff()));
             if (storageStrategy.getResolvedSvmUuid() != null && !storageStrategy.getResolvedSvmUuid().isEmpty()) {
                 details.put(OntapStorageConstants.SVM_UUID, storageStrategy.getResolvedSvmUuid());
             }

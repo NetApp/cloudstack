@@ -29,11 +29,13 @@ import java.util.Map;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
+import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
@@ -47,6 +49,7 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -92,6 +95,9 @@ public class StorageStrategyTest {
 
     @Mock
     private NetworkFeignClient networkFeignClient;
+
+    @Mock
+    private ClusterFeignClient clusterFeignClient;
 
     @Mock
     private SANFeignClient sanFeignClient;
@@ -206,6 +212,51 @@ public class StorageStrategyTest {
         storageStrategy = new TestableStorageStrategy(ontapStorage,
                 aggregateFeignClient, volumeFeignClient, svmFeignClient,
                 jobFeignClient, networkFeignClient, sanFeignClient, snapshotFeignClient);
+        storageStrategy.injectMockedClient("clusterFeignClient", clusterFeignClient);
+    }
+
+    private static OntapResponse<Cluster.Node> responseWithNode(String nodeName, Boolean allFlashOptimized) {
+        Cluster.Node node = new Cluster.Node();
+        node.setName(nodeName);
+        node.setAllFlashOptimized(allFlashOptimized);
+        return new OntapResponse<>(List.of(node));
+    }
+
+    @Test
+    public void testIsAffReturnsTrueForAllFlashOptimizedCluster() {
+        when(clusterFeignClient.getNodes(anyString(), anyMap()))
+                .thenReturn(responseWithNode("aff-node", true));
+
+        assertTrue(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAffReturnsFalseForNonAffCluster() {
+        when(clusterFeignClient.getNodes(anyString(), anyMap()))
+                .thenReturn(responseWithNode("fas-node", false));
+
+        assertFalse(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAffReturnsFalseForMixedAffAndFasCluster() {
+        Cluster.Node affNode = new Cluster.Node();
+        affNode.setName("aff-node");
+        affNode.setAllFlashOptimized(true);
+        Cluster.Node fasNode = new Cluster.Node();
+        fasNode.setName("fas-node");
+        fasNode.setAllFlashOptimized(false);
+        when(clusterFeignClient.getNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(affNode, fasNode)));
+
+        assertFalse(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAffFailsWhenClusterNodesAreUnavailable() {
+        when(clusterFeignClient.getNodes(anyString(), anyMap())).thenReturn(new OntapResponse<>());
+
+        assertThrows(CloudRuntimeException.class, () -> storageStrategy.isAff());
     }
 
     // ========== connect() Tests ==========
