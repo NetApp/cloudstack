@@ -1,0 +1,124 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+# Copy this file to config.yaml and fill in your lab's real values.
+# config.yaml is gitignored - never commit real credentials/IPs.
+
+cloudstack:
+  api_url: "http://10.193.56.12:8080/client/api"
+  username: "admin"
+  password: "password"
+  verify_ssl: false          # CloudStack mgmt server usually plain http/self-signed
+  # createStoragePool is synchronous from the client's POV and internally polls
+  # ONTAP jobs for up to 60s (StorageStrategy.jobPollForSuccess: 30 retries *
+  # 2000ms) before returning. Under C=20-30 concurrency, createStoragePool can
+  # legitimately take close to that full 60s. A 30s client timeout was firing
+  # "Read timed out" on calls that actually succeeded moments later on the
+  # server (confirmed via real CloudStack pool records found + deleted during
+  # cleanup) - so keep meaningful headroom above the plugin's poll budget.
+  http_timeout_sec: 90       # per HTTP request
+  job_timeout_sec: 300       # max wait for an async job (enable/cancel maintenance)
+  job_poll_interval_sec: 1.5
+
+# Zone/pod/cluster the pools will be created under. scope=cluster needs
+# podid+clusterid; scope=zone only needs zoneid.
+infrastructure:
+  zoneid: "91659187-b00b-4997-8ae3-8955c05a7d48"
+  podid: "004494cc-8a24-4519-9cd4-5e68b2eff03a"
+  clusterid: "23788acb-1a63-45a9-8c61-5ed8f5374bc6"
+  scope: "cluster"
+
+# One entry per protocol you want to benchmark. Keys must be "nfs3"/"iscsi"
+# to match --protocol on the CLI. Remove a block if you don't have that
+# backend available.
+# NOTE: the ONTAP plugin (StorageStrategy.java) builds its REST API base URL
+# from storageIP for EVERY call (aggregates/volumes/svm/jobs/network/san/nas) -
+# it never falls back to `url`. storageIP MUST answer HTTPS/443 with the ONTAP
+# REST service (i.e. it needs the same management-https access as the mgmt
+# LIF). A pure data-only LIF (NFS/iSCSI only, no REST) will fail with
+# "errorcode":530 / "Connection refused" on createStoragePool. If your data
+# LIFs don't have REST enabled, point storageIP at the mgmt LIF instead (as
+# below) rather than the actual data LIF.
+ontap:
+  nfs3:
+    provider: "NetApp ONTAP"
+    url: "https://10.0.0.10"       # ONTAP mgmt LIF URL
+    storageIP: "10.0.0.10"          # must answer HTTPS/443 (see NOTE above)
+    svmName: "vs0"
+    protocol: "NFS3"
+    username: "admin"
+    password_b64: "cGFzc3dvcmQ="       # base64-encoded ONTAP password (this is "password" - replace it)
+    capacitybytes: 10737418240          # 10 GiB per pool
+    tags: "bench_nfs3"
+  iscsi:
+    provider: "NetApp ONTAP"
+    url: "https://10.0.0.11"
+    storageIP: "10.0.0.11"          # must answer HTTPS/443 (see NOTE above)
+    svmName: "vs0"
+    protocol: "ISCSI"
+    username: "admin"
+    password_b64: "cGFzc3dvcmQ="
+    capacitybytes: 10737418240
+    tags: "bench_iscsi"
+
+benchmark:
+  pool_name_prefix: "bench_ontap"  # ONTAP volume names disallow "-"; use "_" only
+  sequential_checkpoints: [1, 5, 10, 20, 30]
+  concurrency_levels: [2, 5, 10, 20, 30]
+  # Pause between deleteStoragePool calls to give the mgmt server GC/ONTAP a
+  # beat; set to 0 to hammer as fast as possible.
+  inter_op_delay_sec: 0
+  output_dir: "results"
+
+# VM instance benchmark (benchmark_vm_instance_sequential.py /
+# benchmark_vm_instance_concurrency.py / benchmark_vm_instance_combined.py). Requires:
+#  - a template (templateid)
+#  - a network (networkid)
+#  - per protocol: a service offering (root disk) + disk offering (data disk)
+#    whose storage `tags` both match a persistent bench_vm_<protocol> pool, so
+#    root and data disk land on the same pool. These are one-time setup
+#    (createServiceOffering / createDiskOffering / createStoragePool) - not
+#    created/destroyed by the benchmark itself, unlike the storage-pool
+#    benchmark's transient pools.
+# NOTE: watch aggregate capacity - StorageStrategy.java's aggregate-selection
+# pre-check requires available space >= requested size even though volumes
+# are created with guarantee=none (thin). On small/vsim aggregates this can
+# reject valid requests; keep pool/disk sizes modest until that's addressed.
+vm_bench:
+  templateid: "1af26eaa-8985-4b1c-ae8e-d39b7984b8f3"
+  networkid: "5e6f4c59-dc01-4245-8c0f-2c1c9639b37d"
+  # CloudStack VM names are used as hostnames (RFC1123): letters/digits/"-" only,
+  # no "_" (the opposite of ONTAP's volume-name rule used by pool_name_prefix above).
+  vm_name_prefix: "bench-vm"
+  sequential_checkpoints: [1, 5, 10, 20]
+  concurrency_levels: [2, 5, 10]
+  inter_op_delay_sec: 0
+  output_dir: "results"
+  protocols:
+    nfs3:
+      # rootdisksize (GB, set on the offering) must be >= the template's
+      # actual qemu-img virtual size, not its download/file size - e.g. the
+      # stock Ubuntu 22.04 cloud image download is ~660MB on disk but has a
+      # 2.2 GiB virtual size. Undersizing this "works" on NFS (the backing
+      # file just grows past its nominal size) but hard-fails on iSCSI with
+      # "qemu-img: Cannot grow device files" since a LUN is a fixed-size
+      # block device that cannot be grown during the template copy.
+      serviceofferingid: "ac54f38c-5fd3-401b-b784-2c2163b08274"
+      diskofferingid: "e27813c0-6e8b-4375-8603-14c8ade75246"
+    iscsi:
+      serviceofferingid: "481feb00-16d8-4127-9937-cba3bec8a88b"
+      diskofferingid: "bf057b78-c5db-4ce4-820b-d7bd78f8ae69"
