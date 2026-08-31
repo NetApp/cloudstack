@@ -138,7 +138,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
             return null;
         }
 
