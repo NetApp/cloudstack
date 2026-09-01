@@ -482,7 +482,7 @@ class OntapAsupManagerTest {
     @Test
     void asupIntervalSeconds_descriptionIncludesAllowedRange() {
         String description = OntapConfigurationManager.AsupIntervalSeconds.description();
-        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS)));
+        assertTrue(description.contains("10800"));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS)));
     }
 
