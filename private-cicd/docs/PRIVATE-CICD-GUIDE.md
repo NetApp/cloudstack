@@ -768,10 +768,14 @@ PR mode creates one `cloudstack-ontap-presubmit` Check on exact SHA, starts it `
 completes the same Check as `success`, `failure`, or `cancelled`. API failures are non-fatal to Jenkins. A required
 Check still remains merge-safe when API reporting fails because no required success exists.
 
-`presubmit-results/success_or_not.log` contains UTC stage events. Mail behavior:
+`presubmit-results/stage-events.tsv` contains structured UTC stage events. The final post action converts text logs
+to HTML, writes `presubmit-results/report.html`, and archives those files before sending mail. Mail behavior:
 
-- one start mail with source/title/SHA/links;
-- one final mail with result, stage log, VM, build URL, and available failure excerpts;
+- one short HTML start mail with source, title, SHA, and build link;
+- one final HTML mail with result, VM, total duration, and a stage table with start time, duration, VM wait, and
+  links to the applicable HTML log;
+- a complete ONTAP test table with failures first and per-test links into the archived suite HTML logs;
+- no raw log tails in the message body; use the linked report or log to debug;
 - payload email first, then commit email; noreply ignored;
 - missing address or SMTP failure does not alter result;
 - no per-stage threading because Email Extension provides no stable Message-ID.
@@ -785,6 +789,8 @@ cloudstack-src/dist/deb-all/**/*
 
 Key paths:
 
+- browsable report: `presubmit-results/report.html`;
+- stage events: `presubmit-results/stage-events.tsv`;
 - Maven/JUnit: `presubmit-results/unit-tests/`;
 - packages: `cloudstack-src/dist/deb-all/`;
 - configure/health: `presubmit-results/phase2/{configure-cloudstack,health-check}.log`;
@@ -949,6 +955,11 @@ Template 404: published names may use three version components, such as
 
 ONTAP: inspect health, setup-env, setup_zone, iscsi/nfs3 logs, summaries, and copied Marvin logs. iSCSI hot-unplug
 error 530 may be a guest/lab limitation but remains a failure.
+
+The final mail and `presubmit-results/report.html` list every Marvin test with failures first. Select a test's
+**HTML log** link to open its archived suite log at that test. For an iSCSI VM workflow failure, use the link under
+`phase2/marvin/ontap-results/.../suites/iscsi_vm_workflow/stdout.log.html`; do not diagnose it from Maven,
+configure, or health logs that already passed.
 
 ### GitHub and mail
 
