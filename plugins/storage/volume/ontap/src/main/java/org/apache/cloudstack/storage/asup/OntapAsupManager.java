@@ -328,7 +328,7 @@ public class OntapAsupManager extends ManagerBase {
      * mapping, disk usage, and snapshot telemetry into a single EMS message.
      *
      * <p>Example: {@code {"message":"CloudStack storage pool backed by ONTAP volume",
-     * "poolName":"...","protocol":"nfs","clusterUuid":"...","svm":"...",
+     * "poolName":"...","poolStatus":"Up","protocol":"nfs","clusterUuid":"...","svm":"...",
      * "ontapVolumeUuid":"...","rootDiskCount":12,"dataDiskCount":18,
      * "totalLogicalSizeBytes":322122547200,"multiPrimaryStoragePoolVm":false,
      * "volumeSnapshotCount":5,"vmSnapshotCount":3}}</p>
@@ -338,6 +338,8 @@ public class OntapAsupManager extends ManagerBase {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put(OntapStorageConstants.ASUP_MESSAGE, OntapStorageConstants.ASUP_POOL_MESSAGE);
         payload.put(OntapStorageConstants.ASUP_POOL_NAME, defaultUnknown(pool.getName()));
+        payload.put(OntapStorageConstants.ASUP_POOL_STATUS,
+                pool.getStatus() == null ? OntapStorageConstants.ASUP_UNKNOWN : pool.getStatus().toString());
         payload.put(OntapStorageConstants.ASUP_PROTOCOL, defaultUnknown(details.get(OntapStorageConstants.PROTOCOL)));
         payload.put(OntapStorageConstants.ASUP_CLUSTER_UUID, defaultUnknown(clusterUuid));
         payload.put(OntapStorageConstants.ASUP_SVM, defaultUnknown(details.get(OntapStorageConstants.SVM_NAME)));

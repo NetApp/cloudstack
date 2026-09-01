@@ -24,6 +24,7 @@ import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.server.ManagementService;
 import com.cloud.storage.Snapshot;
 import com.cloud.storage.SnapshotVO;
+import com.cloud.storage.StoragePoolStatus;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.SnapshotDao;
@@ -104,6 +105,7 @@ class OntapAsupManagerTest {
         pool = mock(StoragePoolVO.class);
         lenient().when(pool.getId()).thenReturn(1L);
         lenient().when(pool.getName()).thenReturn("ontap-pool-1");
+        lenient().when(pool.getStatus()).thenReturn(StoragePoolStatus.Up);
 
         poolDetails = new HashMap<>();
         poolDetails.put(OntapStorageConstants.STORAGE_IP, "192.168.1.10");
@@ -226,10 +228,28 @@ class OntapAsupManagerTest {
 
         String desc = capturePoolMessage();
         assertTrue(desc.contains("ontap-pool-1"),          "should contain pool name");
+        assertTrue(desc.contains("\"poolStatus\":\"Up\""), "should contain pool status");
         assertTrue(desc.contains("cluster-uuid-1"),        "should contain cluster UUID");
         assertTrue(desc.contains("volumeSnapshotCount"), "should contain volumeSnapshotCount");
         assertTrue(desc.contains("vmSnapshotCount"),       "should contain vmSnapshotCount");
         assertTrue(desc.contains("\"multiPrimaryStoragePoolVm\":false"), "desc=" + desc);
+    }
+
+    @Test
+    void poolMessage_includesMaintenanceStatus() {
+        when(pool.getStatus()).thenReturn(StoragePoolStatus.Maintenance);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+        }
+
+        String desc = capturePoolMessage();
+        assertTrue(desc.contains("\"poolStatus\":\"Maintenance\""), "desc=" + desc);
     }
 
     @Test

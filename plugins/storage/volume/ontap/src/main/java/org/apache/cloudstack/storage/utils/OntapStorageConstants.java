@@ -150,6 +150,7 @@ public class OntapStorageConstants {
     public static final String ASUP_HEARTBEAT_MESSAGE = "CloudStack connected to Unified ONTAP cluster";
     public static final String ASUP_POOL_MESSAGE = "CloudStack storage pool backed by Unified ONTAP volume";
     public static final String ASUP_POOL_NAME = "poolName";
+    public static final String ASUP_POOL_STATUS = "poolStatus";
     public static final String ASUP_PROTOCOL = "protocol";
     public static final String ASUP_SVM = "svm";
     public static final String ASUP_ONTAP_VOLUME_UUID = "ontapVolumeUuid";
@@ -182,15 +183,12 @@ public class OntapStorageConstants {
      */
     public static final int ASUP_POLL_CHECK_INTERVAL_SECONDS = 7200; // 2 hours
 
-    private static final String ASUP_CONFIG_APPLY_NOTE =
-            "Takes effect immediately; no management server restart required.";
-
-    public static final String ASUP_ENABLED_DESCRIPTION = "Enable periodic ASUP (AutoSupport) telemetry push from the "
-            + "CloudStack ONTAP plugin to the ONTAP cluster. Set to true to enable or false to disable. "
-            + ASUP_CONFIG_APPLY_NOTE;
+    public static final String ASUP_ENABLED_DESCRIPTION =
+            "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
+                    + "Changes take effect immediately and do not require a management server restart.";
     public static final String ASUP_INTERVAL_DESCRIPTION = String.format(
-            "Interval (in seconds) between periodic ASUP telemetry pushes from the CloudStack ONTAP plugin. "
-                    + "Allowed range: %d-%d. Default: %d. %s",
-            ASUP_MIN_INTERVAL_SECONDS, ASUP_MAX_INTERVAL_SECONDS, ASUP_DEFAULT_INTERVAL_SECONDS,
-            ASUP_CONFIG_APPLY_NOTE);
+            "Set the telemetry reporting interval for the CloudStack ONTAP plugin. "
+                    + "Valid values range from %d (3 hours) to %d (24 hours). Default: %d (12 hours). "
+                    + "Changes take effect immediately and do not require a management server restart.",
+            ASUP_MIN_INTERVAL_SECONDS, ASUP_MAX_INTERVAL_SECONDS, ASUP_DEFAULT_INTERVAL_SECONDS);
 }
