@@ -181,7 +181,7 @@ public class OntapStorageConstants {
      * window. Config edits are applied immediately via the configuration-edit event; this
      * delay is only the background check, not the ASUP push interval.
      */
-    public static final int ASUP_POLL_CHECK_INTERVAL_SECONDS = 7200; // 2 hours
+    public static final int ASUP_POLL_CHECK_INTERVAL_SECONDS = 60; // 1 minute (demo; production is 7200)
 
     public static final String ASUP_ENABLED_DESCRIPTION =
             "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
