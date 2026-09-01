@@ -16,8 +16,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Local validation for private-cicd only — no CloudStack source required.
-# Safe to keep out of upstream Apache PR scope (entire tree under private-cicd/).
+# Purpose:
+#   Syntax-check private-cicd shell/Python scripts and parse YAML under config/.
+#   Optional --with-docker builds docker/Dockerfile.driver. No CloudStack source required.
+# Dependencies:
+#   bash; python3 (optional, for .py compile and YAML if PyYAML is present).
+#   YAML: ruby+psych, python3+yaml, or yq. docker only with --with-docker.
+#   CICD_ROOT — scripts/, config/, docker/ (default: parent of this file).
+#   Does not call Maven, packaging, or Phase 2 scripts.
 
 set -euo pipefail
 
@@ -28,11 +34,10 @@ Usage: validate-local.sh [--with-docker]
   Validates shell scripts (bash -n) and YAML under this repo's private-cicd
   (or standalone CI repo) root — independent of CloudStack merge scope.
 
-  --with-docker   Also run: docker build -f docker/Dockerfile.agent .
-                  (requires Docker; run from CICD_ROOT or set CICD_ROOT).
+  --with-docker   Build the CloudStack package-builder image and run smoke checks.
 
 Environment:
-  CICD_ROOT       Root containing scripts/, config/, docker/ (default: inferred).
+  CICD_ROOT       Root containing scripts/, config/, and docker/ (default: inferred).
 
 Exit status: 0 if all checks pass, non-zero otherwise.
 EOF
@@ -80,6 +85,16 @@ if [[ ! -d "$CICD_ROOT/scripts" ]]; then
   failures=$((failures + 1))
 fi
 
+# --- Python: parse without importing optional runtime dependencies
+if command -v python3 >/dev/null 2>&1; then
+  while IFS= read -r -d '' f; do
+    run_check "Python syntax: ${f#$CICD_ROOT/}" \
+      python3 -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "$f"
+  done < <(find "$CICD_ROOT/scripts" -maxdepth 1 -type f -name '*.py' -print0 2>/dev/null || true)
+else
+  echo "==> Python syntax: skipped (python3 not installed)" >&2
+fi
+
 # --- YAML under config/
 yaml_ok=false
 if command -v ruby >/dev/null 2>&1 && ruby -ryaml -e 'true' >/dev/null 2>&1; then
@@ -97,7 +112,12 @@ fi
 
 if [[ -d "$CICD_ROOT/config" ]]; then
   shopt -s nullglob
-  yfiles=("$CICD_ROOT"/config/*.yaml "$CICD_ROOT"/config/*.yml)
+  yfiles=(
+    "$CICD_ROOT"/config/*.yaml
+    "$CICD_ROOT"/config/*.yml
+    "$CICD_ROOT"/config/*.yaml.example
+    "$CICD_ROOT"/config/*.yml.example
+  )
   shopt -u nullglob
   if [[ ${#yfiles[@]} -eq 0 ]]; then
     echo "==> YAML: no *.yaml in $CICD_ROOT/config (skipped)"
@@ -112,19 +132,21 @@ else
   echo "==> YAML: no config directory (skipped)"
 fi
 
-# --- Docker (optional)
+# --- CloudStack Jenkins builder image (optional)
 if [[ "$WITH_DOCKER" == true ]]; then
+  builder_dockerfile="$CICD_ROOT/docker/Dockerfile.driver"
   if ! command -v docker >/dev/null 2>&1; then
-    echo "==> docker: not installed, skipping" >&2
+    echo "==> Docker builder image: docker is not installed" >&2
+    failures=$((failures + 1))
+  elif [[ ! -f "$builder_dockerfile" ]]; then
+    echo "==> Docker builder image: missing $builder_dockerfile" >&2
     failures=$((failures + 1))
   else
-    df="$CICD_ROOT/docker/Dockerfile.agent"
-    if [[ ! -f "$df" ]]; then
-      echo "==> docker: missing $df" >&2
-      failures=$((failures + 1))
-    else
-      run_check "docker build (agent image)" docker build -f "$df" -t cloudstack-private-cicd-agent:validate "$CICD_ROOT"
-    fi
+    run_check "Docker builder image" \
+      docker build \
+        -f "$builder_dockerfile" \
+        -t cloudstack-presubmit-driver:validate \
+        "$CICD_ROOT"
   fi
 fi
 

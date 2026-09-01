@@ -17,63 +17,75 @@
  under the License.
 -->
 
-# Private CI/CD (downstream only)
+# Private CloudStack CI/CD
 
-This directory is **not** part of Apache CloudStack upstream. Do **not** include it in pull requests to `apache/cloudstack`.
+This downstream-only directory implements the NetApp ONTAP presubmit for
+CloudStack. Do not include it in pull requests to `apache/cloudstack`.
 
-## Option A (default): committed on the NetApp fork
+For setup, operation, testing, security boundaries, troubleshooting, and the
+current implementation contract, see
+[`docs/PRIVATE-CICD-GUIDE.md`](docs/PRIVATE-CICD-GUIDE.md).
 
-`private-cicd/` is **tracked on integration branches** (e.g. `dev_branch`, `netapp/main`). Jenkins uses the same checkout as CloudStack.
+## How it works
 
-- **Script Path:** `private-cicd/Jenkinsfile`
-- **Clone CloudStack separately:** leave unchecked (`CLONE_SEPARATE = false`)
-- **Upstream PRs:** use branches without `private-cicd/` commits — see [`docs/BRANCH-STRATEGY.md`](docs/BRANCH-STRATEGY.md)
-- **Layout:** [`docs/FOLDER-LAYOUT.md`](docs/FOLDER-LAYOUT.md)
+The production Jenkins job loads [`Jenkinsfile`](Jenkinsfile) and helper scripts
+from the protected NetApp `main` branch. It checks out the exact pull-request
+commit into a separate `cloudstack-src` directory, then:
 
-## Rollout phases
+1. validates the request, builder, credentials, and VM inventory;
+2. runs the full Maven build and unit tests;
+3. builds and verifies CloudStack Debian packages;
+4. locks and reverts a compatible lab VM;
+5. installs and configures CloudStack, MySQL, KVM, NFS, and iSCSI;
+6. creates the test zone and runs the ONTAP iSCSI and NFS3 suites;
+7. redacts and archives results, publishes a GitHub Check, and sends mail.
 
-| Phase | `PIPELINE_PHASE` | Status |
-|-------|------------------|--------|
-| **-1 — Preflight** | `preflight` | Implemented |
-| **1a — ONTAP fast** | `build-ontap-fast` | Implemented (`scripts/mvn-ontap-fast.sh`) |
-| **1 — Full build** | `build-only` | Implemented |
-| **2 — Marvin** | `marvin` | Stub — see `config/marvin.yaml`, `scripts/marvin-run.sh` |
-| **3 — CD** | `delivery` | Planned |
+Eligible pull-request revisions receive the required Check
+`cloudstack-ontap-presubmit`. GitHub API and SMTP failures are reported without
+replacing the underlying build or test result.
 
-## Quick start
+## Entry points
+
+- **Pull request:** a GitHub `pull_request` webhook starts the production job.
+- **Manual branch:** a separate triggerless job uses `SOURCE_MODE=branch` with
+  a remote branch and exact 40-character commit SHA.
+- **Local validation:** `scripts/validate-local.sh` checks the CI files without
+  building CloudStack.
+- **Direct lab validation:** the scripts can be run gate by gate on a disposable
+  Ubuntu 22.04 nested-KVM VM.
+
+Different sources may run concurrently. A newer run aborts an older run only
+for the same pull-request ID or manual source branch, and only before the older
+run acquires its integration-test VM.
+
+## Configuration and secrets
+
+[`config/vm-inventory.yaml.example`](config/vm-inventory.yaml.example) is the
+only tracked inventory file. Create populated inventory outside Git and upload
+it to Jenkins as a Secret file. Keep passwords, tokens, and private keys in
+dedicated Jenkins credentials; generated runtime configuration is not archived.
+
+The Kubernetes pod uses a `jnlp` agent container and a separate
+`cloudstack-driver` build container. The immutable driver image reference,
+resource requests, build commands, credential mapping, and snapshot contract
+are documented in the comprehensive guide.
+
+## Local validation
 
 ```bash
-# Validate CI tree only (no Maven)
 ./private-cicd/scripts/validate-local.sh
 
-# ONTAP plugin compile + JUnit (from repo root; only ontap *Test.java, not whole tree)
-CLOUDSTACK_DIR=$PWD SKIP_TESTS=false ./private-cicd/scripts/mvn-ontap-fast.sh
-
-# Full build (long)
-CLOUDSTACK_DIR=$PWD SKIP_TESTS=true ./private-cicd/scripts/mvn-full.sh
+# Also build the driver image
+./private-cicd/scripts/validate-local.sh --with-docker
 ```
 
-Do not use `mvn -pl :cloud-plugin-storage-volume-ontap -am test` alone — `-am test` runs upstream module tests (e.g. `engine/schema`), which may call `sudo mount` and block on `Password:`.
+Local validation checks shell syntax, compiles Python, and parses YAML when a
+supported parser is available. The Docker option builds the driver image. These
+commands do not run Maven, create Debian packages, deploy CloudStack, or run
+ONTAP tests.
 
-## Configuration
+## Related code
 
-| File | Purpose |
-|------|---------|
-| [`config/defaults.yaml`](config/defaults.yaml) | Git URL, branch, profiles |
-| [`config/build-fast.yaml`](config/build-fast.yaml) | ONTAP `-pl -am` settings |
-| [`config/marvin.yaml`](config/marvin.yaml) | Marvin phase (Phase 2) |
-| [`config/qa.yaml.example`](config/qa.yaml.example) | Copy to `qa.yaml` for local overrides (gitignored) |
-
-## Marvin tests
-
-- Product tests: `test/integration/plugins/ontap/`
-- CI bundles: [`marvin/bundles.txt`](marvin/bundles.txt)
-- Zone templates: [`marvin/zones/`](marvin/zones/)
-
-## Alternative: separate CI repository
-
-Copy this tree to a dedicated repo and set `CLONE_SEPARATE = true` in Jenkins. See historical note in git history if you migrate from Option A.
-
-## License
-
-Scripts and the Jenkinsfile are for internal use only; not submitted to the ASF as part of CloudStack.
+- ONTAP plugin: [`../plugins/storage/volume/ontap/`](../plugins/storage/volume/ontap/)
+- ONTAP integration tests:
+  [`../test/integration/plugins/ontap/`](../test/integration/plugins/ontap/)
