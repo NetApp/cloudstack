@@ -171,7 +171,7 @@ public class OntapStorageConstants {
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_SECONDS = 10800; // 3 hours
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 60; // 1 minute (demo; production is 10800)
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
 
@@ -186,9 +186,8 @@ public class OntapStorageConstants {
     public static final String ASUP_ENABLED_DESCRIPTION =
             "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
                     + "Changes take effect immediately and do not require a management server restart.";
-    public static final String ASUP_INTERVAL_DESCRIPTION = String.format(
+    public static final String ASUP_INTERVAL_DESCRIPTION =
             "Set the telemetry reporting interval for the CloudStack ONTAP plugin. "
-                    + "Valid values range from %d (3 hours) to %d (24 hours). Default: %d (12 hours). "
-                    + "Changes take effect immediately and do not require a management server restart.",
-            ASUP_MIN_INTERVAL_SECONDS, ASUP_MAX_INTERVAL_SECONDS, ASUP_DEFAULT_INTERVAL_SECONDS);
+                    + "Valid values range from 10800 (3 hours) to 86400 (24 hours). Default: 43200 (12 hours). "
+                    + "Changes take effect immediately and do not require a management server restart.";
 }
