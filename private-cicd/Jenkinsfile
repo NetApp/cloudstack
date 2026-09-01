@@ -167,17 +167,21 @@ void pauseForVerification(String stageName) {
     }
 }
 
-void appendPresubmitLog(String message) {
+void recordStageEvent(String stageName, String status) {
     try {
-        withEnv(["PRESUBMIT_LOG_MESSAGE=${message}"]) {
+        withEnv([
+            "PRESUBMIT_STAGE_NAME=${stageName}",
+            "PRESUBMIT_STAGE_STATUS=${status}"
+        ]) {
             sh '''
-                mkdir -p "$PRESUBMIT_RESULTS"
-                printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-                    "$PRESUBMIT_LOG_MESSAGE" >> "$PRESUBMIT_RESULTS/success_or_not.log"
+                stage_events="${WORKSPACE}@tmp/presubmit-stage-events.tsv"
+                mkdir -p "$(dirname "$stage_events")"
+                printf '%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+                    "$PRESUBMIT_STAGE_NAME" "$PRESUBMIT_STAGE_STATUS" >> "$stage_events"
             '''
         }
     } catch (Exception e) {
-        echo "Unable to update presubmit mail log: ${e}"
+        echo "Unable to record presubmit stage event: ${e}"
     }
 }
 
@@ -207,7 +211,7 @@ void sendPresubmitMail(String subject, String body) {
         emailext(
             subject: subject,
             body: body,
-            mimeType: 'text/plain',
+            mimeType: 'text/html',
             to: recipient
         )
     } catch (Exception e) {
@@ -314,27 +318,28 @@ void resolvePresubmitMailRecipient() {
     }
 }
 
-String failureLogExcerpt() {
-    try {
-        return sh(
-            script: '''
-                for log_file in \
-                    "$PRESUBMIT_RESULTS/unit-tests/maven.log" \
-                    "$SOURCE_DIR/dist/deb-all/deb-build.log" \
-                    "$PRESUBMIT_RESULTS/phase2/configure-cloudstack.log" \
-                    "$PRESUBMIT_RESULTS/phase2/health-check.log"; do
-                    if [ -s "$log_file" ]; then
-                        printf '\n===== %s (last 80 lines) =====\n' "$log_file"
-                        tail -n 80 "$log_file"
-                    fi
-                done
-            ''',
-            returnStdout: true
-        ).trim()
-    } catch (Exception e) {
-        echo "Unable to collect failure log excerpt: ${e}"
-        return ''
-    }
+String htmlEscape(String value) {
+    return (value ?: '')
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace("'", '&#39;')
+}
+
+String presubmitStartHtml() {
+    def source = params.SOURCE_MODE == 'branch' ?
+        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+    def sourceHtml = params.PR_URL ==~ /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+$/ ?
+        "<a href=\"${htmlEscape(params.PR_URL)}\">${htmlEscape(source)}</a>" :
+        htmlEscape(source)
+    return """<h2 style="font-family:Arial,sans-serif">CloudStack ONTAP presubmit started</h2>
+<table style="font-family:Arial,sans-serif;border-collapse:collapse">
+<tr><td style="padding:4px 12px 4px 0"><strong>Source</strong></td><td>${sourceHtml}</td></tr>
+<tr><td style="padding:4px 12px 4px 0"><strong>Title</strong></td><td>${htmlEscape(params.PR_TITLE ?: 'not provided')}</td></tr>
+<tr><td style="padding:4px 12px 4px 0"><strong>Commit</strong></td><td><code>${htmlEscape(env.RESOLVED_SOURCE_SHA)}</code></td></tr>
+</table>
+<p style="font-family:Arial,sans-serif"><a href="${htmlEscape(env.BUILD_URL)}">Open Jenkins build</a></p>"""
 }
 
 pipeline {
@@ -458,11 +463,13 @@ spec:
         stage('Validate source request') {
             steps {
                 script {
+                    sh 'rm -f "${WORKSPACE}@tmp/presubmit-stage-events.tsv"'
                     env.PRESUBMIT_INTEGRATION_STARTED = 'false'
                     env.PRESUBMIT_STARTED_AT = new Date().format(
                         "yyyy-MM-dd'T'HH:mm:ssXXX",
                         TimeZone.getTimeZone('UTC')
                     )
+                    recordStageEvent('Validate source request', 'STARTED')
                     if (!(params.SOURCE_MODE in ['pull_request', 'branch'])) {
                         error("Unsupported SOURCE_MODE '${params.SOURCE_MODE}'.")
                     }
@@ -521,11 +528,29 @@ spec:
                     }
                 }
             }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Validate source request', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Validate source request', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Validate source request', 'ABORTED')
+                    }
+                }
+            }
         }
 
         stage('Check eligibility') {
             steps {
                 script {
+                    recordStageEvent('Check eligibility', 'STARTED')
                     if (params.SOURCE_MODE == 'pull_request') {
                         def eligibleActions = ['opened', 'synchronize', 'reopened', 'ready_for_review']
                         if (params.PR_ACTION == 'closed' ||
@@ -535,6 +560,26 @@ spec:
                             currentBuild.result = 'NOT_BUILT'
                             echo "Ignoring PR-${params.PR_ID}: action=${params.PR_ACTION}, draft=${params.PR_DRAFT}, base=${params.PR_BASE_BRANCH}"
                         }
+                    }
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent(
+                            'Check eligibility',
+                            currentBuild.currentResult == 'NOT_BUILT' ? 'SKIPPED' : 'SUCCESS'
+                        )
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Check eligibility', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Check eligibility', 'ABORTED')
                     }
                 }
             }
@@ -548,6 +593,7 @@ spec:
             }
             steps {
                 script {
+                    recordStageEvent('Abort superseded run', 'STARTED')
                     def sourceKey = params.SOURCE_MODE == 'branch' ?
                         "branch:${params.SOURCE_BRANCH}" :
                         "pull_request:${params.PR_ID}"
@@ -564,6 +610,23 @@ spec:
                     }
                 }
             }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Abort superseded run', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Abort superseded run', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Abort superseded run', 'ABORTED')
+                    }
+                }
+            }
         }
 
         stage('Checkout CI scripts') {
@@ -573,14 +636,27 @@ spec:
                 }
             }
             steps {
+                script {
+                    recordStageEvent('Checkout CI scripts', 'STARTED')
+                }
                 deleteDir()
                 checkout(scm)
-                script {
-                    appendPresubmitLog(
-                        "STARTED ${params.SOURCE_MODE == 'branch' ? params.SOURCE_BRANCH : "PR-${params.PR_ID}"} " +
-                        "diff ${env.RESOLVED_SOURCE_SHA}; pipeline start ${env.PRESUBMIT_STARTED_AT}; build ${env.BUILD_URL}"
-                    )
-                    appendPresubmitLog('Checkout CI scripts SUCCESS')
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'ABORTED')
+                    }
                 }
             }
         }
@@ -593,20 +669,30 @@ spec:
             }
             steps {
                 script {
-                    appendPresubmitLog('Start PR reporting STARTED')
+                    recordStageEvent('Start PR reporting', 'STARTED')
                     createGithubCheck()
                     resolvePresubmitMailRecipient()
                     sendPresubmitMail(
                         "${presubmitSubjectBase()}: STARTED",
-                        """CloudStack ONTAP presubmit started.
-
-PR: ${params.PR_URL ?: 'manual branch build'}
-Title: ${params.PR_TITLE ?: 'not provided'}
-Diff: ${env.RESOLVED_SOURCE_SHA}
-Build: ${env.BUILD_URL}
-"""
+                        presubmitStartHtml()
                     )
-                    appendPresubmitLog('Start PR reporting SUCCESS')
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Start PR reporting', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Start PR reporting', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Start PR reporting', 'ABORTED')
+                    }
                 }
             }
         }
@@ -619,7 +705,7 @@ Build: ${env.BUILD_URL}
             }
             steps {
                 script {
-                    appendPresubmitLog('Validate builder STARTED')
+                    recordStageEvent('Validate builder', 'STARTED')
                     def required = [
                         VCENTER_HOST                       : params.VCENTER_HOST,
                         VM_INVENTORY_CREDENTIALS_ID        : params.VM_INVENTORY_CREDENTIALS_ID,
@@ -659,17 +745,17 @@ Build: ${env.BUILD_URL}
             post {
                 success {
                     script {
-                        appendPresubmitLog('Validate builder SUCCESS')
+                        recordStageEvent('Validate builder', 'SUCCESS')
                     }
                 }
                 failure {
                     script {
-                        appendPresubmitLog('Validate builder FAILURE')
+                        recordStageEvent('Validate builder', 'FAILURE')
                     }
                 }
                 aborted {
                     script {
-                        appendPresubmitLog('Validate builder ABORTED')
+                        recordStageEvent('Validate builder', 'ABORTED')
                     }
                 }
             }
@@ -683,7 +769,7 @@ Build: ${env.BUILD_URL}
             }
             steps {
                 script {
-                    appendPresubmitLog('Checkout source STARTED')
+                    recordStageEvent('Checkout source', 'STARTED')
                 }
                 dir(env.SOURCE_DIR) {
                     deleteDir()
@@ -752,17 +838,17 @@ Build: ${env.BUILD_URL}
             post {
                 success {
                     script {
-                        appendPresubmitLog('Checkout source SUCCESS')
+                        recordStageEvent('Checkout source', 'SUCCESS')
                     }
                 }
                 failure {
                     script {
-                        appendPresubmitLog('Checkout source FAILURE')
+                        recordStageEvent('Checkout source', 'FAILURE')
                     }
                 }
                 aborted {
                     script {
-                        appendPresubmitLog('Checkout source ABORTED')
+                        recordStageEvent('Checkout source', 'ABORTED')
                     }
                 }
             }
@@ -776,7 +862,7 @@ Build: ${env.BUILD_URL}
             }
             steps {
                 script {
-                    appendPresubmitLog('Build and unit tests STARTED')
+                    recordStageEvent('Build and unit tests', 'STARTED')
                 }
                 container('cloudstack-driver') {
                     sh '''
@@ -797,17 +883,17 @@ Build: ${env.BUILD_URL}
             post {
                 success {
                     script {
-                        appendPresubmitLog('Build and unit tests SUCCESS')
+                        recordStageEvent('Build and unit tests', 'SUCCESS')
                     }
                 }
                 failure {
                     script {
-                        appendPresubmitLog('Build and unit tests FAILURE')
+                        recordStageEvent('Build and unit tests', 'FAILURE')
                     }
                 }
                 aborted {
                     script {
-                        appendPresubmitLog('Build and unit tests ABORTED')
+                        recordStageEvent('Build and unit tests', 'ABORTED')
                     }
                 }
             }
@@ -821,7 +907,7 @@ Build: ${env.BUILD_URL}
             }
             steps {
                 script {
-                    appendPresubmitLog('Build Debian packages STARTED')
+                    recordStageEvent('Build Debian packages', 'STARTED')
                 }
                 container('cloudstack-driver') {
                     sh '''
@@ -839,17 +925,17 @@ Build: ${env.BUILD_URL}
             post {
                 success {
                     script {
-                        appendPresubmitLog('Build Debian packages SUCCESS')
+                        recordStageEvent('Build Debian packages', 'SUCCESS')
                     }
                 }
                 failure {
                     script {
-                        appendPresubmitLog('Build Debian packages FAILURE')
+                        recordStageEvent('Build Debian packages', 'FAILURE')
                     }
                 }
                 aborted {
                     script {
-                        appendPresubmitLog('Build Debian packages ABORTED')
+                        recordStageEvent('Build Debian packages', 'ABORTED')
                     }
                 }
             }
@@ -863,7 +949,7 @@ Build: ${env.BUILD_URL}
             }
             steps {
                 script {
-                    appendPresubmitLog('Deploy and run ONTAP integration WAITING_FOR_VM')
+                    recordStageEvent('Deploy and run ONTAP integration', 'WAITING_FOR_VM')
                 }
                 withCredentials([
                     file(
@@ -876,7 +962,7 @@ Build: ${env.BUILD_URL}
                     lock(resource: null, label: 'cloudstack-presubmit-vm', quantity: 1, variable: 'LOCKED_VM') {
                         script {
                             env.PRESUBMIT_INTEGRATION_STARTED = 'true'
-                            appendPresubmitLog('Deploy and run ONTAP integration STARTED')
+                            recordStageEvent('Deploy and run ONTAP integration', 'STARTED')
                         }
                         container('cloudstack-driver') {
                         script {
@@ -980,17 +1066,17 @@ Build: ${env.BUILD_URL}
             post {
                 success {
                     script {
-                        appendPresubmitLog('Deploy and run ONTAP integration SUCCESS')
+                        recordStageEvent('Deploy and run ONTAP integration', 'SUCCESS')
                     }
                 }
                 failure {
                     script {
-                        appendPresubmitLog('Deploy and run ONTAP integration FAILURE')
+                        recordStageEvent('Deploy and run ONTAP integration', 'FAILURE')
                     }
                 }
                 aborted {
                     script {
-                        appendPresubmitLog('Deploy and run ONTAP integration ABORTED')
+                        recordStageEvent('Deploy and run ONTAP integration', 'ABORTED')
                     }
                 }
             }
@@ -1009,40 +1095,74 @@ Build: ${env.BUILD_URL}
                 def conclusion = result == 'SUCCESS' ? 'success' :
                     (result == 'ABORTED' ? 'cancelled' : 'failure')
                 if (result != 'NOT_BUILT') {
-                    appendPresubmitLog(
-                        "PRESUBMIT ${result}; finished " +
-                        new Date().format(
-                            "yyyy-MM-dd'T'HH:mm:ssXXX",
-                            TimeZone.getTimeZone('UTC')
-                        )
+                    env.PRESUBMIT_FINISHED_AT = new Date().format(
+                        "yyyy-MM-dd'T'HH:mm:ssXXX",
+                        TimeZone.getTimeZone('UTC')
                     )
                     completeGithubCheck(conclusion)
                     if (!env.PRESUBMIT_MAIL_TO?.trim()) {
                         resolvePresubmitMailRecipient()
                     }
-                    def report = fileExists("${env.PRESUBMIT_RESULTS}/success_or_not.log") ?
-                        readFile("${env.PRESUBMIT_RESULTS}/success_or_not.log").trim() :
-                        'The collated stage log was not available.'
-                    def excerpt = result == 'FAILURE' ? failureLogExcerpt() : ''
-                    def failureDetails = excerpt ?
-                        "\n\nFailure log excerpts:\n${excerpt}" : ''
+                    def sourceName = params.SOURCE_MODE == 'branch' ?
+                        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+                    try {
+                        if (fileExists('private-cicd/scripts/generate-presubmit-report.py')) {
+                            withEnv([
+                                "PRESUBMIT_REPORT_RESULT=${result}",
+                                "PRESUBMIT_REPORT_SOURCE=${sourceName}",
+                                "PRESUBMIT_REPORT_SOURCE_URL=${params.PR_URL ?: ''}",
+                                "PRESUBMIT_REPORT_TITLE=${params.PR_TITLE ?: ''}",
+                                "PRESUBMIT_REPORT_SHA=${env.RESOLVED_SOURCE_SHA}",
+                                "PRESUBMIT_REPORT_VM=${env.VM_ID ?: ''}"
+                            ]) {
+                                sh '''
+                                    python3 private-cicd/scripts/generate-presubmit-report.py \
+                                        --results "$PRESUBMIT_RESULTS" \
+                                        --stage-events "${WORKSPACE}@tmp/presubmit-stage-events.tsv" \
+                                        --build-url "$BUILD_URL" \
+                                        --result "$PRESUBMIT_REPORT_RESULT" \
+                                        --source "$PRESUBMIT_REPORT_SOURCE" \
+                                        --source-url "$PRESUBMIT_REPORT_SOURCE_URL" \
+                                        --title "$PRESUBMIT_REPORT_TITLE" \
+                                        --source-sha "$PRESUBMIT_REPORT_SHA" \
+                                        --vm "$PRESUBMIT_REPORT_VM" \
+                                        --started-at "$PRESUBMIT_STARTED_AT" \
+                                        --finished-at "$PRESUBMIT_FINISHED_AT" \
+                                        --debian-log "$SOURCE_DIR/dist/deb-all/deb-build.log"
+                                '''
+                            }
+                        } else {
+                            echo 'HTML report generator was unavailable; sending a minimal final mail.'
+                        }
+                    } catch (Exception e) {
+                        echo "Unable to generate HTML presubmit report: ${e}"
+                    }
+                    try {
+                        archiveArtifacts(
+                            artifacts: 'presubmit-results/**/*, cloudstack-src/dist/deb-all/**/*',
+                            allowEmptyArchive: true,
+                            fingerprint: true
+                        )
+                    } catch (Exception e) {
+                        echo "Unable to archive presubmit artifacts: ${e}"
+                    }
+                    def failedStage = fileExists("${env.PRESUBMIT_RESULTS}/failed-stage.txt") ?
+                        readFile("${env.PRESUBMIT_RESULTS}/failed-stage.txt").trim() : ''
+                    def finalSubject = failedStage ?
+                        "${presubmitSubjectBase()}: ${result} in ${failedStage}" :
+                        "${presubmitSubjectBase()}: ${result}"
+                    def mailBody = fileExists("${env.PRESUBMIT_RESULTS}/email-body.html") ?
+                        readFile("${env.PRESUBMIT_RESULTS}/email-body.html") :
+                        """<h2>CloudStack ONTAP presubmit: ${htmlEscape(result)}</h2>
+<p>Source: ${htmlEscape(sourceName)}</p>
+<p>Commit: <code>${htmlEscape(env.RESOLVED_SOURCE_SHA)}</code></p>
+<p><a href="${htmlEscape(env.BUILD_URL)}">Open Jenkins build and logs</a></p>"""
                     sendPresubmitMail(
-                        "${presubmitSubjectBase()}: ${result}",
-                        """CloudStack ONTAP presubmit completed with result ${result}.
-
-${report}
-
-VM: ${env.VM_ID ?: 'not assigned'}
-Build and full logs: ${env.BUILD_URL}${failureDetails}
-"""
+                        finalSubject,
+                        mailBody
                     )
                 }
             }
-            archiveArtifacts(
-                artifacts: 'presubmit-results/**/*, cloudstack-src/dist/deb-all/**/*',
-                allowEmptyArchive: true,
-                fingerprint: true
-            )
         }
     }
 }

@@ -33,13 +33,16 @@ Dependencies:
 import argparse
 import base64
 import json
+import re
 from pathlib import Path
 
 
 def collect_passwords(value, passwords):
     if isinstance(value, dict):
         for key, child in value.items():
-            if isinstance(child, str) and ("password" in key.lower() or "passwd" in key.lower()):
+            is_password = (
+                "password" in key.lower() or "passwd" in key.lower())
+            if isinstance(child, str) and is_password:
                 if child:
                     passwords.add(child)
             else:
@@ -75,7 +78,13 @@ def main():
             continue
         redacted = content
         for password in sorted(passwords, key=len, reverse=True):
-            redacted = redacted.replace(password, "[REDACTED]")
+            if password.isalnum():
+                pattern = (
+                    r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" %
+                    re.escape(password))
+                redacted = re.sub(pattern, "[REDACTED]", redacted)
+            else:
+                redacted = redacted.replace(password, "[REDACTED]")
         if redacted != content:
             result_file.write_text(redacted, encoding="utf-8")
 
