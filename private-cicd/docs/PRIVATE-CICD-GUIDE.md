@@ -771,14 +771,21 @@ Check still remains merge-safe when API reporting fails because no required succ
 `presubmit-results/stage-events.tsv` contains structured UTC stage events. The final post action converts text logs
 to HTML, writes `presubmit-results/report.html`, and archives those files before sending mail. Mail behavior:
 
-- one short HTML start mail with source, title, SHA, and build link;
-- one final HTML mail with result, VM, total duration, and a stage table with start time, duration, VM wait, and
-  links to the applicable HTML log;
+- one short HTML start mail styled like the final report, with a `STARTED` banner and a bordered table of source,
+  title, diff number, SHA, and start time, plus build and console links;
+- one final HTML mail with result, diff number, VM, total duration, and a stage table with start time, duration, VM
+  wait, and links to the applicable HTML log;
 - a complete ONTAP test table with failures first and per-test links into the archived suite HTML logs;
 - no raw log tails in the message body; use the linked report or log to debug;
 - payload email first, then commit email; noreply ignored;
 - missing address or SMTP failure does not alter result;
 - no per-stage threading because Email Extension provides no stable Message-ID.
+
+Both mails share the subject base `CloudStack presubmit PR-<id> <title>, diff #<n> (<sha12>)`, so mail clients thread
+the pair. The diff number counts the distinct commits presubmitted for that PR: re-running the same commit keeps its
+number and each new push increments it. Only builds still retained by `logRotator(numToKeepStr: '30')` are inspected,
+so a PR with more than 30 intervening builds can report a lower number. When the lookup fails the subject falls back
+to `diff <sha12>` and the diff row is omitted.
 
 Jenkins archives:
 
