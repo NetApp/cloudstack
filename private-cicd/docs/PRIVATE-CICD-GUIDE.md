@@ -30,7 +30,8 @@ This is the consolidated operator and developer reference. The current [`Jenkins
 
 The guide covers:
 
-- the trusted production Pipeline-from-SCM job and GitHub pull-request webhook;
+- the trusted production Pipeline-from-SCM job and GitHub pull-request webhook, including first-PR cutover from
+  `feature/CSTACKEX-223` to `main` ([`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md));
 - the separate triggerless manual branch job;
 - local CI-file validation and direct disposable-VM validation;
 - Stage 1 build, unit-test, and Debian package handoff;
@@ -102,6 +103,7 @@ private-cicd/
 ├── docker/
 │   └── Dockerfile.driver
 ├── docs/
+│   ├── CREATE-PRESUBMIT-JOB.md
 │   └── PRIVATE-CICD-GUIDE.md
 └── scripts/
     ├── build-debs.sh
@@ -145,11 +147,21 @@ Lightweight checkout: off
 PR code cannot replace trusted CI helpers before credentials are used. The source under test is checked out
 separately.
 
+Until `feature/CSTACKEX-223` is merged, that Jenkinsfile is not on `main`. Create **one** webhook job named
+`cloudstack-ontap-presubmit` that loads CI from `*/feature/CSTACKEX-223`, using
+[`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md). After merge, change only **Branches to build**
+to `*/main`. Keep the same job, webhook, GitHub App, credentials, and Check. Do not create a second production job
+and do not leave the feature branch as trusted CI after cutover.
+
 ### Manual-job trust boundary
 
 A manual job may load the Jenkinsfile from an unreviewed remote feature branch. That branch can request every
 credential visible to the job. Create a separate triggerless job, restrict Configure/Build permissions, expose only
 least-privilege lab credentials, review the diff before every run, and never convert it into the webhook job.
+
+The manual job is only triggerless while disabled. Because it loads the same Jenkinsfile, it also carries the
+Jenkinsfile's Generic Webhook Trigger and token. Keep `cloudstack-presubmit-manual` disabled and enable it only for
+the duration of a branch run, or use `SOURCE_MODE=branch` on the webhook job instead.
 
 ### Secret boundaries
 
@@ -962,7 +974,7 @@ the build.
 - [ ] credentials have correct Kinds and non-empty passwords;
 - [ ] populated inventory remains outside Git;
 - [ ] each enabled VM maps to a labeled resource and clean snapshot;
-- [ ] production SCM is `*/main`, lightweight off, and source checkout full;
+- [ ] production SCM is `*/main` after CSTACKEX-223 is merged (until then `*/feature/CSTACKEX-223`), lightweight off, and source checkout full;
 - [ ] first load applied parameters/trigger and only needed signatures are approved;
 - [ ] parameterized PR smoke run passed;
 - [ ] App installation, exact-SHA Check conclusion, and webhook HTTP 200 are proven;

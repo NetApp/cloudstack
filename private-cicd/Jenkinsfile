@@ -430,17 +430,17 @@ spec:
         )
         string(
             name: 'VM_INVENTORY_CREDENTIALS_ID',
-            defaultValue: 'PLACEHOLDER-cloudstack-presubmit-inventory',
+            defaultValue: 'cloudstack-presubmit-inventory',
             description: 'Jenkins Secret file credential containing the reserved-VM inventory YAML.'
         )
-        string(name: 'VCENTER_HOST', defaultValue: 'PLACEHOLDER-vcenter.example.netapp.com', description: 'vCenter hostname.')
-        string(name: 'VCENTER_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-vcenter', description: 'vCenter username/password credential ID.')
-        string(name: 'VM_SSH_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-presubmit-ssh', description: 'Reserved-VM SSH username/password credential ID.')
-        string(name: 'MYSQL_ROOT_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-mysql-root', description: 'MySQL administrator credential ID.')
-        string(name: 'CLOUD_DB_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-db', description: 'CloudStack database credential ID.')
-        string(name: 'KVM_HOST_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-kvm-host', description: 'KVM host credential ID used by zone setup.')
-        string(name: 'ONTAP_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-ontap', description: 'ONTAP SVM credential ID.')
-        string(name: 'CLOUDSTACK_ADMIN_CREDENTIALS_ID', defaultValue: 'PLACEHOLDER-cloudstack-admin', description: 'CloudStack admin credential ID.')
+        string(name: 'VCENTER_HOST', defaultValue: 'cstack-netapp-lab.rtp.openenglab.netapp.com', description: 'vCenter hostname.')
+        string(name: 'VCENTER_CREDENTIALS_ID', defaultValue: 'cloudstack-vcenter', description: 'vCenter username/password credential ID.')
+        string(name: 'VM_SSH_CREDENTIALS_ID', defaultValue: 'cloudstack-presubmit-ssh', description: 'Reserved-VM SSH username/password credential ID.')
+        string(name: 'MYSQL_ROOT_CREDENTIALS_ID', defaultValue: 'cloudstack-mysql-root', description: 'MySQL administrator credential ID.')
+        string(name: 'CLOUD_DB_CREDENTIALS_ID', defaultValue: 'cloudstack-db', description: 'CloudStack database credential ID.')
+        string(name: 'KVM_HOST_CREDENTIALS_ID', defaultValue: 'cloudstack-kvm-host', description: 'KVM host credential ID used by zone setup.')
+        string(name: 'ONTAP_CREDENTIALS_ID', defaultValue: 'cloudstack-ontap', description: 'ONTAP SVM credential ID.')
+        string(name: 'CLOUDSTACK_ADMIN_CREDENTIALS_ID', defaultValue: 'cloudstack-admin', description: 'CloudStack admin credential ID.')
         booleanParam(name: 'PAUSE_BETWEEN_STAGES', defaultValue: false, description: 'Pause for manual verification after each stage. Keep this off for webhook runs.')
     }
 
