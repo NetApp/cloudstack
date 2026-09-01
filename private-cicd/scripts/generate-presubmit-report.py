@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument("--source-url", default="")
     parser.add_argument("--title", default="")
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--diff-number", default="")
     parser.add_argument("--vm", default="")
     parser.add_argument("--started-at", required=True)
     parser.add_argument("--finished-at", required=True)
@@ -397,6 +398,10 @@ def main():
         f"<tr><td><strong>Title</strong></td>"
         f"<td>{html.escape(args.title)}</td></tr>"
         if args.title else "")
+    diff_row = (
+        f"<tr><td><strong>Diff</strong></td>"
+        f"<td>#{html.escape(args.diff_number)}</td></tr>"
+        if args.diff_number else "")
     header = f"""
 <h1 style="margin-bottom:4px">CloudStack ONTAP presubmit</h1>
 <p style="font-size:18px;{result_style}">{html.escape(args.result)}</p>
@@ -404,6 +409,7 @@ def main():
 <tr><td><strong>Source</strong></td>
 <td>{source}</td></tr>
 {title_row}
+{diff_row}
 <tr><td><strong>Commit</strong></td>
 <td><code>{html.escape(args.source_sha)}</code></td></tr>
 <tr><td><strong>VM</strong></td>
