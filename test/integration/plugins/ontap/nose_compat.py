@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,20 +16,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Jenkins (or other CI) build agent image — private downstream use only.
-FROM ubuntu:22.04
+"""Run legacy nose on Python versions where collections.Callable was removed."""
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=C.UTF-8
+import collections
+import collections.abc
+import runpy
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git openssh-client \
-    openjdk-17-jdk-headless maven \
-    python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/*
 
-# Optional: run private-cicd/scripts/install-build-deps-ubuntu.sh at image build time
-COPY scripts/install-build-deps-ubuntu.sh /tmp/install-build-deps-ubuntu.sh
-RUN chmod +x /tmp/install-build-deps-ubuntu.sh && /tmp/install-build-deps-ubuntu.sh && rm -f /tmp/install-build-deps-ubuntu.sh
+if not hasattr(collections, "Callable"):
+    collections.Callable = collections.abc.Callable
 
-WORKDIR /workspace
+runpy.run_module("nose", run_name="__main__", alter_sys=True)
