@@ -504,7 +504,7 @@ Do not add UI triggers manually. The Jenkinsfile declares `cron('H/5 * * * *')`.
 ### First load and script approvals
 
 Click **Build Now** once. It may load the new defaults or fail once using old defaults. Refresh, confirm
-`SOURCE_MODE` offers `discover`, `pull_request`, and `branch`, then run `discover` once to seed the watermark without
+`SOURCE_MODE` offers `discover`, `pull_request`, `branch`, and `diagnose`, then run `discover` once to seed the watermark without
 queueing historical PRs. Confirm **Configure > Build Triggers** shows the five-minute timer and no Generic Webhook
 Trigger.
 
@@ -612,6 +612,13 @@ discovery build always means discovery itself is broken.
 
 Discovery titles its build `discover: queued N, deferred M`, or `discover: skipped, lock held` when it overlapped a
 slower run, and puts the watermark in the description.
+
+### Diagnose GitHub App
+
+Runs only for `SOURCE_MODE=diagnose`, and only needs `PR_HEAD_SHA`. It checks out CI scripts and probes the App's
+token type, repository access, Checks read and one Checks write, then prints a verdict. Nothing else runs: no VM
+lock, no build, no mail, no presubmit Check. Use it instead of a full worker when a Check does not appear on a PR.
+See the Checks troubleshooting section of [`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md).
 
 ### Validate source request
 
