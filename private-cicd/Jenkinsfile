@@ -599,15 +599,13 @@ spec:
                             "#${env.BUILD_NUMBER} discover PR revisions"
                         deleteDir()
                         checkout(scm)
-                        if (!(params.EXPECTED_REPOSITORY ==~
-                                /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
+                        if (!(params.EXPECTED_REPOSITORY ==~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
                             error('EXPECTED_REPOSITORY must be owner/repository.')
                         }
                         if (!isValidBranchName(params.DISCOVERY_BASE_BRANCH)) {
                             error('DISCOVERY_BASE_BRANCH is not a valid Git branch name.')
                         }
-                        if (!(params.GITHUB_APP_CREDENTIALS_ID ==~
-                                /^[A-Za-z0-9._-]+$/)) {
+                        if (!(params.GITHUB_APP_CREDENTIALS_ID ==~ /^[A-Za-z0-9._-]+$/)) {
                             error('GITHUB_APP_CREDENTIALS_ID contains unsupported characters.')
                         }
                         if (!(params.MAX_ACTIVE_WORKERS ==~ /^[1-9][0-9]*$/)) {
