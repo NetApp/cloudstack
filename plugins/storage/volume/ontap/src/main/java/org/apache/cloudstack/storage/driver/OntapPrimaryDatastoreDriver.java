@@ -76,6 +76,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -148,6 +149,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+            validateProtocol(details, dataStore);
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeInfo volInfo = (VolumeInfo) dataObject;
@@ -160,8 +162,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisorAndProtocol(storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL)));
-                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}] and protocol [{}]", volumeVO.getFormat(), storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL));
+                    volumeVO.setFormat(getImageFormat(storagePool));
+                    logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         String lunName = created != null && created.getLun() != null ? created.getLun().getName() : null;
@@ -987,21 +989,36 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
     }
 
-
-    private Storage.ImageFormat getImageFormatByHypervisorAndProtocol(HypervisorType hypervisorType, String protocol) {
-        if (HypervisorType.KVM.equals(hypervisorType)) {
-            ProtocolType protocolType = ProtocolType.valueOf(protocol);
-            switch (protocolType) {
-                case NFS3:
-                    return Storage.ImageFormat.QCOW2;
-                case ISCSI:
-                    return Storage.ImageFormat.RAW;
-                default:
-                    throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] for ONTAP image format resolution");
-            }
+    /**
+     * Only ISCSI and NFS3 pools can be provisioned; any other protocol would fall through
+     * createAsync without producing a result, leaving the caller with a null callback value.
+     */
+    private void validateProtocol(Map<String, String> details, DataStore dataStore) {
+        String protocol = details == null ? null : details.get(OntapStorageConstants.PROTOCOL);
+        boolean supported = protocol != null && Arrays.stream(ProtocolType.values())
+                .anyMatch(type -> type.name().equalsIgnoreCase(protocol));
+        if (!supported) {
+            throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] on storage pool ["
+                    + dataStore.getName() + "]; supported protocols are " + Arrays.toString(ProtocolType.values()));
         }
-        throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
     }
+
+    private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {
+        HypervisorType hypervisorType = storagePool.getHypervisor();
+        if (!HypervisorType.KVM.equals(hypervisorType)) {
+            throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
+        }
+        Storage.StoragePoolType spType = storagePool.getPoolType();
+        switch (spType) {
+            case OntapiSCSI:
+                return Storage.ImageFormat.RAW;
+            case NetworkFilesystem:
+                return Storage.ImageFormat.QCOW2;
+            default:
+                throw new CloudRuntimeException("Unsupported pool type [" +  spType + "] for ONTAP image format resolution");
+        }
+    }
+
     /**
      * Persists snapshot metadata in snapshot_details table.
      *

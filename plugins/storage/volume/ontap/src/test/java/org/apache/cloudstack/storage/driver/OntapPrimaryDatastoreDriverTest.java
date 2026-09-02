@@ -171,7 +171,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
-        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.Iscsi);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
         when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
 
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -292,25 +292,17 @@ class OntapPrimaryDatastoreDriverTest {
         when(dataStore.getId()).thenReturn(1L);
         when(dataStore.getName()).thenReturn("ontap-pool");
         when(volumeInfo.getType()).thenReturn(VOLUME);
-        when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getName()).thenReturn("test-volume");
 
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
-        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
 
-        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
-            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
+        driver.createAsync(dataStore, volumeInfo, createCallback);
 
-            driver.createAsync(dataStore, volumeInfo, createCallback);
-
-            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-            verify(createCallback).complete(resultCaptor.capture());
-            assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("No enum constant"));
-        }
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Unsupported protocol [FC]"));
     }
 
     @Test
