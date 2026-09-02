@@ -30,8 +30,9 @@ This is the consolidated operator and developer reference. The current [`Jenkins
 
 The guide covers:
 
-- the trusted production Pipeline-from-SCM job and GitHub pull-request webhook, including first-PR cutover from
-  `feature/CSTACKEX-223` to `main` ([`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md));
+- the trusted production Pipeline-from-SCM job with five-minute GitHub API
+  discovery, including first-PR cutover from `feature/CSTACKEX-223` to `main`
+  ([`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md));
 - the separate triggerless manual branch job;
 - local CI-file validation and direct disposable-VM validation;
 - Stage 1 build, unit-test, and Debian package handoff;
@@ -57,16 +58,22 @@ Implemented:
 
 Phase 3 is partially implemented. JUnit publication, GitHub Check conclusion, final collated mail, and Jenkins
 artifacts exist. A stable external per-PR artifact store and an explicit retention/cleanup policy for that store do
-not exist. Jenkins currently retains 30 builds; that is not a stable external retention policy.
+not exist. Jenkins currently retains 500 builds so five-minute discovery runs do not flush worker
+history; that is still not a stable external retention policy.
 
 `PAUSE_BETWEEN_STAGES` is a boolean parameter for manual verification, off by default and intended to stay off for
-webhook runs. When enabled, each pause times out after 60 minutes; the pause after snapshot revert holds the VM lock.
+automatic worker runs. When enabled, each pause times out after 60 minutes; the pause after snapshot revert holds the
+VM lock.
 
 ## 3. Architecture and data flow
 
 ```text
-GitHub pull_request webhook
-  -> trusted Jenkinsfile/scripts from protected main
+Jenkins timer -> discover mode (every 5 minutes)
+  -> GitHub API -> unseen PR head SHAs
+  -> self-queue at most MAX_ACTIVE_WORKERS pull_request builds
+  -> extra SHAs deferred with watermark held
+  -> self-queued worker builds in the same job
+    -> trusted Jenkinsfile/scripts from protected main
   -> request, eligibility, credential, inventory, and builder checks
   -> exact PR or branch SHA checkout into cloudstack-src
   -> Maven clean install and unit tests
@@ -112,19 +119,21 @@ private-cicd/
     ├── collect-phase2-logs.sh
     ├── configure-cloudstack-vm.sh
     ├── github-check-run.sh
+    ├── list-eligible-prs.py
     ├── marvin-run.sh
     ├── mvn-full.sh
     ├── redact-phase2-results.py
     ├── render-phase2-config.py
     ├── run-phase2-remote.sh
     ├── run-phase2-vm.sh
+    ├── test_list_eligible_prs.py
     ├── validate-local.sh
     └── vcenter-revert.py
 ```
 
-The 14 scripts respectively build packages; check the builder; check Phase 2 health; collect logs; configure the
-VM; manage GitHub Checks; run Marvin; run Maven; redact results; render runtime config; drive remote Phase 2; drive
-on-VM Phase 2; validate locally; and revert vCenter.
+The scripts respectively build packages; check the builder; check Phase 2 health; collect logs; configure the
+VM; manage GitHub Checks; list eligible PRs for discovery; run Marvin; run Maven; redact results; render runtime
+config; drive remote Phase 2; drive on-VM Phase 2; validate locally; and revert vCenter.
 
 Product code stays under `plugins/storage/volume/ontap/`. Tests stay under
 [`test/integration/plugins/ontap/`](../../test/integration/plugins/ontap/) and are documented by
@@ -147,21 +156,21 @@ Lightweight checkout: off
 PR code cannot replace trusted CI helpers before credentials are used. The source under test is checked out
 separately.
 
-Until `feature/CSTACKEX-223` is merged, that Jenkinsfile is not on `main`. Create **one** webhook job named
+Until `feature/CSTACKEX-223` is merged, that Jenkinsfile is not on `main`. Create one job named
 `cloudstack-ontap-presubmit` that loads CI from `*/feature/CSTACKEX-223`, using
-[`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md). After merge, change only **Branches to build**
-to `*/main`. Keep the same job, webhook, GitHub App, credentials, and Check. Do not create a second production job
-and do not leave the feature branch as trusted CI after cutover.
+[`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md). Its timer builds discover work and self-queue workers in the
+same item. After merge, change only **Branches to build** to `*/main`. Keep the same job, GitHub App, credentials,
+resources, and Check. Do not create a GitHub repository webhook: OpenLab Jenkins is not reachable from GitHub.com.
+Do not create a GitHub Organization folder for this presubmit.
 
 ### Manual-job trust boundary
 
 A manual job may load the Jenkinsfile from an unreviewed remote feature branch. That branch can request every
 credential visible to the job. Create a separate triggerless job, restrict Configure/Build permissions, expose only
-least-privilege lab credentials, review the diff before every run, and never convert it into the webhook job.
+least-privilege lab credentials, review the diff before every run, and never convert it into the production job.
 
-The manual job is only triggerless while disabled. Because it loads the same Jenkinsfile, it also carries the
-Jenkinsfile's Generic Webhook Trigger and token. Keep `cloudstack-presubmit-manual` disabled and enable it only for
-the duration of a branch run, or use `SOURCE_MODE=branch` on the webhook job instead.
+Keep `cloudstack-presubmit-manual` disabled and enable it only for the duration of a branch run, or use
+`SOURCE_MODE=branch` on the production job instead.
 
 ### Secret boundaries
 
@@ -174,27 +183,30 @@ approved lab networks, disposable CloudStack state, and an ONTAP SVM approved fo
 
 ## 6. Entry modes
 
-### Webhook PR
+### Discovery and PR workers
 
-Production uses `SOURCE_MODE=pull_request`. The Generic Webhook Trigger maps:
+The timer starts `SOURCE_MODE=discover`. Discovery lists open non-draft PRs against `main`, compares `updated_at`
+with the latest successful discovery watermark, and self-queues `SOURCE_MODE=pull_request` workers with:
 
-| Parameter | JSON path |
+| Parameter | Source |
 |---|---|
-| `PR_ID` | `$.number` |
-| `PR_ACTION` | `$.action` |
-| `PR_DRAFT` | `$.pull_request.draft` |
-| `PR_REPOSITORY` | `$.repository.full_name` |
-| `PR_BASE_BRANCH` | `$.pull_request.base.ref` |
-| `PR_HEAD_BRANCH` | `$.pull_request.head.ref` |
-| `PR_HEAD_SHA` | `$.pull_request.head.sha` |
-| `PR_AUTHOR_LOGIN` | `$.pull_request.user.login` |
-| `PR_AUTHOR_EMAIL` | `$.pull_request.user.email` |
-| `PR_URL` | `$.pull_request.html_url` |
-| `PR_TITLE` | `$.pull_request.title` |
+| `PR_ID` | pull request number |
+| `PR_ACTION` | `opened` for the first SHA of that PR, otherwise `synchronize` |
+| `PR_DRAFT` | `false` |
+| `PR_REPOSITORY` | `NetApp/cloudstack` |
+| `PR_BASE_BRANCH` | `main` |
+| `PR_HEAD_BRANCH` | pull request head ref |
+| `PR_HEAD_SHA` | pull request head SHA |
+| `PR_AUTHOR_LOGIN` | pull request user login |
+| `PR_AUTHOR_EMAIL` | pull request user email, if present |
+| `PR_URL` | pull request HTML URL |
+| `PR_TITLE` | pull request title |
 
-The trigger admits only non-draft `NetApp/cloudstack` PRs to `main` for `opened`, `synchronize`, `reopened`, or
-`ready_for_review`. The eligibility stage repeats safety checks. Ineligible parameterized requests become
-`NOT_BUILT`.
+Discovery skips a SHA that already has a queued or recorded worker. It queues at most `MAX_ACTIVE_WORKERS` (default
+5) `pull_request` workers at a time, oldest-updated first. Extra eligible SHAs are deferred and the watermark is
+held so the next poll retries them. Manual **Build with Parameters** runs bypass the cap. Its first successful run
+seeds the current time without queueing historical PRs. The eligibility stage repeats safety checks. Ineligible
+parameterized requests become `NOT_BUILT`.
 
 ### Manual exact-SHA branch
 
@@ -233,8 +245,9 @@ Required Jenkins plugins:
 - Lockable Resources;
 - Credentials and Credentials Binding;
 - Email Extension;
-- Generic Webhook Trigger;
 - GitHub Branch Source 2.7.1 or newer.
+
+Generic Webhook Trigger is not required. GitHub.com cannot POST to OpenLab Jenkins.
 
 Jenkins must create pods that can pull both images, reach GitHub/dependency sources, vCenter, and the VM, and satisfy
 the Jenkinsfile resources.
@@ -258,7 +271,7 @@ command or arguments.
 
 Lab prerequisites: vCenter revert/power access; dedicated network/IP/VLAN allocations; reachable NFS and KVM
 template URLs; ONTAP SVM with NFS3/iSCSI and matching data LIFs; dedicated lab accounts; and an externally reachable
-HTTPS Jenkins URL for webhook and Check links.
+HTTPS Jenkins URL for Check Details links. GitHub does not need inbound access to Jenkins.
 
 ## 8. Builder image
 
@@ -309,8 +322,7 @@ Create credentials in a scope visible to the job:
 | `cloudstack-kvm-host` | Username with password | Marvin `addHost` |
 | `cloudstack-ontap` | Username with password | ONTAP test SVM |
 | `cloudstack-admin` | Username with password | Fresh CloudStack API |
-| `cloudstack-presubmit-github-app` | GitHub App | Check Runs/commit email |
-| `cloudstack-presubmit-webhook-token` | Secret text | Generic trigger authorization |
+| `cloudstack-presubmit-github-app` | GitHub App | Check Runs, commit email, discovery PR list |
 | site-defined optional ID | Username with password | Read-only Git access |
 
 Parameter mapping:
@@ -391,6 +403,16 @@ Reserved by: empty
 
 The Pipeline locks by label, receives the resource name as `LOCKED_VM`, and maps it back to inventory.
 
+Also create:
+
+```text
+Lockable Resource Name: cloudstack-presubmit-discovery
+Label: empty
+Reserved by: empty
+```
+
+This serializes only short discovery runs. It does not prevent worker builds from compiling concurrently.
+
 ## 11. Clean snapshot contract
 
 The reusable baseline must:
@@ -432,6 +454,7 @@ no events. Grant:
 | Checks | Read and write |
 | Contents | Read-only |
 | Metadata | Read-only |
+| Pull requests | Read-only |
 
 Grant no organization/account permissions. Convert the downloaded key to PKCS#8:
 
@@ -445,25 +468,12 @@ The result starts with `BEGIN PRIVATE KEY`. Add Kind **GitHub App**, ID
 An app not installed on `cloudstack` receives API 404. The pipeline rebinds the credential per API call because
 installation tokens are short-lived.
 
-### Webhook token and webhook
+### Discovery in the same job
 
-```bash
-openssl rand -hex 32
-```
-
-Store as Secret text `cloudstack-presubmit-webhook-token`. After first load and a good smoke test, add:
-
-```text
-Payload URL: https://<JENKINS_URL>/generic-webhook-trigger/invoke?token=<token value>
-Content type: application/json
-GitHub Secret/HMAC field: empty
-SSL verification: enabled
-Events: Pull requests only
-Active: enabled
-```
-
-The query uses the Secret text value, not credential ID or App key. Do not select Pushes; PR commits produce
-`synchronize`.
+Do not create a GitHub repository webhook. OpenLab is not publicly accessible; GitHub deliveries fail with
+`failed to connect to host`. The production Jenkinsfile declares a five-minute timer. A `discover` build calls
+GitHub, then self-queues one `pull_request` worker per unseen PR head SHA. Create the named Lockable Resource
+`cloudstack-presubmit-discovery` to prevent overlapping discovery runs. Do not create a separate poller job.
 
 ### Pipeline item
 
@@ -482,13 +492,14 @@ Concurrent builds: enabled
 Job-level abort previous: disabled
 ```
 
-Leave UI triggers unchecked; the Jenkinsfile declares Generic Webhook Trigger.
+Do not add UI triggers manually. The Jenkinsfile declares `cron('H/5 * * * *')`.
 
 ### First load and script approvals
 
-Click **Build Now** once. Expected: request validation fails because `PR_ID` is empty, but Jenkins loads parameters
-and trigger. Refresh, confirm **Build with Parameters**, then confirm **Configure > Build Triggers > Generic Webhook
-Trigger** uses `cloudstack-presubmit-webhook-token`.
+Click **Build Now** once. It may load the new defaults or fail once using old defaults. Refresh, confirm
+`SOURCE_MODE` offers `discover`, `pull_request`, and `branch`, then run `discover` once to seed the watermark without
+queueing historical PRs. Confirm **Configure > Build Triggers** shows the five-minute timer and no Generic Webhook
+Trigger.
 
 `Abort superseded run` uses Jenkins internal APIs. Under **Manage Jenkins > In-process Script Approval**, approve
 only signatures actually requested by this trusted `WorkflowScript` for obtaining the job, enumerating builds,
@@ -497,7 +508,7 @@ assuming permission check**. Exact signatures vary by controller/plugin versions
 
 ### Parameterized smoke test
 
-Before enabling webhook, run a real non-draft PR manually:
+Before relying on discovery, run a real non-draft PR manually:
 
 ```text
 SOURCE_MODE=pull_request
@@ -518,7 +529,7 @@ PAUSE_BETWEEN_STAGES=true
 ```
 
 Confirm exact-SHA Check, start mail attempt, clean checkout, Stage 1/2 pass, matching Check conclusion, one final
-mail attempt, and secret-free archives. Turn pauses off for normal webhook operation.
+mail attempt, and secret-free archives. Turn pauses off for automatic workers.
 
 ### Required Check
 
@@ -575,7 +586,12 @@ may fail while loading parameters. Keep the job triggerless and review approvals
 
 ## 14. Jenkins flow by stage
 
-The Pipeline has an eight-hour timeout and retains 30 builds.
+The Pipeline has an eight-hour timeout and retains 500 builds so discovery runs do not flush worker history.
+
+### Discover PR revisions
+
+Runs only for `SOURCE_MODE=discover`. Lists eligible PRs, self-queues workers under the cap, holds the watermark
+when work is deferred, then finishes `NOT_BUILT` so mail, Checks, and tests are skipped.
 
 ### Validate source request
 
@@ -783,8 +799,8 @@ to HTML, writes `presubmit-results/report.html`, and archives those files before
 
 Both mails share the subject base `CloudStack presubmit PR-<id> <title>, diff #<n> (<sha12>)`, so mail clients thread
 the pair. The diff number counts the distinct commits presubmitted for that PR: re-running the same commit keeps its
-number and each new push increments it. Only builds still retained by `logRotator(numToKeepStr: '30')` are inspected,
-so a PR with more than 30 intervening builds can report a lower number. When the lookup fails the subject falls back
+number and each new push increments it. Only builds still retained by `logRotator(numToKeepStr: '500')` are inspected,
+so a PR with more than 500 intervening builds can report a lower number. When the lookup fails the subject falls back
 to `diff <sha12>` and the diff row is omitted.
 
 Jenkins archives:
@@ -974,11 +990,13 @@ configure, or health logs that already passed.
 - missing GitHub App Kind: update GitHub Branch Source;
 - Check 401: bad credential; 403: permission/rate; 404: installation/repository;
 - broken Details link: fix Jenkins URL;
-- webhook 404: job has not loaded trigger; 403: token mismatch;
-- HTTP 200/no run: inspect action and trigger filter;
+- discovery 401/403 listing PRs: App missing Pull requests read or not installed on `cloudstack`;
+- discovery skips a new push: SHA already recorded, PR is a draft, base is not `main`, `updated_at` is not after
+  the latest successful discovery watermark, or five `pull_request` workers are already active (console says
+  `Deferred`);
+- discovery deferred a SHA: wait for a worker to finish; the next poll retries because the watermark was held;
+- `failed to connect to host` on a GitHub webhook: expected; delete the webhook and use discovery;
 - branch mode: no Check is expected.
-
-Use **Settings > Webhooks > Recent Deliveries**. Never log token/raw payload.
 
 Mail failures appear as `Presubmit mail was not sent`; no address, noreply address, or SMTP failure does not change
 the build.
@@ -993,13 +1011,14 @@ the build.
 - [ ] populated inventory remains outside Git;
 - [ ] each enabled VM maps to a labeled resource and clean snapshot;
 - [ ] production SCM is `*/main` after CSTACKEX-223 is merged (until then `*/feature/CSTACKEX-223`), lightweight off, and source checkout full;
-- [ ] first load applied parameters/trigger and only needed signatures are approved;
+- [ ] first load applied parameters and only needed signatures are approved;
 - [ ] parameterized PR smoke run passed;
-- [ ] App installation, exact-SHA Check conclusion, and webhook HTTP 200 are proven;
+- [ ] App installation, exact-SHA Check conclusion, and discovery queue of a new SHA are proven;
 - [ ] Check is required on `main`;
+- [ ] discovery defers extra SHAs once five workers are active and a later poll queues them;
 - [ ] concurrency behavior is proven;
 - [ ] archives contain no generated config, token, key, or secrets;
-- [ ] `PAUSE_BETWEEN_STAGES` is off for normal webhook runs.
+- [ ] `PAUSE_BETWEEN_STAGES` is off for automatic worker runs.
 
 ## 22. Remaining gaps and future invariants
 
