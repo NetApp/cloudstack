@@ -17,295 +17,1581 @@
  * under the License.
  */
 
-/*
- * Private downstream Jenkins pipeline for Apache CloudStack.
- * Not for inclusion in apache/cloudstack upstream.
- *
- * Rollout: Phase -1 = preflight (validate private-cicd only). Phase 1 = build-only. Phases 2–3 = marvin / delivery — see private-cicd/docs/IMPLEMENTATION-PHASES.md
- *
- * Usage:
- *  - Monorepo: Script Path = private-cicd/Jenkinsfile ; leave CLONE_SEPARATE = false.
- *  - CI-only repo: set CLONE_SEPARATE = true and point CLOUDSTACK_* at your fork/tag.
- */
+@NonCPS
+def sourceKeyFromParameters(parameters) {
+    def sourceMode = parameters?.getParameter('SOURCE_MODE')?.value?.toString() ?: 'pull_request'
+    if (sourceMode == 'branch') {
+        def sourceBranch = parameters?.getParameter('SOURCE_BRANCH')?.value?.toString()
+        return sourceBranch ? "branch:${sourceBranch}" : null
+    }
+    def prId = parameters?.getParameter('PR_ID')?.value?.toString()
+    return prId ? "pull_request:${prId}" : null
+}
+
+@NonCPS
+def shaFromParameters(parameters) {
+    def sourceMode = parameters?.getParameter('SOURCE_MODE')?.value?.toString() ?: 'pull_request'
+    def name = sourceMode == 'branch' ? 'SOURCE_SHA' : 'PR_HEAD_SHA'
+    return parameters?.getParameter(name)?.value?.toString()
+}
+
+@NonCPS
+boolean matchingPresubmitParameters(parameters, String prId, String sha) {
+    def sourceMode = parameters?.getParameter('SOURCE_MODE')?.value?.toString()
+    if (sourceMode != 'pull_request') {
+        return false
+    }
+    def id = parameters?.getParameter('PR_ID')?.value?.toString()
+    def head = parameters?.getParameter('PR_HEAD_SHA')?.value?.toString()
+    return id == prId && (!sha || head == sha)
+}
+
+@NonCPS
+boolean isPullRequestWorker(parameters) {
+    return parameters?.getParameter('SOURCE_MODE')?.value?.toString() ==
+        'pull_request'
+}
+
+@NonCPS
+boolean presubmitKnows(String jobName, String prId, String sha) {
+    def jenkins = jenkins.model.Jenkins.get()
+    def job = jenkins.getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def queued = jenkins.queue.items.any { item ->
+        item.task?.fullName == job.fullName &&
+            matchingPresubmitParameters(
+                item.getAction(hudson.model.ParametersAction), prId, sha)
+    }
+    return queued || job.getBuilds().any { build ->
+        matchingPresubmitParameters(
+            build.getAction(hudson.model.ParametersAction), prId, sha)
+    }
+}
+
+@NonCPS
+int activeWorkerCount(String jobName) {
+    def jenkins = jenkins.model.Jenkins.get()
+    def job = jenkins.getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def queued = jenkins.queue.items.findAll { item ->
+        item.task?.fullName == job.fullName &&
+            isPullRequestWorker(item.getAction(hudson.model.ParametersAction))
+    }
+    def running = job.getBuilds().findAll { build ->
+        build.isBuilding() &&
+            isPullRequestWorker(build.getAction(hudson.model.ParametersAction))
+    }
+    return queued.size() + running.size()
+}
+
+@NonCPS
+String latestDiscoveryWatermark(String jobName, int buildNumber) {
+    def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def build = job.getBuilds().find { candidate ->
+        if (candidate.number >= buildNumber || candidate.isBuilding()) {
+            return false
+        }
+        def sourceMode = candidate.getAction(hudson.model.ParametersAction)
+            ?.getParameter('SOURCE_MODE')?.value?.toString()
+        if (sourceMode != 'discover') {
+            return false
+        }
+        def environment = candidate.getAction(
+            org.jenkinsci.plugins.workflow.cps.EnvActionImpl
+        )?.getOverriddenEnvironment()
+        return environment?.get('PRESUBMIT_DISCOVERY_NEXT_WATERMARK')
+    }
+    return build?.getAction(org.jenkinsci.plugins.workflow.cps.EnvActionImpl)
+        ?.getOverriddenEnvironment()?.get('PRESUBMIT_DISCOVERY_NEXT_WATERMARK')
+}
+
+// The diff number counts how many distinct commits have been presubmitted for
+// this PR, so a re-run of the same commit keeps its number. Only the builds
+// still kept by the build discarder can be inspected.
+@NonCPS
+int diffNumberForSource(String jobName, int buildNumber, String sourceKey, String sha) {
+    def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
+    if (job == null || !sourceKey) {
+        return 1
+    }
+
+    def previousShas = [] as Set
+    job.getBuilds().findAll {
+        it.number < buildNumber
+    }.each { build ->
+        def parameters = build.getAction(hudson.model.ParametersAction)
+        if (sourceKeyFromParameters(parameters) == sourceKey) {
+            def previousSha = shaFromParameters(parameters)
+            if (previousSha) {
+                previousShas << previousSha
+            }
+        }
+    }
+    previousShas.remove(sha)
+    return previousShas.size() + 1
+}
+
+@NonCPS
+boolean hasIntegrationStarted(build) {
+    def environment = build.getAction(
+        org.jenkinsci.plugins.workflow.cps.EnvActionImpl
+    )?.getOverriddenEnvironment()
+    return environment?.get('PRESUBMIT_INTEGRATION_STARTED') == 'true'
+}
+
+@NonCPS
+def abortOlderBuildsForSource(String jobName, int buildNumber, String sourceKey) {
+    def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+
+    def results = []
+    job.getBuilds().findAll {
+        it.isBuilding() && it.number < buildNumber
+    }.each { build ->
+        def parameters = build.getAction(hudson.model.ParametersAction)
+        if (sourceKeyFromParameters(parameters) == sourceKey) {
+            if (hasIntegrationStarted(build)) {
+                results << "Not aborting build #${build.number}: ONTAP integration has started."
+            } else {
+                build.doStop()
+                results << "Aborted superseded build #${build.number}."
+            }
+        }
+    }
+    return results
+}
+
+@NonCPS
+boolean containsPlaceholder(Object value) {
+    if (value instanceof Map) {
+        return value.values().any { containsPlaceholder(it) }
+    }
+    if (value instanceof Collection) {
+        return value.any { containsPlaceholder(it) }
+    }
+    return value != null && value.toString().contains('PLACEHOLDER-')
+}
+
+@NonCPS
+boolean isValidBranchName(String branchName) {
+    if (!(branchName ==~ /^[A-Za-z0-9._\/-]+$/) ||
+            branchName.startsWith('-') ||
+            branchName.startsWith('/') ||
+            branchName.endsWith('/') ||
+            branchName.endsWith('.') ||
+            branchName.contains('..') ||
+            branchName.contains('//') ||
+            branchName.contains('@{')) {
+        return false
+    }
+    return !branchName.split('/').any {
+        it.isEmpty() || it.startsWith('.') || it.endsWith('.lock')
+    }
+}
+
+def validateInventory(Map inventory) {
+    if (containsPlaceholder(inventory)) {
+        error('VM inventory still contains PLACEHOLDER- values.')
+    }
+
+    def allVms = inventory.vms ?: []
+    if (!(allVms instanceof Collection) || allVms.isEmpty()) {
+        error('VM inventory must contain a non-empty vms list.')
+    }
+    def enabledInventoryVms = allVms.findAll {
+        it.enabled == null || it.enabled.toString().toBoolean()
+    }
+    def resources = enabledInventoryVms.collect { it.lock_resource as String }
+    if (resources.any { !it } || resources.toSet().size() != resources.size()) {
+        error('Enabled inventory VMs need unique, non-empty lock_resource values.')
+    }
+
+    def requiredCapabilities = ['ubuntu22', 'kvm', 'ontap'] as Set
+    def enabledVms = enabledInventoryVms.findAll {
+        def capabilities = (it.capabilities ?: []).collect { capability ->
+            capability as String
+        } as Set
+        capabilities.containsAll(requiredCapabilities)
+    }
+    if (enabledVms.isEmpty()) {
+        error('VM inventory has no enabled VM with ubuntu22, kvm, and ontap capabilities.')
+    }
+
+    enabledVms.each { vm ->
+        ['id', 'lock_resource', 'ssh_host', 'vcenter_vm', 'snapshot', 'bridge'].each { key ->
+            if (!vm[key]?.toString()?.trim()) {
+                error("Inventory VM '${vm.id ?: vm.lock_resource ?: 'unknown'}' has no usable '${key}'.")
+            }
+        }
+        [
+            management_server: vm.dedicated_ips?.management_server,
+            kvm_host: vm.dedicated_ips?.kvm_host,
+            public_gateway: vm.dedicated_ips?.public?.gateway,
+            public_netmask: vm.dedicated_ips?.public?.netmask,
+            public_start: vm.dedicated_ips?.public?.start,
+            public_end: vm.dedicated_ips?.public?.end,
+            pod_gateway: vm.dedicated_ips?.pod?.gateway,
+            pod_netmask: vm.dedicated_ips?.pod?.netmask,
+            pod_start: vm.dedicated_ips?.pod?.start,
+            pod_end: vm.dedicated_ips?.pod?.end,
+            zone_name: vm.zone?.name,
+            network_type: vm.zone?.network_type,
+            dns1: vm.zone?.dns1,
+            internal_dns1: vm.zone?.internal_dns1,
+            guest_cidr: vm.zone?.guest_cidr,
+            guest_vlan_range: vm.zone?.guest_vlan_range,
+            pod_name: vm.zone?.pod_name,
+            cluster_name: vm.zone?.cluster_name,
+            primary_storage_url: vm.zone?.primary_storage_url,
+            secondary_storage_url: vm.zone?.secondary_storage_url,
+            systemvm_template_url: vm.zone?.systemvm_template_url,
+            template_name: vm.zone?.template_name,
+            ontap_storage_ip: vm.ontap?.storage_ip,
+            ontap_svm_name: vm.ontap?.svm_name
+        ].each { key, value ->
+            if (!value?.toString()?.trim()) {
+                error("Inventory VM '${vm.id}' has no usable '${key}'.")
+            }
+        }
+    }
+    return enabledVms
+}
+
+// Discovery only needs list-eligible-prs.py, so it fetches one commit without
+// tags and checks out only private-cicd/scripts. A full checkout of CloudStack
+// takes minutes and makes each poll outlast the next timer trigger.
+// The GitSCM getters are sandboxed, so fall back to the full checkout when the
+// controller has not approved them yet.
+void checkoutDiscoveryScripts() {
+    try {
+        checkout([
+            $class: 'GitSCM',
+            branches: scm.branches,
+            userRemoteConfigs: scm.userRemoteConfigs,
+            extensions: [
+                [$class: 'CloneOption', shallow: true, depth: 1, noTags: true],
+                [
+                    $class: 'SparseCheckoutPaths',
+                    sparseCheckoutPaths: [[path: 'private-cicd/scripts']]
+                ]
+            ]
+        ])
+    } catch (Exception e) {
+        echo "Shallow discovery checkout unavailable, using the full checkout: ${e}"
+        checkout(scm)
+    }
+}
+
+// Optional manual gate after a stage, enabled by PAUSE_BETWEEN_STAGES.
+// The pod stays reserved while an input waits, so the timeout is required.
+void pauseForVerification(String stageName) {
+    if (!params.PAUSE_BETWEEN_STAGES) {
+        return
+    }
+    timeout(time: 60, unit: 'MINUTES') {
+        input(message: "Finished '${stageName}'. Proceed to the next stage?", ok: 'Proceed')
+    }
+}
+
+void recordStageEvent(String stageName, String status) {
+    try {
+        withEnv([
+            "PRESUBMIT_STAGE_NAME=${stageName}",
+            "PRESUBMIT_STAGE_STATUS=${status}"
+        ]) {
+            sh '''
+                stage_events="${WORKSPACE}@tmp/presubmit-stage-events.tsv"
+                mkdir -p "$(dirname "$stage_events")"
+                printf '%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+                    "$PRESUBMIT_STAGE_NAME" "$PRESUBMIT_STAGE_STATUS" >> "$stage_events"
+            '''
+        }
+    } catch (Exception e) {
+        echo "Unable to record presubmit stage event: ${e}"
+    }
+}
+
+String presubmitSubjectBase() {
+    def recipientName = params.PR_AUTHOR_LOGIN?.trim()
+    if (!recipientName && env.PRESUBMIT_MAIL_TO?.contains('@')) {
+        recipientName = env.PRESUBMIT_MAIL_TO.substring(0, env.PRESUBMIT_MAIL_TO.indexOf('@'))
+    }
+    def sourceName = params.SOURCE_MODE == 'branch' ?
+        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+    def title = params.PR_TITLE?.replaceAll(/[\r\n]+/, ' ')?.trim()
+    if (title?.length() > 80) {
+        title = title.take(77) + '...'
+    }
+    def titlePart = title ? " ${title}" : ''
+    def mention = recipientName ? "@${recipientName}: " : ''
+    def diffNumber = env.PRESUBMIT_DIFF_NUMBER?.trim()
+    def diffPart = diffNumber ?
+        "diff #${diffNumber} (${env.RESOLVED_SOURCE_SHA.take(12)})" :
+        "diff ${env.RESOLVED_SOURCE_SHA.take(12)}"
+    return "${mention}CloudStack presubmit ${sourceName}${titlePart}, ${diffPart}"
+}
+
+void sendPresubmitMail(String subject, String body) {
+    def recipient = env.PRESUBMIT_MAIL_TO?.trim()
+    if (!recipient) {
+        echo 'Presubmit mail skipped: no recipient could be resolved.'
+        return
+    }
+    try {
+        emailext(
+            subject: subject,
+            body: body,
+            mimeType: 'text/html',
+            to: recipient
+        )
+    } catch (Exception e) {
+        echo "Presubmit mail was not sent: ${e}"
+    }
+}
+
+boolean hasGithubAppCredential() {
+    def credentialId = params.GITHUB_APP_CREDENTIALS_ID?.trim()
+    return credentialId && !credentialId.startsWith('PLACEHOLDER-')
+}
+
+List githubEnvironment() {
+    return [
+        "GITHUB_REPOSITORY=${params.PR_REPOSITORY}",
+        "GITHUB_HEAD_SHA=${params.PR_HEAD_SHA}",
+        "PR_ID=${params.PR_ID}",
+        "PR_TITLE=${params.PR_TITLE ?: ''}"
+    ]
+}
+
+void createGithubCheck() {
+    if (params.SOURCE_MODE != 'pull_request' || !hasGithubAppCredential()) {
+        echo 'GitHub Check creation skipped: GitHub App credential is not configured.'
+        return
+    }
+    try {
+        withCredentials([
+            usernamePassword(
+                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                usernameVariable: 'GITHUB_APP',
+                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+            )
+        ]) {
+            withEnv(githubEnvironment()) {
+                def checkRunId = sh(
+                    script: 'private-cicd/scripts/github-check-run.sh create',
+                    returnStdout: true
+                ).trim()
+                if (!(checkRunId ==~ /^[0-9]+$/)) {
+                    throw new IllegalStateException("GitHub returned an invalid Check Run ID '${checkRunId}'.")
+                }
+                env.GITHUB_CHECK_RUN_ID = checkRunId
+                echo "Created GitHub Check Run ${checkRunId} on ${params.PR_HEAD_SHA}."
+            }
+        }
+    } catch (Exception e) {
+        // A missing check cannot be noticed from the build result, because
+        // reporting deliberately never changes it. Surface it on the job page.
+        currentBuild.description = (
+            (currentBuild.description ? currentBuild.description + ' | ' : '') +
+            'GitHub Check not published'
+        )
+        echo "GitHub Check creation failed; presubmit will continue: ${e}"
+        echo 'Run this job with SOURCE_MODE=diagnose and the same PR_HEAD_SHA ' +
+            'to identify the cause.'
+    }
+}
+
+void completeGithubCheck(String conclusion) {
+    if (!env.GITHUB_CHECK_RUN_ID?.trim() || !hasGithubAppCredential()) {
+        return
+    }
+    try {
+        withCredentials([
+            usernamePassword(
+                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                usernameVariable: 'GITHUB_APP',
+                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+            )
+        ]) {
+            withEnv(githubEnvironment() + [
+                "GITHUB_CHECK_CONCLUSION=${conclusion}"
+            ]) {
+                sh 'private-cicd/scripts/github-check-run.sh complete'
+                echo "Completed GitHub Check Run ${env.GITHUB_CHECK_RUN_ID} with conclusion ${conclusion}."
+            }
+        }
+    } catch (Exception e) {
+        echo "GitHub Check completion failed; presubmit result is unchanged: ${e}"
+    }
+}
+
+void resolvePresubmitMailRecipient() {
+    def webhookEmail = params.PR_AUTHOR_EMAIL?.trim()
+    env.PRESUBMIT_MAIL_TO = webhookEmail?.contains('@') &&
+        !webhookEmail.equalsIgnoreCase('null') ? webhookEmail : ''
+    if (env.PRESUBMIT_MAIL_TO || params.SOURCE_MODE != 'pull_request' ||
+            !hasGithubAppCredential()) {
+        return
+    }
+    try {
+        withCredentials([
+            usernamePassword(
+                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                usernameVariable: 'GITHUB_APP',
+                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+            )
+        ]) {
+            withEnv(githubEnvironment()) {
+                def commitEmail = sh(
+                    script: 'private-cicd/scripts/github-check-run.sh commit-email',
+                    returnStdout: true
+                ).trim()
+                if (commitEmail && !commitEmail.endsWith('@users.noreply.github.com')) {
+                    env.PRESUBMIT_MAIL_TO = commitEmail
+                }
+            }
+        }
+    } catch (Exception e) {
+        echo "Unable to resolve PR author email from GitHub: ${e}"
+    }
+}
+
+String htmlEscape(String value) {
+    return (value ?: '')
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace("'", '&#39;')
+}
+
+// Mirrors the table styling of scripts/generate-presubmit-report.py so the
+// start mail and the final report mail look like the same document.
+String presubmitInfoRow(String label, String valueHtml) {
+    def labelStyle = 'text-align:left;background:#f2f4f7;' +
+        'border:1px solid #d0d5dd;padding:8px'
+    def valueStyle = 'border:1px solid #d0d5dd;padding:8px'
+    return "<tr><td style=\"${labelStyle}\"><strong>${htmlEscape(label)}</strong></td>" +
+        "<td style=\"${valueStyle}\">${valueHtml}</td></tr>"
+}
+
+String presubmitStartHtml() {
+    def source = params.SOURCE_MODE == 'branch' ?
+        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+    def sourceHtml = params.PR_URL ==~ /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+$/ ?
+        "<a href=\"${htmlEscape(params.PR_URL)}\">${htmlEscape(source)}</a>" :
+        htmlEscape(source)
+    def diffNumber = env.PRESUBMIT_DIFF_NUMBER?.trim()
+    def rows = presubmitInfoRow('Source', sourceHtml) +
+        presubmitInfoRow('Title', htmlEscape(params.PR_TITLE ?: 'not provided'))
+    if (diffNumber) {
+        rows += presubmitInfoRow('Diff', "#${htmlEscape(diffNumber)}")
+    }
+    rows += presubmitInfoRow(
+        'Commit', "<code>${htmlEscape(env.RESOLVED_SOURCE_SHA)}</code>")
+    rows += presubmitInfoRow('Started', htmlEscape(env.PRESUBMIT_STARTED_AT))
+    def consoleUrl = "${env.BUILD_URL}console"
+    return """<div style="font-family:Arial,sans-serif;color:#101828">
+<h1 style="margin-bottom:4px">CloudStack ONTAP presubmit</h1>
+<p style="font-size:18px;color:#175cd3;font-weight:bold">STARTED</p>
+<table style="border-collapse:collapse;margin:12px 0">
+${rows}
+</table>
+<p><a href="${htmlEscape(env.BUILD_URL)}">Jenkins build</a> &middot;
+<a href="${htmlEscape(consoleUrl)}">Console</a></p>
+<p>A final mail with the stage table, stage durations, and the ONTAP test
+results follows when this run finishes.</p>
+</div>"""
+}
+
+// Stage bodies live in the methods below rather than inline in the stages
+// further down. The JVM caps one method at 64KB of bytecode and Jenkins
+// compiles the whole body of the pipeline directive into a single method, so
+// inlining these again reintroduces JENKINS-37984
+// ("Method too large: WorkflowScript.___cps___NNNN").
+// These methods call steps, so none of them may be @NonCPS.
+
+// Worker stages run only for a real build request, so discovery and the
+// GitHub App diagnostic skip them, as does a request that `Check eligibility`
+// rejected by setting NOT_BUILT.
+boolean isWorkerStageEnabled() {
+    return params.SOURCE_MODE in ['pull_request', 'branch'] &&
+        currentBuild.result != 'NOT_BUILT'
+}
+
+boolean isDiagnoseRun() {
+    return params.SOURCE_MODE == 'diagnose'
+}
+
+void discoverPullRequests() {
+    currentBuild.displayName = "#${env.BUILD_NUMBER} discover"
+    // Skipping instead of queueing keeps a slow poll from building
+    // a backlog of discovery runs that each hold an agent pod.
+    lock(resource: 'cloudstack-presubmit-discovery', skipIfLocked: true) {
+        env.PRESUBMIT_DISCOVERY_RAN = 'true'
+        deleteDir()
+        checkoutDiscoveryScripts()
+        if (!(params.EXPECTED_REPOSITORY ==~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
+            error('EXPECTED_REPOSITORY must be owner/repository.')
+        }
+        if (!isValidBranchName(params.DISCOVERY_BASE_BRANCH)) {
+            error('DISCOVERY_BASE_BRANCH is not a valid Git branch name.')
+        }
+        if (!(params.GITHUB_APP_CREDENTIALS_ID ==~ /^[A-Za-z0-9._-]+$/)) {
+            error('GITHUB_APP_CREDENTIALS_ID contains unsupported characters.')
+        }
+        if (!(params.MAX_ACTIVE_WORKERS ==~ /^[1-9][0-9]*$/)) {
+            error('MAX_ACTIVE_WORKERS must be a positive integer.')
+        }
+        def cap = params.MAX_ACTIVE_WORKERS.toInteger()
+        def previousWatermark = latestDiscoveryWatermark(
+            env.JOB_NAME,
+            env.BUILD_NUMBER.toInteger()
+        )
+        def isInitialDiscovery = !previousWatermark
+        def thisStart = new Date(currentBuild.startTimeInMillis).format(
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            TimeZone.getTimeZone('UTC')
+        )
+        def watermark = previousWatermark ?: thisStart
+        withCredentials([
+            usernamePassword(
+                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                usernameVariable: 'GITHUB_APP',
+                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+            )
+        ]) {
+            withEnv([
+                "DISCOVERY_REPOSITORY=${params.EXPECTED_REPOSITORY}",
+                "DISCOVERY_BASE_BRANCH=${params.DISCOVERY_BASE_BRANCH}",
+                "DISCOVERY_UPDATED_AFTER=${watermark}"
+            ]) {
+                sh '''
+                    python3 private-cicd/scripts/list-eligible-prs.py \
+                        --repository "$DISCOVERY_REPOSITORY" \
+                        --base-branch "$DISCOVERY_BASE_BRANCH" \
+                        --updated-after "$DISCOVERY_UPDATED_AFTER" \
+                        > eligible-prs.json
+                '''
+            }
+        }
+        def pulls = readJSON(file: 'eligible-prs.json')
+        if (!(pulls instanceof List)) {
+            error('eligible-prs.json is not a JSON array.')
+        }
+        if (isInitialDiscovery) {
+            echo "Seeded discovery watermark at ${watermark}; existing PRs were not queued."
+            pulls = []
+        }
+        int queuedCount = 0
+        int deferredCount = 0
+        int knownActive = cap
+        try {
+            knownActive = activeWorkerCount(env.JOB_NAME)
+        } catch (Exception e) {
+            echo "Unable to inspect the worker queue; discovery will not queue new workers: ${e}"
+        }
+        pulls.each { pull ->
+            def prId = pull.pr_id?.toString()
+            def sha = pull.pr_head_sha?.toString()
+            if (!(prId ==~ /^[0-9]+$/) ||
+                    !(sha ==~ /^[0-9a-fA-F]{40}$/)) {
+                echo "Skipping malformed pull request payload: ${pull}"
+                return
+            }
+            if (presubmitKnows(env.JOB_NAME, prId, sha)) {
+                echo "PR-${prId} ${sha.take(12)} already has a queued or recorded presubmit."
+                return
+            }
+            if (knownActive + queuedCount >= cap) {
+                echo "Deferred PR-${prId} ${sha.take(12)}: ${knownActive + queuedCount} active workers at cap ${cap}."
+                deferredCount++
+                return
+            }
+            def action = presubmitKnows(
+                env.JOB_NAME, prId, '') ?
+                'synchronize' : 'opened'
+            echo "Queueing PR-${prId} ${action} at ${sha.take(12)}."
+            build(
+                job: env.JOB_NAME,
+                wait: false,
+                propagate: false,
+                parameters: [
+                    string(name: 'SOURCE_MODE', value: 'pull_request'),
+                    string(name: 'PR_ID', value: prId),
+                    string(name: 'PR_ACTION', value: action),
+                    string(name: 'PR_DRAFT', value: 'false'),
+                    string(name: 'PR_REPOSITORY', value: params.EXPECTED_REPOSITORY),
+                    string(name: 'PR_BASE_BRANCH', value: params.DISCOVERY_BASE_BRANCH),
+                    string(name: 'PR_HEAD_BRANCH', value: pull.pr_head_branch ?: ''),
+                    string(name: 'PR_HEAD_SHA', value: sha),
+                    string(name: 'PR_AUTHOR_LOGIN', value: pull.pr_author_login ?: ''),
+                    string(name: 'PR_AUTHOR_EMAIL', value: pull.pr_author_email ?: ''),
+                    string(name: 'PR_URL', value: pull.pr_url ?: ''),
+                    string(name: 'PR_TITLE', value: pull.pr_title ?: '')
+                ]
+            )
+            queuedCount++
+        }
+        env.PRESUBMIT_DISCOVERY_NEXT_WATERMARK =
+            deferredCount > 0 ? watermark : thisStart
+        currentBuild.displayName =
+            "#${env.BUILD_NUMBER} discover: queued ${queuedCount}, deferred ${deferredCount}"
+        currentBuild.description = isInitialDiscovery ?
+            "seeded at ${watermark}" : "since ${watermark}"
+        // Jenkins treats NOT_BUILT as worse than FAILURE and
+        // never improves a result, so this must stay last.
+        // Setting it earlier hides a broken discovery run.
+        currentBuild.result = 'NOT_BUILT'
+    }
+    if (env.PRESUBMIT_DISCOVERY_RAN != 'true') {
+        currentBuild.displayName =
+            "#${env.BUILD_NUMBER} discover: skipped, lock held"
+        currentBuild.result = 'NOT_BUILT'
+    }
+}
+
+void validateSourceRequest() {
+    sh 'rm -f "${WORKSPACE}@tmp/presubmit-stage-events.tsv"'
+    env.PRESUBMIT_INTEGRATION_STARTED = 'false'
+    env.PRESUBMIT_STARTED_AT = new Date().format(
+        "yyyy-MM-dd'T'HH:mm:ssXXX",
+        TimeZone.getTimeZone('UTC')
+    )
+    recordStageEvent('Validate source request', 'STARTED')
+    if (!(params.SOURCE_MODE in ['pull_request', 'branch'])) {
+        error("Unsupported SOURCE_MODE '${params.SOURCE_MODE}'.")
+    }
+    if (params.SOURCE_MODE == 'branch') {
+        if (!isValidBranchName(params.SOURCE_BRANCH)) {
+            error('SOURCE_BRANCH is not a valid Git branch name.')
+        }
+        if (!(params.SOURCE_SHA ==~ /^[0-9a-fA-F]{40}$/)) {
+            error('SOURCE_SHA must be a full 40-character Git SHA.')
+        }
+    } else {
+        if (!(params.PR_ID ==~ /^[0-9]+$/)) {
+            error('PR_ID must be the numeric GitHub pull request number.')
+        }
+        if (params.PR_REPOSITORY != params.EXPECTED_REPOSITORY) {
+            error("Repository '${params.PR_REPOSITORY}' is not '${params.EXPECTED_REPOSITORY}'.")
+        }
+        if (!(params.PR_HEAD_BRANCH ==~ /^[A-Za-z0-9._\/-]+$/)) {
+            error('PR_HEAD_BRANCH contains unsupported characters.')
+        }
+        if (!(params.PR_HEAD_SHA ==~ /^[0-9a-fA-F]{40}$/) && params.PR_ACTION != 'closed') {
+            error('PR_HEAD_SHA must be a full 40-character Git SHA.')
+        }
+    }
+    if (!(params.CLOUDSTACK_GIT_URL ==~ /^https:\/\/[A-Za-z0-9._\/-]+\.git$/)) {
+        error('CLOUDSTACK_GIT_URL must be an HTTPS Git URL.')
+    }
+    if (params.GIT_CREDENTIALS_ID &&
+            !(params.GIT_CREDENTIALS_ID ==~ /^[A-Za-z0-9._-]+$/)) {
+        error('GIT_CREDENTIALS_ID contains unsupported characters.')
+    }
+    if (!(params.VCENTER_HOST ==~ /^[A-Za-z0-9.-]+$/)) {
+        error('VCENTER_HOST contains unsupported characters.')
+    }
+    [
+        params.GITHUB_APP_CREDENTIALS_ID,
+        params.VM_INVENTORY_CREDENTIALS_ID,
+        params.VCENTER_CREDENTIALS_ID,
+        params.VM_SSH_CREDENTIALS_ID,
+        params.MYSQL_ROOT_CREDENTIALS_ID,
+        params.CLOUD_DB_CREDENTIALS_ID,
+        params.KVM_HOST_CREDENTIALS_ID,
+        params.ONTAP_CREDENTIALS_ID,
+        params.CLOUDSTACK_ADMIN_CREDENTIALS_ID
+    ].each { credentialId ->
+        if (!(credentialId ==~ /^[A-Za-z0-9._-]+$/)) {
+            error("Credential ID contains unsupported characters: ${credentialId}")
+        }
+    }
+    try {
+        def sourceKey = params.SOURCE_MODE == 'branch' ?
+            "branch:${params.SOURCE_BRANCH}" :
+            "pull_request:${params.PR_ID}"
+        env.PRESUBMIT_DIFF_NUMBER = diffNumberForSource(
+            env.JOB_NAME,
+            env.BUILD_NUMBER.toInteger(),
+            sourceKey,
+            env.RESOLVED_SOURCE_SHA
+        ).toString()
+    } catch (Exception e) {
+        env.PRESUBMIT_DIFF_NUMBER = ''
+        echo "Unable to determine the diff number: ${e}"
+    }
+    // The diff number goes in the title so an author can pick
+    // their own run out of a build history dominated by
+    // five-minute discovery runs.
+    def diffLabel = env.PRESUBMIT_DIFF_NUMBER ?
+        " diff #${env.PRESUBMIT_DIFF_NUMBER}" : ''
+    if (params.SOURCE_MODE == 'branch') {
+        currentBuild.displayName =
+            "#${env.BUILD_NUMBER} branch ${params.SOURCE_BRANCH}${diffLabel}"
+        currentBuild.description = "Branch ${params.SOURCE_BRANCH} @ ${params.SOURCE_SHA.take(12)}"
+    } else {
+        currentBuild.displayName =
+            "#${env.BUILD_NUMBER} PR-${params.PR_ID}${diffLabel} ${params.PR_ACTION}"
+        currentBuild.description =
+            "${env.RESOLVED_SOURCE_SHA?.take(12)} ${params.PR_TITLE ?: params.PR_URL}"
+    }
+}
+
+void checkPresubmitEligibility() {
+    recordStageEvent('Check eligibility', 'STARTED')
+    if (params.SOURCE_MODE == 'pull_request') {
+        def eligibleActions = ['opened', 'synchronize', 'reopened', 'ready_for_review']
+        if (params.PR_ACTION == 'closed' ||
+                params.PR_DRAFT.toBoolean() ||
+                params.PR_BASE_BRANCH != 'main' ||
+                !(params.PR_ACTION in eligibleActions)) {
+            currentBuild.result = 'NOT_BUILT'
+            echo "Ignoring PR-${params.PR_ID}: action=${params.PR_ACTION}, draft=${params.PR_DRAFT}, base=${params.PR_BASE_BRANCH}"
+        }
+    }
+}
+
+void abortSupersededRun() {
+    recordStageEvent('Abort superseded run', 'STARTED')
+    def sourceKey = params.SOURCE_MODE == 'branch' ?
+        "branch:${params.SOURCE_BRANCH}" :
+        "pull_request:${params.PR_ID}"
+    try {
+        abortOlderBuildsForSource(
+            env.JOB_NAME,
+            env.BUILD_NUMBER.toInteger(),
+            sourceKey
+        ).each { result ->
+            echo result
+        }
+    } catch (Exception e) {
+        echo "Unable to inspect older builds; no build was aborted: ${e}"
+    }
+}
+
+void checkoutCiScripts() {
+    recordStageEvent('Checkout CI scripts', 'STARTED')
+    deleteDir()
+    checkout(scm)
+}
+
+// A full worker run takes over an hour, so reporting problems are diagnosed
+// with this short build instead of a rebuild of the whole presubmit.
+void diagnoseGithubApp() {
+    currentBuild.displayName = "#${env.BUILD_NUMBER} diagnose GitHub App"
+    if (!hasGithubAppCredential()) {
+        error('GITHUB_APP_CREDENTIALS_ID is unset or still a placeholder.')
+    }
+    def headSha = params.PR_HEAD_SHA?.trim() ?: params.SOURCE_SHA?.trim()
+    if (!(headSha ==~ /^[0-9a-f]{40}$/)) {
+        error('Set PR_HEAD_SHA to a full 40-character commit SHA to diagnose.')
+    }
+    def repository = params.PR_REPOSITORY?.trim() ?: params.EXPECTED_REPOSITORY
+    withCredentials([
+        usernamePassword(
+            credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+            usernameVariable: 'GITHUB_APP',
+            passwordVariable: 'GITHUB_ACCESS_TOKEN'
+        )
+    ]) {
+        withEnv([
+            "GITHUB_REPOSITORY=${repository}",
+            "GITHUB_HEAD_SHA=${headSha}",
+            "PR_ID=${params.PR_ID ?: ''}"
+        ]) {
+            sh 'private-cicd/scripts/github-check-run.sh diagnose'
+        }
+    }
+}
+
+void startPullRequestReporting() {
+    recordStageEvent('Start PR reporting', 'STARTED')
+    createGithubCheck()
+    resolvePresubmitMailRecipient()
+    sendPresubmitMail(
+        "${presubmitSubjectBase()}: STARTED",
+        presubmitStartHtml()
+    )
+}
+
+void validateBuilder() {
+    recordStageEvent('Validate builder', 'STARTED')
+    def required = [
+        VCENTER_HOST                       : params.VCENTER_HOST,
+        VM_INVENTORY_CREDENTIALS_ID        : params.VM_INVENTORY_CREDENTIALS_ID,
+        VCENTER_CREDENTIALS_ID             : params.VCENTER_CREDENTIALS_ID,
+        VM_SSH_CREDENTIALS_ID              : params.VM_SSH_CREDENTIALS_ID,
+        MYSQL_ROOT_CREDENTIALS_ID          : params.MYSQL_ROOT_CREDENTIALS_ID,
+        CLOUD_DB_CREDENTIALS_ID            : params.CLOUD_DB_CREDENTIALS_ID,
+        KVM_HOST_CREDENTIALS_ID            : params.KVM_HOST_CREDENTIALS_ID,
+        ONTAP_CREDENTIALS_ID               : params.ONTAP_CREDENTIALS_ID,
+        CLOUDSTACK_ADMIN_CREDENTIALS_ID    : params.CLOUDSTACK_ADMIN_CREDENTIALS_ID
+    ]
+    required.each { key, value ->
+        if (!value?.trim() || value.startsWith('PLACEHOLDER-')) {
+            error("${key} is missing or still uses a placeholder.")
+        }
+    }
+    withCredentials([
+        file(
+            credentialsId: params.VM_INVENTORY_CREDENTIALS_ID,
+            variable: 'BOUND_VM_INVENTORY_FILE'
+        )
+    ]) {
+        def inventory = readYaml(file: env.BOUND_VM_INVENTORY_FILE) ?: [:]
+        validateInventory(inventory)
+        echo 'VM inventory Secret file parsed and validated before lock acquisition.'
+    }
+    container('cloudstack-driver') {
+        sh 'private-cicd/scripts/check-build-prereqs.sh'
+    }
+    pauseForVerification('Validate builder')
+}
+
+void checkoutSource() {
+    recordStageEvent('Checkout source', 'STARTED')
+    dir(env.SOURCE_DIR) {
+        deleteDir()
+        def isBranch = params.SOURCE_MODE == 'branch'
+        def sourceBranch = isBranch ? params.SOURCE_BRANCH : params.PR_HEAD_BRANCH
+        def sourceSha = isBranch ? params.SOURCE_SHA : params.PR_HEAD_SHA
+        def sourceLabel = isBranch ? "branch:${sourceBranch}" : "pull_request:${params.PR_ID}"
+        def remoteRef = isBranch ?
+            "refs/remotes/origin/source/${sourceBranch}" :
+            "refs/remotes/origin/pr/${params.PR_ID}"
+        def remote = [
+            url: params.CLOUDSTACK_GIT_URL,
+            refspec: isBranch ?
+                "+refs/heads/${sourceBranch}:${remoteRef}" :
+                "+refs/pull/${params.PR_ID}/head:${remoteRef}"
+        ]
+        if (params.GIT_CREDENTIALS_ID?.trim()) {
+            remote.credentialsId = params.GIT_CREDENTIALS_ID
+        }
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: sourceSha]],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: [[
+                $class: 'CloneOption',
+                honorRefspec: true,
+                noTags: true,
+                shallow: false
+            ]],
+            userRemoteConfigs: [remote]
+        ])
+        withEnv([
+            "EXPECTED_SOURCE_SHA=${sourceSha}",
+            "REMOTE_SOURCE_REF=${remoteRef}",
+            "SOURCE_LABEL=${sourceLabel}",
+            "RESOLVED_SOURCE_BRANCH=${sourceBranch}"
+        ]) {
+            sh '''
+                mkdir -p "$WORKSPACE/$PRESUBMIT_RESULTS"
+                actual_sha="$(git rev-parse HEAD)"
+                if [ "$actual_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+                    echo "Checked out $actual_sha instead of $EXPECTED_SOURCE_SHA" >&2
+                    exit 1
+                fi
+                if ! git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$REMOTE_SOURCE_REF"; then
+                    echo "$EXPECTED_SOURCE_SHA is not reachable from $REMOTE_SOURCE_REF" >&2
+                    exit 1
+                fi
+                if [ -n "$(git status --porcelain)" ]; then
+                    echo "Source checkout is not clean" >&2
+                    git status --short >&2
+                    exit 1
+                fi
+                printf 'SOURCE_MODE=%s\\nSOURCE_LABEL=%s\\nSOURCE_BRANCH=%s\\nSOURCE_SHA=%s\\n' \
+                    "$SOURCE_MODE" "$SOURCE_LABEL" "$RESOLVED_SOURCE_BRANCH" "$actual_sha" \
+                    > "$WORKSPACE/$PRESUBMIT_RESULTS/source.properties"
+            '''
+        }
+    }
+    pauseForVerification('Checkout source')
+}
+
+void runUnitTests() {
+    recordStageEvent('Build and unit tests', 'STARTED')
+    container('cloudstack-driver') {
+        sh '''
+        SOURCE_DIR="$WORKSPACE/$SOURCE_DIR" \
+        RESULT_DIR="$WORKSPACE/$PRESUBMIT_RESULTS/unit-tests" \
+        SOURCE_ID="$RESOLVED_SOURCE_ID" \
+        SOURCE_SHA="$RESOLVED_SOURCE_SHA" \
+        ENABLE_SIMULATOR=false \
+        MAVEN_THREADS=1C \
+        MAVEN_OPTS="-Xms1g -Xmx8g" \
+        private-cicd/scripts/mvn-full.sh
+        '''
+    }
+    pauseForVerification('Build and unit tests')
+}
+
+void buildDebianPackages() {
+    recordStageEvent('Build Debian packages', 'STARTED')
+    container('cloudstack-driver') {
+        sh '''
+        SOURCE_DIR="$WORKSPACE/$SOURCE_DIR" \
+        RESULT_DIR="$WORKSPACE/$SOURCE_DIR/dist/deb-all" \
+        REUSE_MAVEN_BUILD=true \
+        MAVEN_OPTS="-Xms1g -Xmx8g" \
+        private-cicd/scripts/build-debs.sh
+        '''
+    }
+    pauseForVerification('Build Debian packages')
+}
+
+void deployAndRunOntapIntegration() {
+    recordStageEvent('Deploy and run ONTAP integration', 'WAITING_FOR_VM')
+    withCredentials([
+        file(
+            credentialsId: params.VM_INVENTORY_CREDENTIALS_ID,
+            variable: 'BOUND_VM_INVENTORY_FILE'
+        )
+    ]) {
+        // The lock step declares `resource` as mandatory, so label-based
+        // locking must pass it explicitly as null.
+        lock(resource: null, label: 'cloudstack-presubmit-vm', quantity: 1, variable: 'LOCKED_VM') {
+            env.PRESUBMIT_INTEGRATION_STARTED = 'true'
+            recordStageEvent('Deploy and run ONTAP integration', 'STARTED')
+            container('cloudstack-driver') {
+                def inventory = readYaml(file: env.BOUND_VM_INVENTORY_FILE) ?: [:]
+                def enabledVms = validateInventory(inventory)
+                def vm = enabledVms.find {
+                    (it.lock_resource as String) == env.LOCKED_VM
+                }
+                if (vm == null) {
+                    error("Locked resource '${env.LOCKED_VM}' is not a compatible enabled inventory VM.")
+                }
+                ['id', 'ssh_host', 'vcenter_vm', 'snapshot', 'bridge'].each { key ->
+                    if (!vm[key] || (vm[key] as String).startsWith('PLACEHOLDER-')) {
+                        error("Inventory VM '${env.LOCKED_VM}' has no usable '${key}'.")
+                    }
+                }
+
+                env.VM_ID = vm.id as String
+                env.VM_HOST = vm.ssh_host as String
+                env.VM_SSH_USER = (vm.ssh_user ?: 'root') as String
+                env.VM_NAME = vm.vcenter_vm as String
+                env.VM_SNAPSHOT = vm.snapshot as String
+                env.VM_BRIDGE = vm.bridge as String
+                def sourceDescription = params.SOURCE_MODE == 'branch' ?
+                    "branch=${params.SOURCE_BRANCH}" :
+                    "PR-${params.PR_ID}"
+                currentBuild.description = "${sourceDescription} VM=${env.VM_ID}"
+                echo "Reserved compatible VM '${env.VM_ID}' via '${env.LOCKED_VM}'."
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: params.VCENTER_CREDENTIALS_ID,
+                        usernameVariable: 'VCENTER_USER',
+                        passwordVariable: 'VCENTER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        python3 private-cicd/scripts/vcenter-revert.py \
+                            --host "$VCENTER_HOST" \
+                            --vm "$VM_NAME" \
+                            --snapshot "$VM_SNAPSHOT" \
+                            --power-on \
+                            --insecure
+                    '''
+                }
+
+                // This gate waits while the VM lock is held, so no other
+                // build can reserve the VM until it is released.
+                pauseForVerification('Snapshot revert')
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: params.VM_SSH_CREDENTIALS_ID,
+                        usernameVariable: 'VM_SSH_USER',
+                        passwordVariable: 'VM_SSH_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: params.MYSQL_ROOT_CREDENTIALS_ID,
+                        usernameVariable: 'MYSQL_ROOT_USER',
+                        passwordVariable: 'MYSQL_ROOT_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: params.CLOUD_DB_CREDENTIALS_ID,
+                        usernameVariable: 'CLOUD_DB_USER',
+                        passwordVariable: 'CLOUD_DB_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: params.KVM_HOST_CREDENTIALS_ID,
+                        usernameVariable: 'KVM_HOST_USER',
+                        passwordVariable: 'KVM_HOST_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: params.ONTAP_CREDENTIALS_ID,
+                        usernameVariable: 'ONTAP_USER',
+                        passwordVariable: 'ONTAP_PASSWORD'
+                    ),
+                    usernamePassword(
+                        credentialsId: params.CLOUDSTACK_ADMIN_CREDENTIALS_ID,
+                        usernameVariable: 'CLOUDSTACK_ADMIN_USER',
+                        passwordVariable: 'CLOUDSTACK_ADMIN_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        SOURCE_DIR="$WORKSPACE/$SOURCE_DIR" \
+                        DEB_DIR="$WORKSPACE/$SOURCE_DIR/dist/deb-all" \
+                        RESULT_DIR="$WORKSPACE/$PRESUBMIT_RESULTS/phase2" \
+                        INVENTORY_FILE="$BOUND_VM_INVENTORY_FILE" \
+                        SOURCE_ID="$RESOLVED_SOURCE_ID" \
+                        SOURCE_SHA="$RESOLVED_SOURCE_SHA" \
+                        BRIDGE="$VM_BRIDGE" \
+                            private-cicd/scripts/run-phase2-remote.sh
+                    '''
+                }
+            }
+        }
+    }
+}
+
+void publishPresubmitResults() {
+    if (params.SOURCE_MODE == 'discover') {
+        echo 'Discovery build completed; worker reporting was skipped.'
+        return
+    }
+    if (isDiagnoseRun()) {
+        echo 'Diagnostic build completed; no mail, Check or test reporting.'
+        return
+    }
+    junit(
+        testResults: 'presubmit-results/unit-tests/surefire/**/*.xml',
+        allowEmptyResults: true,
+        keepLongStdio: true
+    )
+    def result = currentBuild.currentResult ?: 'FAILURE'
+    def conclusion = result == 'SUCCESS' ? 'success' :
+        (result == 'ABORTED' ? 'cancelled' : 'failure')
+    if (result != 'NOT_BUILT') {
+        env.PRESUBMIT_FINISHED_AT = new Date().format(
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            TimeZone.getTimeZone('UTC')
+        )
+        completeGithubCheck(conclusion)
+        if (!env.PRESUBMIT_MAIL_TO?.trim()) {
+            resolvePresubmitMailRecipient()
+        }
+        def sourceName = params.SOURCE_MODE == 'branch' ?
+            "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+        try {
+            if (fileExists('private-cicd/scripts/generate-presubmit-report.py')) {
+                withEnv([
+                    "PRESUBMIT_REPORT_RESULT=${result}",
+                    "PRESUBMIT_REPORT_SOURCE=${sourceName}",
+                    "PRESUBMIT_REPORT_SOURCE_URL=${params.PR_URL ?: ''}",
+                    "PRESUBMIT_REPORT_TITLE=${params.PR_TITLE ?: ''}",
+                    "PRESUBMIT_REPORT_SHA=${env.RESOLVED_SOURCE_SHA}",
+                    "PRESUBMIT_REPORT_DIFF=${env.PRESUBMIT_DIFF_NUMBER ?: ''}",
+                    "PRESUBMIT_REPORT_VM=${env.VM_ID ?: ''}"
+                ]) {
+                    sh '''
+                        python3 private-cicd/scripts/generate-presubmit-report.py \
+                            --results "$PRESUBMIT_RESULTS" \
+                            --stage-events "${WORKSPACE}@tmp/presubmit-stage-events.tsv" \
+                            --build-url "$BUILD_URL" \
+                            --result "$PRESUBMIT_REPORT_RESULT" \
+                            --source "$PRESUBMIT_REPORT_SOURCE" \
+                            --source-url "$PRESUBMIT_REPORT_SOURCE_URL" \
+                            --title "$PRESUBMIT_REPORT_TITLE" \
+                            --source-sha "$PRESUBMIT_REPORT_SHA" \
+                            --diff-number "$PRESUBMIT_REPORT_DIFF" \
+                            --vm "$PRESUBMIT_REPORT_VM" \
+                            --started-at "$PRESUBMIT_STARTED_AT" \
+                            --finished-at "$PRESUBMIT_FINISHED_AT" \
+                            --debian-log "$SOURCE_DIR/dist/deb-all/deb-build.log"
+                    '''
+                }
+            } else {
+                echo 'HTML report generator was unavailable; sending a minimal final mail.'
+            }
+        } catch (Exception e) {
+            echo "Unable to generate HTML presubmit report: ${e}"
+        }
+        try {
+            archiveArtifacts(
+                artifacts: 'presubmit-results/**/*, cloudstack-src/dist/deb-all/**/*',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
+        } catch (Exception e) {
+            echo "Unable to archive presubmit artifacts: ${e}"
+        }
+        def failedStage = fileExists("${env.PRESUBMIT_RESULTS}/failed-stage.txt") ?
+            readFile("${env.PRESUBMIT_RESULTS}/failed-stage.txt").trim() : ''
+        def finalSubject = failedStage ?
+            "${presubmitSubjectBase()}: ${result} in ${failedStage}" :
+            "${presubmitSubjectBase()}: ${result}"
+        def mailBody = fileExists("${env.PRESUBMIT_RESULTS}/email-body.html") ?
+            readFile("${env.PRESUBMIT_RESULTS}/email-body.html") :
+            """<h2>CloudStack ONTAP presubmit: ${htmlEscape(result)}</h2>
+<p>Source: ${htmlEscape(sourceName)}</p>
+<p>Commit: <code>${htmlEscape(env.RESOLVED_SOURCE_SHA)}</code></p>
+<p><a href="${htmlEscape(env.BUILD_URL)}">Open Jenkins build and logs</a></p>"""
+        sendPresubmitMail(
+            finalSubject,
+            mailBody
+        )
+    }
+}
 
 pipeline {
-  agent any
-
-  options {
-    buildDiscarder(logRotator(numToKeepStr: '30'))
-    timestamps()
-    timeout(time: 4, unit: 'HOURS')
-  }
-
-  parameters {
-    choice(
-      name: 'PIPELINE_PHASE',
-      choices: ['build-ontap-fast', 'build-only', 'preflight', 'marvin', 'delivery'],
-      description: 'build-ontap-fast = ONTAP plugin -pl -am test. preflight = Phase -1. build-only = full Maven. marvin / delivery reserved; see private-cicd/docs/IMPLEMENTATION-PHASES.md'
-    )
-    string(
-      name: 'CONFIG_DEFAULTS_FILE',
-      defaultValue: 'config/defaults.yaml',
-      description: 'YAML path relative to CICD_ROOT (e.g. config/defaults.yaml or config/team-b.yaml).'
-    )
-    string(
-      name: 'CONFIG_PROFILE',
-      defaultValue: '',
-      description: 'Optional: key under profiles in the defaults YAML (e.g. example-lts-branch). Blank = use only top-level cloudstack: from the file.'
-    )
-    booleanParam(
-      name: 'CLONE_SEPARATE',
-      defaultValue: false,
-      description: 'If true, clone CloudStack into cloudstack-src/ (use when this job repo is CI-only). If false, expect CloudStack pom.xml at the workspace root (multibranch on your fork). Branch/url below apply only when this is true.'
-    )
-    string(
-      name: 'CLOUDSTACK_GIT_URL',
-      defaultValue: '',
-      description: 'Override Git URL for CloudStack. Leave blank to use config/defaults.yaml (after optional CONFIG_PROFILE).'
-    )
-    string(
-      name: 'CLOUDSTACK_GIT_BRANCH',
-      defaultValue: '',
-      description: 'Override branch or tag for clone. Leave blank to use config/defaults.yaml (after optional CONFIG_PROFILE). Ignored when CLONE_SEPARATE is false.'
-    )
-    booleanParam(
-      name: 'ENABLE_NOREDIST',
-      defaultValue: false,
-      description: 'If true, run third-party non-OSS install script then mvn -Dnoredist (see README / legal for your org).'
-    )
-    booleanParam(
-      name: 'SKIP_TESTS',
-      defaultValue: true,
-      description: 'If true, Maven uses -DskipTests=true (faster CI).'
-    )
-    booleanParam(
-      name: 'INSTALL_APT_DEPS',
-      defaultValue: true,
-      description: 'If true, run private-cicd/scripts/install-build-deps-ubuntu.sh (requires sudo on agent).'
-    )
-    booleanParam(
-      name: 'SETUP_IPMITOOL_WRAPPER',
-      defaultValue: false,
-      description: 'If true, install CloudStack-style ipmitool wrapper (requires sudo).'
-    )
-  }
-
-  environment {
-    MAVEN_OPTS = '-Xmx3072m -XX:MaxMetaspaceSize=512m'
-  }
-
-  stages {
-    stage('Phase gate') {
-      steps {
-        script {
-          switch (params.PIPELINE_PHASE) {
-            case 'preflight':
-            case 'build-ontap-fast':
-            case 'build-only':
-              break
-            case 'marvin':
-            case 'delivery':
-              error("PIPELINE_PHASE='${params.PIPELINE_PHASE}' is not implemented yet. Use preflight, build-ontap-fast, or build-only. See private-cicd/docs/IMPLEMENTATION-PHASES.md")
-            default:
-              error("PIPELINE_PHASE='${params.PIPELINE_PHASE}' is not supported.")
-          }
+    agent {
+        kubernetes {
+            defaultContainer 'cloudstack-driver'
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: jnlp
+      image: docker.repo.eng.netapp.com/global/devts-daas-prod/jnlp/jnlp-slave:latest
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 100m
+        limits:
+          memory: 1Gi
+          cpu: 500m
+    - name: cloudstack-driver
+      image: docker.repo.eng.netapp.com/slocharl/cloudstack-presubmit-driver:v202608261233
+      command: [sleep]
+      args: [infinity]
+      resources:
+        requests:
+          memory: 1Gi
+          cpu: "500m"
+          ephemeral-storage: 5Gi
+        limits:
+          memory: 8Gi
+          cpu: "2"
+          ephemeral-storage: 20Gi
+'''
         }
-      }
     }
 
-    stage('Resolve CloudStack directory') {
-      steps {
-        script {
-          if (fileExists("${env.WORKSPACE}/private-cicd/scripts/install-build-deps-ubuntu.sh")) {
-            env.CICD_SCRIPT_DIR = "${env.WORKSPACE}/private-cicd/scripts"
-            env.CICD_ROOT = "${env.WORKSPACE}/private-cicd"
-          } else if (fileExists("${env.WORKSPACE}/scripts/install-build-deps-ubuntu.sh")) {
-            env.CICD_SCRIPT_DIR = "${env.WORKSPACE}/scripts"
-            env.CICD_ROOT = env.WORKSPACE
-          } else {
-            error('Cannot find install-build-deps-ubuntu.sh (expected private-cicd/scripts or scripts/).')
-          }
-          if (params.CLONE_SEPARATE) {
-            env.CLOUDSTACK_DIR = "${env.WORKSPACE}/cloudstack-src"
-          } else {
-            env.CLOUDSTACK_DIR = env.WORKSPACE
-          }
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '500'))
+        skipDefaultCheckout()
+        timestamps()
+        timeout(time: 8, unit: 'HOURS')
+    }
 
-          def rel = params.CONFIG_DEFAULTS_FILE?.trim()
-          if (!rel) {
-            rel = 'config/defaults.yaml'
-          }
-          rel = rel.replaceAll('^/+', '')
-          if (rel.contains('..')) {
-            error('CONFIG_DEFAULTS_FILE must stay under CICD_ROOT (no .. segments).')
-          }
-          def cfgPath = "${env.CICD_ROOT}/${rel}"
-          echo "Loading CI defaults from: ${cfgPath}"
-          def baseCfg = [cloudstack: [git_url: 'https://github.com/apache/cloudstack.git', branch: 'main']]
-          if (fileExists(cfgPath)) {
-            baseCfg = readYaml(file: cfgPath) ?: baseCfg
-          } else {
-            echo "No ${cfgPath}; using built-in CloudStack URL/branch defaults."
-          }
+    triggers {
+        cron('H/5 * * * *')
+    }
 
-          def cs = new LinkedHashMap((baseCfg.cloudstack ?: [:]) as Map)
-          def profileName = params.CONFIG_PROFILE?.trim()
-          if (profileName && baseCfg.profiles instanceof Map && baseCfg.profiles[profileName]) {
-            def overlay = baseCfg.profiles[profileName].cloudstack
-            if (overlay instanceof Map) {
-              cs.putAll(overlay as Map)
+    parameters {
+        choice(
+            name: 'SOURCE_MODE',
+            choices: ['discover', 'pull_request', 'branch', 'diagnose'],
+            description: 'Timer builds use discover. Self-queued workers use pull_request. Use branch for a manual exact-SHA build, or diagnose to probe GitHub App Checks access using PR_HEAD_SHA.'
+        )
+        string(name: 'SOURCE_BRANCH', defaultValue: '', description: 'Manual branch mode: remote branch name, for example feature/CSTACKEX-223.')
+        string(name: 'SOURCE_SHA', defaultValue: '', description: 'Manual branch mode: exact full 40-character commit SHA.')
+        string(name: 'PR_ID', defaultValue: '', description: 'GitHub pull request number.')
+        string(name: 'PR_ACTION', defaultValue: '', description: 'GitHub pull_request action.')
+        string(name: 'PR_DRAFT', defaultValue: 'false', description: 'GitHub pull_request.draft.')
+        string(name: 'PR_REPOSITORY', defaultValue: '', description: 'GitHub repository full_name.')
+        string(name: 'PR_BASE_BRANCH', defaultValue: 'main', description: 'GitHub pull_request.base.ref.')
+        string(name: 'PR_HEAD_BRANCH', defaultValue: '', description: 'GitHub pull_request.head.ref.')
+        string(name: 'PR_HEAD_SHA', defaultValue: '', description: 'GitHub pull_request.head.sha.')
+        string(name: 'PR_AUTHOR_LOGIN', defaultValue: '', description: 'GitHub login used in presubmit mail subjects.')
+        string(name: 'PR_AUTHOR_EMAIL', defaultValue: '', description: 'PR author email, if available.')
+        string(name: 'PR_URL', defaultValue: '', description: 'GitHub pull request URL.')
+        string(name: 'PR_TITLE', defaultValue: '', description: 'GitHub pull request title.')
+        string(name: 'EXPECTED_REPOSITORY', defaultValue: 'NetApp/cloudstack', description: 'Only this GitHub repository may trigger presubmit.')
+        string(name: 'DISCOVERY_BASE_BRANCH', defaultValue: 'main', description: 'Discover only open pull requests targeting this branch.')
+        string(
+            name: 'MAX_ACTIVE_WORKERS',
+            defaultValue: '5',
+            description: 'Discover queues at most this many pull_request workers at once. Extra eligible SHAs wait for a later poll.'
+        )
+        string(name: 'CLOUDSTACK_GIT_URL', defaultValue: 'https://github.com/NetApp/cloudstack.git', description: 'Repository containing branch and pull-request refs.')
+        string(name: 'GIT_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins Git credential ID.')
+        string(
+            name: 'GITHUB_APP_CREDENTIALS_ID',
+            defaultValue: 'cloudstack-presubmit-github-app',
+            description: 'Jenkins GitHub App credential used for Check Runs and author email lookup.'
+        )
+        string(
+            name: 'VM_INVENTORY_CREDENTIALS_ID',
+            defaultValue: 'cloudstack-presubmit-inventory',
+            description: 'Jenkins Secret file credential containing the reserved-VM inventory YAML.'
+        )
+        string(name: 'VCENTER_HOST', defaultValue: 'cstack-netapp-lab.rtp.openenglab.netapp.com', description: 'vCenter hostname.')
+        string(name: 'VCENTER_CREDENTIALS_ID', defaultValue: 'cloudstack-vcenter', description: 'vCenter username/password credential ID.')
+        string(name: 'VM_SSH_CREDENTIALS_ID', defaultValue: 'cloudstack-presubmit-ssh', description: 'Reserved-VM SSH username/password credential ID.')
+        string(name: 'MYSQL_ROOT_CREDENTIALS_ID', defaultValue: 'cloudstack-mysql-root', description: 'MySQL administrator credential ID.')
+        string(name: 'CLOUD_DB_CREDENTIALS_ID', defaultValue: 'cloudstack-db', description: 'CloudStack database credential ID.')
+        string(name: 'KVM_HOST_CREDENTIALS_ID', defaultValue: 'cloudstack-kvm-host', description: 'KVM host credential ID used by zone setup.')
+        string(name: 'ONTAP_CREDENTIALS_ID', defaultValue: 'cloudstack-ontap', description: 'ONTAP SVM credential ID.')
+        string(name: 'CLOUDSTACK_ADMIN_CREDENTIALS_ID', defaultValue: 'cloudstack-admin', description: 'CloudStack admin credential ID.')
+        booleanParam(name: 'PAUSE_BETWEEN_STAGES', defaultValue: false, description: 'Pause for manual verification after each stage. Keep this off for automatic PR workers.')
+    }
+
+    environment {
+        SOURCE_DIR = 'cloudstack-src'
+        PRESUBMIT_RESULTS = 'presubmit-results'
+        // Branch mode leaves PR_ID and PR_HEAD_SHA empty, so scripts receive a
+        // mode-independent identity. The branch is sanitised because it reaches
+        // a filesystem path on the target VM.
+        RESOLVED_SOURCE_ID = "${params.SOURCE_MODE == 'branch' ? 'branch-' + params.SOURCE_BRANCH.replaceAll('[^A-Za-z0-9._-]', '-') : 'pr-' + params.PR_ID}"
+        RESOLVED_SOURCE_SHA = "${params.SOURCE_MODE == 'branch' ? params.SOURCE_SHA : params.PR_HEAD_SHA}"
+    }
+
+    stages {
+        stage('Discover PR revisions') {
+            when {
+                expression {
+                    return params.SOURCE_MODE == 'discover'
+                }
             }
-          }
-
-          def urlOverride = params.CLOUDSTACK_GIT_URL?.trim()
-          def branchOverride = params.CLOUDSTACK_GIT_BRANCH?.trim()
-          env.EFFECTIVE_CLOUDSTACK_GIT_URL = urlOverride ?: (cs.git_url as String ?: 'https://github.com/apache/cloudstack.git')
-          env.EFFECTIVE_CLOUDSTACK_GIT_BRANCH = branchOverride ?: (cs.branch as String ?: 'main')
-
-          echo "CICD_ROOT=${env.CICD_ROOT} CICD_SCRIPT_DIR=${env.CICD_SCRIPT_DIR} CLOUDSTACK_DIR=${env.CLOUDSTACK_DIR}"
-          echo "CONFIG_PROFILE=${profileName ?: '(none)'} EFFECTIVE_CLOUDSTACK_GIT_URL=${env.EFFECTIVE_CLOUDSTACK_GIT_URL} EFFECTIVE_CLOUDSTACK_GIT_BRANCH=${env.EFFECTIVE_CLOUDSTACK_GIT_BRANCH}"
-        }
-      }
-    }
-
-    stage('Phase -1: validate private-cicd') {
-      when {
-        expression { return params.PIPELINE_PHASE == 'preflight' }
-      }
-      steps {
-        sh """CICD_ROOT='${env.CICD_ROOT}' bash '${env.CICD_SCRIPT_DIR}/validate-local.sh'"""
-      }
-    }
-
-    stage('Clone CloudStack') {
-      when {
-        allOf {
-          expression { return params.PIPELINE_PHASE in ['build-only', 'build-ontap-fast'] }
-          expression { return params.CLONE_SEPARATE }
-        }
-      }
-      steps {
-        sh 'rm -rf cloudstack-src && mkdir cloudstack-src'
-        dir('cloudstack-src') {
-          checkout(
-            [
-              $class                           : 'GitSCM',
-              branches                         : [[name: "*/${env.EFFECTIVE_CLOUDSTACK_GIT_BRANCH}"]],
-              doGenerateSubmoduleConfigurations: false,
-              extensions                       : [],
-              submoduleCfg                     : [],
-              userRemoteConfigs                : [[url: env.EFFECTIVE_CLOUDSTACK_GIT_URL]]
-            ]
-          )
-        }
-      }
-    }
-
-    stage('Validate tree') {
-      when {
-        expression { return params.PIPELINE_PHASE in ['build-only', 'build-ontap-fast'] }
-      }
-      steps {
-        script {
-          def pom = "${env.CLOUDSTACK_DIR}/pom.xml"
-          if (!fileExists(pom)) {
-            error("Missing ${pom}. Enable CLONE_SEPARATE or check out CloudStack with Script Path private-cicd/Jenkinsfile at repo root.")
-          }
-        }
-      }
-    }
-
-    stage('Install OS build dependencies') {
-      when {
-        allOf {
-          expression { return params.PIPELINE_PHASE in ['build-only', 'build-ontap-fast'] }
-          expression { return params.INSTALL_APT_DEPS }
-        }
-      }
-      steps {
-        sh """bash '${env.CICD_SCRIPT_DIR}/install-build-deps-ubuntu.sh'"""
-      }
-    }
-
-    stage('Optional ipmitool wrapper') {
-      when {
-        allOf {
-          expression { return params.PIPELINE_PHASE in ['build-only', 'build-ontap-fast'] }
-          expression { return params.SETUP_IPMITOOL_WRAPPER }
-        }
-      }
-      steps {
-        sh """bash '${env.CICD_SCRIPT_DIR}/setup-ipmitool-wrapper.sh'"""
-      }
-    }
-
-    stage('Non-OSS (noredist)') {
-      when {
-        allOf {
-          expression { return params.PIPELINE_PHASE == 'build-only' }
-          expression { return params.ENABLE_NOREDIST }
-        }
-      }
-      steps {
-        dir("${env.CLOUDSTACK_DIR}") {
-          sh '''
-            set -e
-            rm -rf nonoss
-            git clone https://github.com/shapeblue/cloudstack-nonoss.git nonoss
-            cd nonoss && bash -x install-non-oss.sh
-            cd ..
-            rm -rf nonoss
-          '''
-        }
-      }
-    }
-
-    stage('Phase 1a: ONTAP fast build') {
-      when {
-        expression { return params.PIPELINE_PHASE == 'build-ontap-fast' }
-      }
-      steps {
-        dir("${env.CLOUDSTACK_DIR}") {
-          script {
-            def skip = params.SKIP_TESTS ? 'true' : 'false'
-            sh """SKIP_TESTS='${skip}' CLOUDSTACK_DIR='${env.CLOUDSTACK_DIR}' bash '${env.CICD_SCRIPT_DIR}/mvn-ontap-fast.sh'"""
-          }
-        }
-      }
-    }
-
-    stage('Phase 1: Maven build') {
-      when {
-        expression { return params.PIPELINE_PHASE == 'build-only' }
-      }
-      steps {
-        dir("${env.CLOUDSTACK_DIR}") {
-          script {
-            def skip = params.SKIP_TESTS ? '-DskipTests=true' : ''
-            def noredist = params.ENABLE_NOREDIST ? '-Dnoredist' : ''
-            sh "mvn -B -P developer,systemvm -Dsimulator ${noredist} clean install ${skip} -T\$(nproc)"
-          }
-        }
-      }
-    }
-  }
-
-  post {
-    always {
-      script {
-        if (params.PIPELINE_PHASE in ['build-only', 'build-ontap-fast']) {
-          dir("${env.CLOUDSTACK_DIR}") {
-            def junitGlob = '**/target/surefire-reports/*.xml'
-            if (params.PIPELINE_PHASE == 'build-ontap-fast') {
-              junitGlob = 'plugins/storage/volume/ontap/target/surefire-reports/*.xml'
+            steps {
+                script {
+                    discoverPullRequests()
+                }
             }
-            junit testResults: junitGlob, allowEmptyResults: true
-          }
         }
-      }
+
+        stage('Validate source request') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    validateSourceRequest()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Validate source request', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Validate source request', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Validate source request', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Check eligibility') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    checkPresubmitEligibility()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent(
+                            'Check eligibility',
+                            currentBuild.currentResult == 'NOT_BUILT' ? 'SKIPPED' : 'SUCCESS'
+                        )
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Check eligibility', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Check eligibility', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Abort superseded run') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    abortSupersededRun()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Abort superseded run', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Abort superseded run', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Abort superseded run', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Checkout CI scripts') {
+            when {
+                expression {
+                    return isWorkerStageEnabled() || isDiagnoseRun()
+                }
+            }
+            steps {
+                script {
+                    checkoutCiScripts()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Checkout CI scripts', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Diagnose GitHub App') {
+            when {
+                expression {
+                    return isDiagnoseRun()
+                }
+            }
+            steps {
+                script {
+                    diagnoseGithubApp()
+                }
+            }
+        }
+
+        stage('Start PR reporting') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    startPullRequestReporting()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Start PR reporting', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Start PR reporting', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Start PR reporting', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Validate builder') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    validateBuilder()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Validate builder', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Validate builder', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Validate builder', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Checkout source') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    checkoutSource()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Checkout source', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Checkout source', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Checkout source', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Build and unit tests') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    runUnitTests()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Build and unit tests', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Build and unit tests', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Build and unit tests', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Build Debian packages') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    buildDebianPackages()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Build Debian packages', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Build Debian packages', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Build Debian packages', 'ABORTED')
+                    }
+                }
+            }
+        }
+
+        stage('Deploy and run ONTAP integration') {
+            when {
+                expression {
+                    return isWorkerStageEnabled()
+                }
+            }
+            steps {
+                script {
+                    deployAndRunOntapIntegration()
+                }
+            }
+            post {
+                success {
+                    script {
+                        recordStageEvent('Deploy and run ONTAP integration', 'SUCCESS')
+                    }
+                }
+                failure {
+                    script {
+                        recordStageEvent('Deploy and run ONTAP integration', 'FAILURE')
+                    }
+                }
+                aborted {
+                    script {
+                        recordStageEvent('Deploy and run ONTAP integration', 'ABORTED')
+                    }
+                }
+            }
+        }
     }
-    failure {
-      echo 'Pipeline failed — see console output.'
+
+    post {
+        always {
+            script {
+                publishPresubmitResults()
+            }
+        }
     }
-  }
 }
