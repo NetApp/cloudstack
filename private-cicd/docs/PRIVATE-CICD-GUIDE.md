@@ -596,6 +596,13 @@ may fail while loading parameters. Keep the job triggerless and review approvals
 
 The Pipeline has an eight-hour timeout and retains 500 builds so discovery runs do not flush worker history.
 
+Every stage body lives in a top-level method above the pipeline directive, and each `steps` block only calls one of
+them. This is not a style preference. The JVM caps a single method at 64KB of bytecode and Jenkins compiles the
+whole body of the pipeline directive into one method, so inlining a stage body again reintroduces
+`Method too large: WorkflowScript.___cps___NNNN` at parse time and no build can start
+([JENKINS-37984](https://issues.jenkins.io/browse/JENKINS-37984)). Those methods call steps, so none of them may
+carry `@NonCPS`. Keep new stage logic in a method and keep the shared `when` condition in `isWorkerStageEnabled()`.
+
 ### Discover PR revisions
 
 Runs only for `SOURCE_MODE=discover`. Lists eligible PRs, self-queues workers under the cap, holds the watermark
@@ -967,6 +974,10 @@ shallowly, and they read nothing but `private-cicd/scripts`.
 
 Discovery builds queued behind `cloudstack-presubmit-discovery`: cancel the queued ones, then confirm the loaded
 Jenkinsfile skips the lock when held and that the running discovery clones shallowly instead of taking minutes.
+
+`Method too large: WorkflowScript.___cps___NNNN` before any stage starts: a stage body was inlined into the
+pipeline directive instead of a top-level method, or the directive itself grew too large. Move the new code into a
+method as described in section 14; do not rely on the controller-wide `SCRIPT_SPLITTING_TRANSFORMATION` property.
 
 Groovy rejection: approve only the reported trusted WorkflowScript signature. Later skipped stages and empty-JUnit
 messages are symptoms.
