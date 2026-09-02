@@ -398,7 +398,15 @@ void createGithubCheck() {
             }
         }
     } catch (Exception e) {
+        // A missing check cannot be noticed from the build result, because
+        // reporting deliberately never changes it. Surface it on the job page.
+        currentBuild.description = (
+            (currentBuild.description ? currentBuild.description + ' | ' : '') +
+            'GitHub Check not published'
+        )
         echo "GitHub Check creation failed; presubmit will continue: ${e}"
+        echo 'Run this job with SOURCE_MODE=diagnose and the same PR_HEAD_SHA ' +
+            'to identify the cause.'
     }
 }
 
@@ -512,10 +520,16 @@ results follows when this run finishes.</p>
 // ("Method too large: WorkflowScript.___cps___NNNN").
 // These methods call steps, so none of them may be @NonCPS.
 
-// Worker stages are skipped for a discovery run, and for a request that
-// `Check eligibility` rejected by setting NOT_BUILT.
+// Worker stages run only for a real build request, so discovery and the
+// GitHub App diagnostic skip them, as does a request that `Check eligibility`
+// rejected by setting NOT_BUILT.
 boolean isWorkerStageEnabled() {
-    return params.SOURCE_MODE != 'discover' && currentBuild.result != 'NOT_BUILT'
+    return params.SOURCE_MODE in ['pull_request', 'branch'] &&
+        currentBuild.result != 'NOT_BUILT'
+}
+
+boolean isDiagnoseRun() {
+    return params.SOURCE_MODE == 'diagnose'
 }
 
 void discoverPullRequests() {
@@ -772,6 +786,35 @@ void checkoutCiScripts() {
     checkout(scm)
 }
 
+// A full worker run takes over an hour, so reporting problems are diagnosed
+// with this short build instead of a rebuild of the whole presubmit.
+void diagnoseGithubApp() {
+    currentBuild.displayName = "#${env.BUILD_NUMBER} diagnose GitHub App"
+    if (!hasGithubAppCredential()) {
+        error('GITHUB_APP_CREDENTIALS_ID is unset or still a placeholder.')
+    }
+    def headSha = params.PR_HEAD_SHA?.trim() ?: params.SOURCE_SHA?.trim()
+    if (!(headSha ==~ /^[0-9a-f]{40}$/)) {
+        error('Set PR_HEAD_SHA to a full 40-character commit SHA to diagnose.')
+    }
+    def repository = params.PR_REPOSITORY?.trim() ?: params.EXPECTED_REPOSITORY
+    withCredentials([
+        usernamePassword(
+            credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+            usernameVariable: 'GITHUB_APP',
+            passwordVariable: 'GITHUB_ACCESS_TOKEN'
+        )
+    ]) {
+        withEnv([
+            "GITHUB_REPOSITORY=${repository}",
+            "GITHUB_HEAD_SHA=${headSha}",
+            "PR_ID=${params.PR_ID ?: ''}"
+        ]) {
+            sh 'private-cicd/scripts/github-check-run.sh diagnose'
+        }
+    }
+}
+
 void startPullRequestReporting() {
     recordStageEvent('Start PR reporting', 'STARTED')
     createGithubCheck()
@@ -1024,6 +1067,10 @@ void publishPresubmitResults() {
         echo 'Discovery build completed; worker reporting was skipped.'
         return
     }
+    if (isDiagnoseRun()) {
+        echo 'Diagnostic build completed; no mail, Check or test reporting.'
+        return
+    }
     junit(
         testResults: 'presubmit-results/unit-tests/surefire/**/*.xml',
         allowEmptyResults: true,
@@ -1153,8 +1200,8 @@ spec:
     parameters {
         choice(
             name: 'SOURCE_MODE',
-            choices: ['discover', 'pull_request', 'branch'],
-            description: 'Timer builds use discover. Self-queued workers use pull_request. Use branch for a manual exact-SHA build.'
+            choices: ['discover', 'pull_request', 'branch', 'diagnose'],
+            description: 'Timer builds use discover. Self-queued workers use pull_request. Use branch for a manual exact-SHA build, or diagnose to probe GitHub App Checks access using PR_HEAD_SHA.'
         )
         string(name: 'SOURCE_BRANCH', defaultValue: '', description: 'Manual branch mode: remote branch name, for example feature/CSTACKEX-223.')
         string(name: 'SOURCE_SHA', defaultValue: '', description: 'Manual branch mode: exact full 40-character commit SHA.')
@@ -1319,7 +1366,7 @@ spec:
         stage('Checkout CI scripts') {
             when {
                 expression {
-                    return isWorkerStageEnabled()
+                    return isWorkerStageEnabled() || isDiagnoseRun()
                 }
             }
             steps {
@@ -1342,6 +1389,19 @@ spec:
                     script {
                         recordStageEvent('Checkout CI scripts', 'ABORTED')
                     }
+                }
+            }
+        }
+
+        stage('Diagnose GitHub App') {
+            when {
+                expression {
+                    return isDiagnoseRun()
+                }
+            }
+            steps {
+                script {
+                    diagnoseGithubApp()
                 }
             }
         }
