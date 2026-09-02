@@ -76,6 +76,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -148,6 +149,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+            validateProtocol(details, dataStore);
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeInfo volInfo = (VolumeInfo) dataObject;
@@ -985,6 +987,20 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      */
     private String buildSnapshotName(String cloudStackSnapshotName, long snapshotId) {
         return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
+    }
+
+    /**
+     * Only ISCSI and NFS3 pools can be provisioned; any other protocol would fall through
+     * createAsync without producing a result, leaving the caller with a null callback value.
+     */
+    private void validateProtocol(Map<String, String> details, DataStore dataStore) {
+        String protocol = details == null ? null : details.get(OntapStorageConstants.PROTOCOL);
+        boolean supported = protocol != null && Arrays.stream(ProtocolType.values())
+                .anyMatch(type -> type.name().equalsIgnoreCase(protocol));
+        if (!supported) {
+            throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] on storage pool ["
+                    + dataStore.getName() + "]; supported protocols are " + Arrays.toString(ProtocolType.values()));
+        }
     }
 
     private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {

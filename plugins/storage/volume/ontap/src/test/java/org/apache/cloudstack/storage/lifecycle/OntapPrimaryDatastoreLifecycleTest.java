@@ -209,7 +209,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("clusterId", 1L);
         dsInfos.put("name", "testStoragePool");
         dsInfos.put("providerName", "testProvider");
-        dsInfos.put("capacityBytes", 200000L);
+        dsInfos.put("capacityBytes", 1073741824L);
         dsInfos.put("managed", true);
         dsInfos.put("tags", "testTag");
         dsInfos.put("isTagARule", false);
