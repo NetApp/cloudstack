@@ -411,7 +411,9 @@ Label: empty
 Reserved by: empty
 ```
 
-This serializes only short discovery runs. It does not prevent worker builds from compiling concurrently.
+This serializes only short discovery runs. It does not prevent worker builds from compiling concurrently. A
+discovery run that finds the lock held skips its body and ends `NOT_BUILT` rather than queueing, so a slow poll
+cannot accumulate a backlog of discovery builds.
 
 ## 11. Clean snapshot contract
 
@@ -475,6 +477,11 @@ Do not create a GitHub repository webhook. OpenLab is not publicly accessible; G
 GitHub, then self-queues one `pull_request` worker per unseen PR head SHA. Create the named Lockable Resource
 `cloudstack-presubmit-discovery` to prevent overlapping discovery runs. Do not create a separate poller job.
 
+A `discover` build clones a single commit of `private-cicd/scripts` rather than the full repository, which keeps
+each poll well inside the five-minute timer. That shallow clone reads the job's configured Git branch and remote,
+so approve those two signatures when Script Security reports them; otherwise the build logs
+`Shallow discovery checkout unavailable` and falls back to the slow full checkout.
+
 ### Pipeline item
 
 Create a regular Pipeline, not Freestyle, Multibranch, or Organization:
@@ -503,8 +510,9 @@ Trigger.
 
 `Abort superseded run` uses Jenkins internal APIs. Under **Manage Jenkins > In-process Script Approval**, approve
 only signatures actually requested by this trusted `WorkflowScript` for obtaining the job, enumerating builds,
-reading parameters/environment, and stopping a matching build. Never approve unrelated calls or use **Approve
-assuming permission check**. Exact signatures vary by controller/plugin versions.
+reading parameters/environment, stopping a matching build, and reading the job's Git branch and remote for the
+shallow discovery clone. Never approve unrelated calls or use **Approve assuming permission check**. Exact
+signatures vary by controller/plugin versions.
 
 ### Parameterized smoke test
 
@@ -947,7 +955,11 @@ authoritative memory request is 1Gi, limit 8Gi, with Maven heap options `-Xms1g 
 ### Source, Groovy, Maven, package
 
 Source failure: verify full SHA, selected PR/branch ref, reachability, credential, HTTPS `.git` URL, and branch
-syntax. Checkout is full, so do not diagnose it as shallow history.
+syntax. A worker checkout is full, so do not diagnose it as shallow history. Only `discover` builds clone
+shallowly, and they read nothing but `private-cicd/scripts`.
+
+Discovery builds queued behind `cloudstack-presubmit-discovery`: cancel the queued ones, then confirm the loaded
+Jenkinsfile skips the lock when held and that the running discovery clones shallowly instead of taking minutes.
 
 Groovy rejection: approve only the reported trusted WorkflowScript signature. Later skipped stages and empty-JUnit
 messages are symptoms.
