@@ -29,8 +29,10 @@ current implementation contract, see
 ## How it works
 
 The production Jenkins job loads [`Jenkinsfile`](Jenkinsfile) and helper scripts
-from the protected NetApp `main` branch. It checks out the exact pull-request
-commit into a separate `cloudstack-src` directory, then:
+from the protected NetApp `main` branch. Every five minutes a short discovery
+build polls GitHub and self-queues a worker for each unseen PR head SHA. Each
+worker checks out the exact commit into a separate `cloudstack-src` directory,
+then:
 
 1. validates the request, builder, credentials, and VM inventory;
 2. runs the full Maven build and unit tests;
@@ -46,7 +48,10 @@ replacing the underlying build or test result.
 
 ## Entry points
 
-- **Pull request:** a GitHub `pull_request` webhook starts the production job.
+- **Pull request:** `SOURCE_MODE=discover` notices an open non-draft PR update
+  to `main` and self-queues at most five `SOURCE_MODE=pull_request` workers in
+  the same job. Extra SHAs wait for a later poll. Workers then wait on the
+  `cloudstack-presubmit-vm` lock for a lab VM.
 - **Manual branch:** a separate triggerless job uses `SOURCE_MODE=branch` with
   a remote branch and exact 40-character commit SHA.
 - **Local validation:** `scripts/validate-local.sh` checks the CI files without

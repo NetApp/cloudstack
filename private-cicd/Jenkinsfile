@@ -35,6 +35,83 @@ def shaFromParameters(parameters) {
     return parameters?.getParameter(name)?.value?.toString()
 }
 
+@NonCPS
+boolean matchingPresubmitParameters(parameters, String prId, String sha) {
+    def sourceMode = parameters?.getParameter('SOURCE_MODE')?.value?.toString()
+    if (sourceMode != 'pull_request') {
+        return false
+    }
+    def id = parameters?.getParameter('PR_ID')?.value?.toString()
+    def head = parameters?.getParameter('PR_HEAD_SHA')?.value?.toString()
+    return id == prId && (!sha || head == sha)
+}
+
+@NonCPS
+boolean isPullRequestWorker(parameters) {
+    return parameters?.getParameter('SOURCE_MODE')?.value?.toString() ==
+        'pull_request'
+}
+
+@NonCPS
+boolean presubmitKnows(String jobName, String prId, String sha) {
+    def jenkins = jenkins.model.Jenkins.get()
+    def job = jenkins.getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def queued = jenkins.queue.items.any { item ->
+        item.task?.fullName == job.fullName &&
+            matchingPresubmitParameters(
+                item.getAction(hudson.model.ParametersAction), prId, sha)
+    }
+    return queued || job.getBuilds().any { build ->
+        matchingPresubmitParameters(
+            build.getAction(hudson.model.ParametersAction), prId, sha)
+    }
+}
+
+@NonCPS
+int activeWorkerCount(String jobName) {
+    def jenkins = jenkins.model.Jenkins.get()
+    def job = jenkins.getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def queued = jenkins.queue.items.findAll { item ->
+        item.task?.fullName == job.fullName &&
+            isPullRequestWorker(item.getAction(hudson.model.ParametersAction))
+    }
+    def running = job.getBuilds().findAll { build ->
+        build.isBuilding() &&
+            isPullRequestWorker(build.getAction(hudson.model.ParametersAction))
+    }
+    return queued.size() + running.size()
+}
+
+@NonCPS
+String latestDiscoveryWatermark(String jobName, int buildNumber) {
+    def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+    def build = job.getBuilds().find { candidate ->
+        if (candidate.number >= buildNumber || candidate.isBuilding()) {
+            return false
+        }
+        def sourceMode = candidate.getAction(hudson.model.ParametersAction)
+            ?.getParameter('SOURCE_MODE')?.value?.toString()
+        if (sourceMode != 'discover') {
+            return false
+        }
+        def environment = candidate.getAction(
+            org.jenkinsci.plugins.workflow.cps.EnvActionImpl
+        )?.getOverriddenEnvironment()
+        return environment?.get('PRESUBMIT_DISCOVERY_NEXT_WATERMARK')
+    }
+    return build?.getAction(org.jenkinsci.plugins.workflow.cps.EnvActionImpl)
+        ?.getOverriddenEnvironment()?.get('PRESUBMIT_DISCOVERY_NEXT_WATERMARK')
+}
+
 // The diff number counts how many distinct commits have been presubmitted for
 // this PR, so a re-run of the same commit keeps its number. Only the builds
 // still kept by the build discarder can be inspected.
@@ -439,40 +516,22 @@ spec:
     }
 
     options {
-        buildDiscarder(logRotator(numToKeepStr: '30'))
+        buildDiscarder(logRotator(numToKeepStr: '500'))
         skipDefaultCheckout()
         timestamps()
         timeout(time: 8, unit: 'HOURS')
     }
 
     triggers {
-        GenericTrigger(
-            genericVariables: [
-                [key: 'PR_ID', value: '$.number'],
-                [key: 'PR_ACTION', value: '$.action'],
-                [key: 'PR_DRAFT', value: '$.pull_request.draft'],
-                [key: 'PR_REPOSITORY', value: '$.repository.full_name'],
-                [key: 'PR_BASE_BRANCH', value: '$.pull_request.base.ref'],
-                [key: 'PR_HEAD_BRANCH', value: '$.pull_request.head.ref'],
-                [key: 'PR_HEAD_SHA', value: '$.pull_request.head.sha'],
-                [key: 'PR_AUTHOR_LOGIN', value: '$.pull_request.user.login'],
-                [key: 'PR_AUTHOR_EMAIL', value: '$.pull_request.user.email'],
-                [key: 'PR_URL', value: '$.pull_request.html_url'],
-                [key: 'PR_TITLE', value: '$.pull_request.title']
-            ],
-            causeString: 'GitHub PR-$PR_ID $PR_ACTION at $PR_HEAD_SHA',
-            tokenCredentialId: 'cloudstack-presubmit-webhook-token',
-            printContributedVariables: false,
-            printPostContent: false,
-            silentResponse: false,
-            shouldNotFlatten: true,
-            regexpFilterText: '$PR_REPOSITORY:$PR_BASE_BRANCH:$PR_DRAFT:$PR_ACTION',
-            regexpFilterExpression: '^NetApp/cloudstack:main:false:(opened|synchronize|reopened|ready_for_review)$'
-        )
+        cron('H/5 * * * *')
     }
 
     parameters {
-        choice(name: 'SOURCE_MODE', choices: ['pull_request', 'branch'], description: 'Use pull_request for webhooks or branch for a manual exact-SHA build.')
+        choice(
+            name: 'SOURCE_MODE',
+            choices: ['discover', 'pull_request', 'branch'],
+            description: 'Timer builds use discover. Self-queued workers use pull_request. Use branch for a manual exact-SHA build.'
+        )
         string(name: 'SOURCE_BRANCH', defaultValue: '', description: 'Manual branch mode: remote branch name, for example feature/CSTACKEX-223.')
         string(name: 'SOURCE_SHA', defaultValue: '', description: 'Manual branch mode: exact full 40-character commit SHA.')
         string(name: 'PR_ID', defaultValue: '', description: 'GitHub pull request number.')
@@ -487,6 +546,12 @@ spec:
         string(name: 'PR_URL', defaultValue: '', description: 'GitHub pull request URL.')
         string(name: 'PR_TITLE', defaultValue: '', description: 'GitHub pull request title.')
         string(name: 'EXPECTED_REPOSITORY', defaultValue: 'NetApp/cloudstack', description: 'Only this GitHub repository may trigger presubmit.')
+        string(name: 'DISCOVERY_BASE_BRANCH', defaultValue: 'main', description: 'Discover only open pull requests targeting this branch.')
+        string(
+            name: 'MAX_ACTIVE_WORKERS',
+            defaultValue: '5',
+            description: 'Discover queues at most this many pull_request workers at once. Extra eligible SHAs wait for a later poll.'
+        )
         string(name: 'CLOUDSTACK_GIT_URL', defaultValue: 'https://github.com/NetApp/cloudstack.git', description: 'Repository containing branch and pull-request refs.')
         string(name: 'GIT_CREDENTIALS_ID', defaultValue: '', description: 'Optional Jenkins Git credential ID.')
         string(
@@ -507,7 +572,7 @@ spec:
         string(name: 'KVM_HOST_CREDENTIALS_ID', defaultValue: 'cloudstack-kvm-host', description: 'KVM host credential ID used by zone setup.')
         string(name: 'ONTAP_CREDENTIALS_ID', defaultValue: 'cloudstack-ontap', description: 'ONTAP SVM credential ID.')
         string(name: 'CLOUDSTACK_ADMIN_CREDENTIALS_ID', defaultValue: 'cloudstack-admin', description: 'CloudStack admin credential ID.')
-        booleanParam(name: 'PAUSE_BETWEEN_STAGES', defaultValue: false, description: 'Pause for manual verification after each stage. Keep this off for webhook runs.')
+        booleanParam(name: 'PAUSE_BETWEEN_STAGES', defaultValue: false, description: 'Pause for manual verification after each stage. Keep this off for automatic PR workers.')
     }
 
     environment {
@@ -521,7 +586,142 @@ spec:
     }
 
     stages {
+        stage('Discover PR revisions') {
+            when {
+                expression {
+                    return params.SOURCE_MODE == 'discover'
+                }
+            }
+            steps {
+                lock(resource: 'cloudstack-presubmit-discovery') {
+                    script {
+                        currentBuild.displayName =
+                            "#${env.BUILD_NUMBER} discover PR revisions"
+                        deleteDir()
+                        checkout(scm)
+                        if (!(params.EXPECTED_REPOSITORY ==~
+                                /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
+                            error('EXPECTED_REPOSITORY must be owner/repository.')
+                        }
+                        if (!isValidBranchName(params.DISCOVERY_BASE_BRANCH)) {
+                            error('DISCOVERY_BASE_BRANCH is not a valid Git branch name.')
+                        }
+                        if (!(params.GITHUB_APP_CREDENTIALS_ID ==~
+                                /^[A-Za-z0-9._-]+$/)) {
+                            error('GITHUB_APP_CREDENTIALS_ID contains unsupported characters.')
+                        }
+                        if (!(params.MAX_ACTIVE_WORKERS ==~ /^[1-9][0-9]*$/)) {
+                            error('MAX_ACTIVE_WORKERS must be a positive integer.')
+                        }
+                        def cap = params.MAX_ACTIVE_WORKERS.toInteger()
+                        def previousWatermark = latestDiscoveryWatermark(
+                            env.JOB_NAME,
+                            env.BUILD_NUMBER.toInteger()
+                        )
+                        def isInitialDiscovery = !previousWatermark
+                        def thisStart = new Date(currentBuild.startTimeInMillis).format(
+                            "yyyy-MM-dd'T'HH:mm:ssXXX",
+                            TimeZone.getTimeZone('UTC')
+                        )
+                        def watermark = previousWatermark ?: thisStart
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                                usernameVariable: 'GITHUB_APP',
+                                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+                            )
+                        ]) {
+                            withEnv([
+                                "DISCOVERY_REPOSITORY=${params.EXPECTED_REPOSITORY}",
+                                "DISCOVERY_BASE_BRANCH=${params.DISCOVERY_BASE_BRANCH}",
+                                "DISCOVERY_UPDATED_AFTER=${watermark}"
+                            ]) {
+                                sh '''
+                                    python3 private-cicd/scripts/list-eligible-prs.py \
+                                        --repository "$DISCOVERY_REPOSITORY" \
+                                        --base-branch "$DISCOVERY_BASE_BRANCH" \
+                                        --updated-after "$DISCOVERY_UPDATED_AFTER" \
+                                        > eligible-prs.json
+                                '''
+                            }
+                        }
+                        def pulls = readJSON(file: 'eligible-prs.json')
+                        if (!(pulls instanceof List)) {
+                            error('eligible-prs.json is not a JSON array.')
+                        }
+                        if (isInitialDiscovery) {
+                            echo "Seeded discovery watermark at ${watermark}; existing PRs were not queued."
+                            pulls = []
+                        }
+                        int queuedCount = 0
+                        int deferredCount = 0
+                        int knownActive = cap
+                        try {
+                            knownActive = activeWorkerCount(env.JOB_NAME)
+                        } catch (Exception e) {
+                            echo "Unable to inspect the worker queue; discovery will not queue new workers: ${e}"
+                        }
+                        pulls.each { pull ->
+                            def prId = pull.pr_id?.toString()
+                            def sha = pull.pr_head_sha?.toString()
+                            if (!(prId ==~ /^[0-9]+$/) ||
+                                    !(sha ==~ /^[0-9a-fA-F]{40}$/)) {
+                                echo "Skipping malformed pull request payload: ${pull}"
+                                return
+                            }
+                            if (presubmitKnows(env.JOB_NAME, prId, sha)) {
+                                echo "PR-${prId} ${sha.take(12)} already has a queued or recorded presubmit."
+                                return
+                            }
+                            if (knownActive + queuedCount >= cap) {
+                                echo "Deferred PR-${prId} ${sha.take(12)}: ${knownActive + queuedCount} active workers at cap ${cap}."
+                                deferredCount++
+                                return
+                            }
+                            def action = presubmitKnows(
+                                env.JOB_NAME, prId, '') ?
+                                'synchronize' : 'opened'
+                            echo "Queueing PR-${prId} ${action} at ${sha.take(12)}."
+                            build(
+                                job: env.JOB_NAME,
+                                wait: false,
+                                propagate: false,
+                                parameters: [
+                                    string(name: 'SOURCE_MODE', value: 'pull_request'),
+                                    string(name: 'PR_ID', value: prId),
+                                    string(name: 'PR_ACTION', value: action),
+                                    string(name: 'PR_DRAFT', value: 'false'),
+                                    string(name: 'PR_REPOSITORY', value: params.EXPECTED_REPOSITORY),
+                                    string(name: 'PR_BASE_BRANCH', value: params.DISCOVERY_BASE_BRANCH),
+                                    string(name: 'PR_HEAD_BRANCH', value: pull.pr_head_branch ?: ''),
+                                    string(name: 'PR_HEAD_SHA', value: sha),
+                                    string(name: 'PR_AUTHOR_LOGIN', value: pull.pr_author_login ?: ''),
+                                    string(name: 'PR_AUTHOR_EMAIL', value: pull.pr_author_email ?: ''),
+                                    string(name: 'PR_URL', value: pull.pr_url ?: ''),
+                                    string(name: 'PR_TITLE', value: pull.pr_title ?: '')
+                                ]
+                            )
+                            queuedCount++
+                        }
+                        env.PRESUBMIT_DISCOVERY_NEXT_WATERMARK =
+                            deferredCount > 0 ? watermark : thisStart
+                        currentBuild.description = isInitialDiscovery ?
+                            "seeded at ${watermark}; queued ${queuedCount}; deferred ${deferredCount}" :
+                            "since ${watermark}; queued ${queuedCount}; deferred ${deferredCount}"
+                        // NOT_BUILT prevents every worker stage and notification
+                        // below. The next poll reads PRESUBMIT_DISCOVERY_NEXT_WATERMARK.
+                        currentBuild.result = 'NOT_BUILT'
+                    }
+                }
+            }
+        }
+
         stage('Validate source request') {
+            when {
+                expression {
+                    return currentBuild.result != 'NOT_BUILT'
+                }
+            }
             steps {
                 script {
                     sh 'rm -f "${WORKSPACE}@tmp/presubmit-stage-events.tsv"'
@@ -546,7 +746,7 @@ spec:
                             error('PR_ID must be the numeric GitHub pull request number.')
                         }
                         if (params.PR_REPOSITORY != params.EXPECTED_REPOSITORY) {
-                            error("Webhook repository '${params.PR_REPOSITORY}' is not '${params.EXPECTED_REPOSITORY}'.")
+                            error("Repository '${params.PR_REPOSITORY}' is not '${params.EXPECTED_REPOSITORY}'.")
                         }
                         if (!(params.PR_HEAD_BRANCH ==~ /^[A-Za-z0-9._\/-]+$/)) {
                             error('PR_HEAD_BRANCH contains unsupported characters.')
@@ -623,6 +823,11 @@ spec:
         }
 
         stage('Check eligibility') {
+            when {
+                expression {
+                    return currentBuild.result != 'NOT_BUILT'
+                }
+            }
             steps {
                 script {
                     recordStageEvent('Check eligibility', 'STARTED')
@@ -1160,12 +1365,16 @@ spec:
 
     post {
         always {
-            junit(
-                testResults: 'presubmit-results/unit-tests/surefire/**/*.xml',
-                allowEmptyResults: true,
-                keepLongStdio: true
-            )
             script {
+                if (params.SOURCE_MODE == 'discover') {
+                    echo 'Discovery build completed; worker reporting was skipped.'
+                    return
+                }
+                junit(
+                    testResults: 'presubmit-results/unit-tests/surefire/**/*.xml',
+                    allowEmptyResults: true,
+                    keepLongStdio: true
+                )
                 def result = currentBuild.currentResult ?: 'FAILURE'
                 def conclusion = result == 'SUCCESS' ? 'success' :
                     (result == 'ABORTED' ? 'cancelled' : 'failure')
