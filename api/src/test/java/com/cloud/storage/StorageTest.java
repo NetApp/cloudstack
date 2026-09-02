@@ -74,7 +74,7 @@ public class StorageTest {
         Assert.assertFalse(StoragePoolType.ManagedNFS.supportsOverProvisioning());
         Assert.assertTrue(StoragePoolType.DatastoreCluster.supportsOverProvisioning());
         Assert.assertTrue(StoragePoolType.Linstor.supportsOverProvisioning());
-        Assert.assertFalse(StoragePoolType.OntapiSCSI.supportsOverProvisioning());
+        Assert.assertTrue(StoragePoolType.OntapiSCSI.supportsOverProvisioning());
     }
 
     @Test
