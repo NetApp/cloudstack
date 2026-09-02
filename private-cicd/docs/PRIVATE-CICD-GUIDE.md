@@ -599,12 +599,19 @@ The Pipeline has an eight-hour timeout and retains 500 builds so discovery runs 
 ### Discover PR revisions
 
 Runs only for `SOURCE_MODE=discover`. Lists eligible PRs, self-queues workers under the cap, holds the watermark
-when work is deferred, then finishes `NOT_BUILT` so mail, Checks, and tests are skipped.
+when work is deferred, then finishes `NOT_BUILT` so mail, Checks, and tests are skipped. The worker stages are
+skipped on `SOURCE_MODE`, not on `NOT_BUILT`, so a discovery run that breaks still reports `FAILURE`: a red
+discovery build always means discovery itself is broken.
+
+Discovery titles its build `discover: queued N, deferred M`, or `discover: skipped, lock held` when it overlapped a
+slower run, and puts the watermark in the description.
 
 ### Validate source request
 
 Records start time/integration false; validates mode, branch/SHA or PR/repository, HTTPS `.git` URL, credential IDs,
-and vCenter hostname; sets display name/description. PR repository must match `EXPECTED_REPOSITORY`.
+and vCenter hostname; sets display name/description. PR repository must match `EXPECTED_REPOSITORY`. Worker titles
+read `PR-98 diff #3 synchronize` so an author can find their run among the five-minute discovery builds, with the
+head SHA and PR title in the description.
 
 ### Check eligibility
 

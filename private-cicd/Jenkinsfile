@@ -619,20 +619,13 @@ spec:
             }
             steps {
                 script {
-                    currentBuild.displayName =
-                        "#${env.BUILD_NUMBER} discover PR revisions"
-                    currentBuild.description =
-                        'skipped, another discovery run held the lock'
-                    // NOT_BUILT prevents every worker stage and notification
-                    // below, including when the lock is skipped. The next poll
-                    // reads PRESUBMIT_DISCOVERY_NEXT_WATERMARK, which only a
-                    // run that reached the end of the lock body sets.
-                    currentBuild.result = 'NOT_BUILT'
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} discover"
                 }
                 // Skipping instead of queueing keeps a slow poll from building
                 // a backlog of discovery runs that each hold an agent pod.
                 lock(resource: 'cloudstack-presubmit-discovery', skipIfLocked: true) {
                     script {
+                        env.PRESUBMIT_DISCOVERY_RAN = 'true'
                         deleteDir()
                         checkoutDiscoveryScripts()
                         if (!(params.EXPECTED_REPOSITORY ==~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
@@ -739,9 +732,21 @@ spec:
                         }
                         env.PRESUBMIT_DISCOVERY_NEXT_WATERMARK =
                             deferredCount > 0 ? watermark : thisStart
+                        currentBuild.displayName =
+                            "#${env.BUILD_NUMBER} discover: queued ${queuedCount}, deferred ${deferredCount}"
                         currentBuild.description = isInitialDiscovery ?
-                            "seeded at ${watermark}; queued ${queuedCount}; deferred ${deferredCount}" :
-                            "since ${watermark}; queued ${queuedCount}; deferred ${deferredCount}"
+                            "seeded at ${watermark}" : "since ${watermark}"
+                        // Jenkins treats NOT_BUILT as worse than FAILURE and
+                        // never improves a result, so this must stay last.
+                        // Setting it earlier hides a broken discovery run.
+                        currentBuild.result = 'NOT_BUILT'
+                    }
+                }
+                script {
+                    if (env.PRESUBMIT_DISCOVERY_RAN != 'true') {
+                        currentBuild.displayName =
+                            "#${env.BUILD_NUMBER} discover: skipped, lock held"
+                        currentBuild.result = 'NOT_BUILT'
                     }
                 }
             }
@@ -750,7 +755,8 @@ spec:
         stage('Validate source request') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -825,12 +831,20 @@ spec:
                         env.PRESUBMIT_DIFF_NUMBER = ''
                         echo "Unable to determine the diff number: ${e}"
                     }
+                    // The diff number goes in the title so an author can pick
+                    // their own run out of a build history dominated by
+                    // five-minute discovery runs.
+                    def diffLabel = env.PRESUBMIT_DIFF_NUMBER ?
+                        " diff #${env.PRESUBMIT_DIFF_NUMBER}" : ''
                     if (params.SOURCE_MODE == 'branch') {
-                        currentBuild.displayName = "#${env.BUILD_NUMBER} branch ${params.SOURCE_BRANCH}"
+                        currentBuild.displayName =
+                            "#${env.BUILD_NUMBER} branch ${params.SOURCE_BRANCH}${diffLabel}"
                         currentBuild.description = "Branch ${params.SOURCE_BRANCH} @ ${params.SOURCE_SHA.take(12)}"
                     } else {
-                        currentBuild.displayName = "#${env.BUILD_NUMBER} PR-${params.PR_ID} ${params.PR_ACTION}"
-                        currentBuild.description = params.PR_TITLE ?: params.PR_URL
+                        currentBuild.displayName =
+                            "#${env.BUILD_NUMBER} PR-${params.PR_ID}${diffLabel} ${params.PR_ACTION}"
+                        currentBuild.description =
+                            "${env.RESOLVED_SOURCE_SHA?.take(12)} ${params.PR_TITLE ?: params.PR_URL}"
                     }
                 }
             }
@@ -856,7 +870,8 @@ spec:
         stage('Check eligibility') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -899,7 +914,8 @@ spec:
         stage('Abort superseded run') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -943,7 +959,8 @@ spec:
         stage('Checkout CI scripts') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -975,7 +992,8 @@ spec:
         stage('Start PR reporting') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -1011,7 +1029,8 @@ spec:
         stage('Validate builder') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -1075,7 +1094,8 @@ spec:
         stage('Checkout source') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -1168,7 +1188,8 @@ spec:
         stage('Build and unit tests') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -1213,7 +1234,8 @@ spec:
         stage('Build Debian packages') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
@@ -1255,7 +1277,8 @@ spec:
         stage('Deploy and run ONTAP integration') {
             when {
                 expression {
-                    return currentBuild.result != 'NOT_BUILT'
+                    return params.SOURCE_MODE != 'discover' &&
+                        currentBuild.result != 'NOT_BUILT'
                 }
             }
             steps {
