@@ -266,6 +266,31 @@ def validateInventory(Map inventory) {
     return enabledVms
 }
 
+// Discovery only needs list-eligible-prs.py, so it fetches one commit without
+// tags and checks out only private-cicd/scripts. A full checkout of CloudStack
+// takes minutes and makes each poll outlast the next timer trigger.
+// The GitSCM getters are sandboxed, so fall back to the full checkout when the
+// controller has not approved them yet.
+void checkoutDiscoveryScripts() {
+    try {
+        checkout([
+            $class: 'GitSCM',
+            branches: scm.branches,
+            userRemoteConfigs: scm.userRemoteConfigs,
+            extensions: [
+                [$class: 'CloneOption', shallow: true, depth: 1, noTags: true],
+                [
+                    $class: 'SparseCheckoutPaths',
+                    sparseCheckoutPaths: [[path: 'private-cicd/scripts']]
+                ]
+            ]
+        ])
+    } catch (Exception e) {
+        echo "Shallow discovery checkout unavailable, using the full checkout: ${e}"
+        checkout(scm)
+    }
+}
+
 // Optional manual gate after a stage, enabled by PAUSE_BETWEEN_STAGES.
 // The pod stays reserved while an input waits, so the timeout is required.
 void pauseForVerification(String stageName) {
@@ -593,12 +618,23 @@ spec:
                 }
             }
             steps {
-                lock(resource: 'cloudstack-presubmit-discovery') {
+                script {
+                    currentBuild.displayName =
+                        "#${env.BUILD_NUMBER} discover PR revisions"
+                    currentBuild.description =
+                        'skipped, another discovery run held the lock'
+                    // NOT_BUILT prevents every worker stage and notification
+                    // below, including when the lock is skipped. The next poll
+                    // reads PRESUBMIT_DISCOVERY_NEXT_WATERMARK, which only a
+                    // run that reached the end of the lock body sets.
+                    currentBuild.result = 'NOT_BUILT'
+                }
+                // Skipping instead of queueing keeps a slow poll from building
+                // a backlog of discovery runs that each hold an agent pod.
+                lock(resource: 'cloudstack-presubmit-discovery', skipIfLocked: true) {
                     script {
-                        currentBuild.displayName =
-                            "#${env.BUILD_NUMBER} discover PR revisions"
                         deleteDir()
-                        checkout(scm)
+                        checkoutDiscoveryScripts()
                         if (!(params.EXPECTED_REPOSITORY ==~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)) {
                             error('EXPECTED_REPOSITORY must be owner/repository.')
                         }
@@ -706,9 +742,6 @@ spec:
                         currentBuild.description = isInitialDiscovery ?
                             "seeded at ${watermark}; queued ${queuedCount}; deferred ${deferredCount}" :
                             "since ${watermark}; queued ${queuedCount}; deferred ${deferredCount}"
-                        // NOT_BUILT prevents every worker stage and notification
-                        // below. The next poll reads PRESUBMIT_DISCOVERY_NEXT_WATERMARK.
-                        currentBuild.result = 'NOT_BUILT'
                     }
                 }
             }
