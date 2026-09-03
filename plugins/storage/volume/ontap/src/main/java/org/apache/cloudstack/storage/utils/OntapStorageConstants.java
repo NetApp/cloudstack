@@ -171,17 +171,9 @@ public class OntapStorageConstants {
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_SECONDS = 10800; // 3 hours
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 60; // 1 minute (testing; production is 10800)
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
-
-    /**
-     * Fixed wakeup cadence of {@code OntapAsupPollTask}. Must stay at or below
-     * {@link #ASUP_MIN_INTERVAL_SECONDS} so a due push cannot be missed by more than this
-     * window. Config edits are applied immediately via the configuration-edit event; this
-     * delay is only the background check, not the ASUP push interval.
-     */
-    public static final int ASUP_POLL_CHECK_INTERVAL_SECONDS = 3600; // 1 hour
 
     public static final String ASUP_ENABLED_DESCRIPTION =
             "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
