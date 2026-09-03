@@ -33,14 +33,13 @@ import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
 import com.cloud.utils.Ternary;
 import com.cloud.utils.component.ManagerBase;
+import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.net.NetUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.messagebus.MessageBus;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
-import org.apache.cloudstack.poll.BackgroundPollManager;
-import org.apache.cloudstack.poll.BackgroundPollTask;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -63,14 +62,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Periodic ASUP (AutoSupport) telemetry pusher for the NetApp ONTAP plugin.
  *
- * <p>This manager runs on a fixed interval and, for each
- * ONTAP-backed primary storage pool, pushes two minimal EMS application-log messages to
- * the backing ONTAP cluster:</p>
+ * <p>Each run pushes, for every ONTAP-backed primary storage pool, two minimal EMS
+ * application-log messages to the backing ONTAP cluster:</p>
  *
  * <ul>
  *     <li><b>event-id 0 (heartbeat):</b> identifies the CloudStack deployment (CloudStack
@@ -79,19 +80,15 @@ import java.util.concurrent.TimeUnit;
  *         volume - protocol (NFS/iSCSI), ONTAP FlexVolume UUID, SVM, disk usage, and
  *         snapshot telemetry (counts by state, total provisioned size).</li>
  * </ul>
+ *
+ * <p>Runs are booked one at a time: after each push the next run is scheduled for exactly
+ * {@link OntapConfigurationManager#AsupIntervalSeconds} later, so the configured interval is
+ * the real spacing rather than being rounded up to some fixed polling cadence. Editing either
+ * ONTAP ASUP setting re-books the pending run immediately, with no management-server
+ * restart.</p>
  */
 public class OntapAsupManager extends ManagerBase {
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
-
-    /**
-     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask} (1 hour). The task wakes on
-     * this cadence and checks whether the live configured push interval
-     * ({@link OntapConfigurationManager#AsupIntervalSeconds}) has elapsed. UI edits of that
-     * interval are applied immediately via the configuration-edit event; this delay is only
-     * the background check so a due push is still noticed with no UI click.
-     */
-    static final long ASUP_POLL_CHECK_INTERVAL_MS =
-            TimeUnit.SECONDS.toMillis(OntapStorageConstants.ASUP_POLL_CHECK_INTERVAL_SECONDS);
 
     /**
      * Volume states that guarantee a physical object exists on the ONTAP FlexVolume.
@@ -115,10 +112,16 @@ public class OntapAsupManager extends ManagerBase {
 
     /**
      * Timestamp of the last successful ASUP push. Starts at {@link Instant#EPOCH} so the
-     * very first wakeup always fires immediately. {@code volatile} ensures the poll-task
+     * very first run always fires immediately. {@code volatile} ensures the scheduler
      * thread's write is visible without synchronization overhead.
      */
     volatile Instant lastPushTime = Instant.EPOCH;
+
+    /** Single daemon thread that runs the ASUP pushes; owned by this manager. */
+    private ScheduledExecutorService asupScheduler;
+
+    /** The one pending run. Cancelled and re-booked whenever the schedule changes. */
+    private ScheduledFuture<?> pendingRun;
 
     @Inject
     private PrimaryDataStoreDao storagePoolDao;
@@ -131,8 +134,6 @@ public class OntapAsupManager extends ManagerBase {
     @Inject
     private VMSnapshotDao vmSnapshotDao;
     @Inject
-    private BackgroundPollManager backgroundPollManager;
-    @Inject
     private ManagementService managementService;
     @Inject
     private ManagementServerHostDao managementServerHostDao;
@@ -142,21 +143,73 @@ public class OntapAsupManager extends ManagerBase {
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
         super.configure(name, params);
-        // Submit the periodic ASUP task to CloudStack's shared background poll manager.
-        // This must happen in the configure-phase: the poll manager schedules all submitted
-        // tasks during its own start-phase and rejects late submissions. Using the shared
-        // scheduler means this plugin does not create or manage its own thread.
-        backgroundPollManager.submitTask(new OntapAsupPollTask());
-        // re-run the existing poll check when our
-        // dynamic keys change so the new value is applied without waiting for the next wakeup.
+        // React to edits of the ONTAP ASUP settings so a new interval re-books the pending run
+        // instead of waiting for it to fire on the old schedule.
         messageBus.subscribe(EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, this::onAsupConfigEdited);
-        logger.info("OntapAsupManager configured; ASUP poll task submitted to BackgroundPollManager");
         return true;
     }
 
+    @Override
+    public boolean start() {
+        asupScheduler = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("OntapAsup"));
+        logger.info("OntapAsupManager started; ASUP telemetry enabled={}, interval={}s",
+                OntapConfigurationManager.AsupEnabled.value(),
+                getAsupIntervalSeconds(OntapConfigurationManager.AsupIntervalSeconds.value()));
+        scheduleNextRun();
+        return super.start();
+    }
+
+    @Override
+    public boolean stop() {
+        if (asupScheduler != null) {
+            asupScheduler.shutdownNow();
+        }
+        return super.stop();
+    }
+
     /**
-     * CloudStack publishes this after invalidating the config cache. Reuses
-     * {@link OntapAsupPollTask} so enable/interval rules stay in one place.
+     * Books the single pending run for the moment the configured interval elapses, cancelling
+     * whatever was booked before. Called at start-up, after every run, and whenever one of the
+     * ONTAP ASUP settings is edited, so the live config always decides the next run.
+     *
+     * <p>When ASUP is disabled nothing is booked; re-enabling it publishes a configuration-edit
+     * event, which books a run again.</p>
+     */
+    private synchronized void scheduleNextRun() {
+        if (asupScheduler == null || asupScheduler.isShutdown()) {
+            return;
+        }
+        if (pendingRun != null) {
+            pendingRun.cancel(false);
+            pendingRun = null;
+        }
+        if (Boolean.FALSE.equals(OntapConfigurationManager.AsupEnabled.value())) {
+            logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); no run scheduled.",
+                    OntapConfigurationManager.AsupEnabled.key());
+            return;
+        }
+        long delayMs = millisUntilNextPush();
+        pendingRun = asupScheduler.schedule(new OntapAsupTask(), delayMs, TimeUnit.MILLISECONDS);
+        logger.debug("ONTAP ASUP: next telemetry push scheduled in {} ms.", delayMs);
+    }
+
+    /**
+     * Milliseconds remaining until {@link #lastPushTime} plus the live configured interval.
+     * Zero when a push is already overdue — for example after the interval is shortened, or on
+     * the very first run when {@link #lastPushTime} is still {@link Instant#EPOCH}.
+     */
+    long millisUntilNextPush() {
+        Duration configuredInterval = Duration.ofSeconds(
+                getAsupIntervalSeconds(OntapConfigurationManager.AsupIntervalSeconds.value()));
+        Duration remaining = configuredInterval.minus(Duration.between(lastPushTime, Instant.now()));
+        return remaining.isNegative() ? 0L : remaining.toMillis();
+    }
+
+    /**
+     * CloudStack publishes this after invalidating the config cache, so the new value is already
+     * readable. Re-books the pending run: shortening the interval past the due time schedules
+     * with zero delay, which pushes right away on the scheduler thread rather than blocking the
+     * API thread that served {@code updateConfiguration}.
      */
     @SuppressWarnings("unchecked")
     private void onAsupConfigEdited(String senderAddress, String subject, Object args) {
@@ -168,20 +221,19 @@ public class OntapAsupManager extends ManagerBase {
                 && !OntapConfigurationManager.AsupIntervalSeconds.key().equals(updatedKey)) {
             return;
         }
-        logger.debug("ONTAP ASUP: [{}] was updated; re-evaluating now.", updatedKey);
-        new OntapAsupPollTask().run();
+        logger.debug("ONTAP ASUP: [{}] was updated; re-booking the next push.", updatedKey);
+        scheduleNextRun();
     }
 
     /**
-     * Background poll task that runs the ASUP push within a managed CloudStack context.
+     * One ASUP run inside a managed CloudStack context, which the DAO calls made during the push
+     * require.
      *
-     * <p>Wakes every {@link #ASUP_POLL_CHECK_INTERVAL_MS} ms. If ASUP is disabled the
-     * wakeup returns immediately without advancing {@link #lastPushTime}. Otherwise it
-     * reads the live {@link OntapConfigurationManager#AsupIntervalSeconds} and only pushes if that interval has
-     * elapsed. Interval and enable changes in the UI also trigger this check via
-     * {@link #onAsupConfigEdited}.</p>
+     * <p>The interval is re-checked here as well as when booking, because a run can be booked
+     * early (an edit that is not yet due). Whatever happens, the next run is booked again in the
+     * {@code finally} block so the schedule never stalls.</p>
      */
-    protected class OntapAsupPollTask extends ManagedContextRunnable implements BackgroundPollTask {
+    protected class OntapAsupTask extends ManagedContextRunnable {
         @Override
         protected void runInContext() {
             try {
@@ -200,12 +252,9 @@ public class OntapAsupManager extends ManagerBase {
                 pushAsupTelemetry();
             } catch (Exception e) {
                 logger.warn("ONTAP ASUP: unexpected error during periodic push: {}", e.getMessage());
+            } finally {
+                scheduleNextRun();
             }
-        }
-
-        @Override
-        public Long getDelay() {
-            return ASUP_POLL_CHECK_INTERVAL_MS;
         }
     }
 

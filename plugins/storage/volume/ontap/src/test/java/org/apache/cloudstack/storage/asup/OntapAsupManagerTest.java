@@ -500,7 +500,7 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("10799"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("59"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("86401"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("0"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("abc"));
@@ -514,7 +514,7 @@ class OntapAsupManagerTest {
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
                 asupManager.getAsupIntervalSeconds(0));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(10799));
+                asupManager.getAsupIntervalSeconds(59));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
                 asupManager.getAsupIntervalSeconds(86401));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
@@ -524,17 +524,26 @@ class OntapAsupManagerTest {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // OntapAsupPollTask – self-throttle (interval change takes effect without restart)
+    // OntapAsupTask – self-throttle (interval change takes effect without restart)
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    void pollTask_getDelay_returnsFixedCheckInterval() {
-        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
-        assertEquals(OntapAsupManager.ASUP_POLL_CHECK_INTERVAL_MS, task.getDelay());
+    void millisUntilNextPush_zeroWhenOverdue() {
+        asupManager.lastPushTime = Instant.EPOCH; // never pushed
+        assertEquals(0L, asupManager.millisUntilNextPush());
     }
 
     @Test
-    void pollTask_whenDisabled_doesNotAdvanceLastPushTime() throws Exception {
+    void millisUntilNextPush_remainderOfConfiguredInterval() {
+        asupManager.lastPushTime = Instant.now();
+        long remaining = asupManager.millisUntilNextPush();
+        long configured = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS * 1000L;
+        assertTrue(remaining > configured - 5000L && remaining <= configured,
+                "remaining=" + remaining);
+    }
+
+    @Test
+    void asupTask_whenDisabled_doesNotAdvanceLastPushTime() throws Exception {
         Instant original = Instant.EPOCH;
         asupManager.lastPushTime = original;
         ConfigDepotImpl previousDepot = getConfigDepot();
@@ -543,7 +552,7 @@ class OntapAsupManagerTest {
             when(depot.getConfigStringValue(eq(OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY),
                     eq(ConfigKey.Scope.Global), isNull())).thenReturn("false");
             setConfigDepot(depot);
-            OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+            OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
             task.run();
         } finally {
             setConfigDepot(previousDepot);
@@ -553,19 +562,19 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void pollTask_skipsWhenIntervalNotElapsed() {
+    void asupTask_skipsWhenIntervalNotElapsed() {
         asupManager.lastPushTime = Instant.now(); // just pushed
-        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+        OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
         task.run();
         verify(storagePoolDao, never()).findPoolsByProvider(any());
     }
 
     @Test
-    void pollTask_pushesWhenIntervalElapsed() {
+    void asupTask_pushesWhenIntervalElapsed() {
         asupManager.lastPushTime = Instant.EPOCH; // never pushed
         when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
                 .thenReturn(Collections.emptyList());
-        OntapAsupManager.OntapAsupPollTask task = asupManager.new OntapAsupPollTask();
+        OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
         task.run();
         verify(storagePoolDao).findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME);
     }
