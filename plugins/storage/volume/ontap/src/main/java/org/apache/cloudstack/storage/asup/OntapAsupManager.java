@@ -84,7 +84,7 @@ public class OntapAsupManager extends ManagerBase {
     private static final int ASUP_LOCK_TIMEOUT_SECONDS = 5;
 
     /**
-     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask} (2 hours). The task wakes on
+     * Fixed wakeup interval (ms) for {@link OntapAsupPollTask} (1 hour). The task wakes on
      * this cadence and checks whether the live configured push interval
      * ({@link OntapConfigurationManager#AsupIntervalSeconds}) has elapsed. UI edits of that
      * interval are applied immediately via the configuration-edit event; this delay is only
