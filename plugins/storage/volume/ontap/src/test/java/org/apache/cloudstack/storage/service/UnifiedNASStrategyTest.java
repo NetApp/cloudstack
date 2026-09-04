@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.host.HostVO;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
@@ -28,7 +29,9 @@ import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
@@ -38,6 +41,8 @@ import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
+import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
@@ -115,6 +120,9 @@ public class UnifiedNASStrategyTest {
     @Mock
     private StoragePoolDetailsDao storagePoolDetailsDao;
 
+    @Mock
+    private PrimaryDataStoreDao primaryDataStoreDao;
+
     private TestableUnifiedNASStrategy strategy;
 
     private OntapStorage ontapStorage;
@@ -133,6 +141,7 @@ public class UnifiedNASStrategyTest {
         injectField("volumeDao", volumeDao);
         injectField("epSelector", epSelector);
         injectField("storagePoolDetailsDao", storagePoolDetailsDao);
+        injectField("primaryDataStoreDao", primaryDataStoreDao);
     }
 
     private void injectField(String fieldName, Object mockedField) throws Exception {
@@ -953,4 +962,83 @@ public class UnifiedNASStrategyTest {
         List<ExportRule.ExportClient> clients = existingPolicy.getRules().get(0).getClients();
         assertEquals(1, clients.size());
         assertEquals("192.168.1.10/32", clients.get(0).getMatch());
-    }}
+    }
+
+    @Test
+    public void testCloneCloudStackVolume_Success() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
+        details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+
+        FileInfo source = new FileInfo();
+        source.setPath("template-uuid");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setDatastoreId("1");
+        request.setVolumeInfo(volumeObject);
+        request.setFile(source);
+        request.setDestinationPath("volume-uuid");
+
+        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(new JobResponse());
+
+        CloudStackVolume result = strategy.cloneCloudStackVolume(request);
+
+        assertNotNull(result);
+        assertEquals("volume-uuid", result.getFile().getPath());
+        ArgumentCaptor<FileCloneRequest> captor = ArgumentCaptor.forClass(FileCloneRequest.class);
+        verify(nasFeignClient).cloneFile(anyString(), captor.capture());
+        assertEquals("template-uuid", captor.getValue().getSourcePath());
+        assertEquals("volume-uuid", captor.getValue().getDestinationPath());
+        assertEquals("flexvol1", captor.getValue().getVolume().getName());
+        assertEquals("flexvol-uuid-1", captor.getValue().getVolume().getUuid());
+    }
+
+    @Test
+    public void testCloneCloudStackVolume_InvalidRequest_ThrowsException() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolume(null));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_SendsResizeCommand() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("volume-uuid");
+        when(volumeVO.getSize()).thenReturn(5368709120L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(new Answer(null, true, "Success"));
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        strategy.resizeCloudStackVolume(request, 21474836480L);
+
+        verify(endPoint).sendMessage(any(ResizeVolumeCommand.class));
+    }
+
+    @Test
+    public void testDeleteFileByPath_Treats404AsSuccess() {
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(404);
+        doThrow(feignException).when(nasFeignClient).deleteFile(anyString(), eq("flexvol-uuid"), eq("template-uuid"));
+
+        strategy.deleteFileByPath("flexvol-uuid", "template-uuid");
+
+        verify(nasFeignClient).deleteFile(anyString(), eq("flexvol-uuid"), eq("template-uuid"));
+    }
+}

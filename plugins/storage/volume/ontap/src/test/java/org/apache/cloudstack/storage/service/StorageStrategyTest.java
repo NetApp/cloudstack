@@ -147,8 +147,12 @@ public class StorageStrategyTest {
         }
 
         @Override
-        public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
+            return null;
+        }
 
+        @Override
+        public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
         }
 
         @Override
