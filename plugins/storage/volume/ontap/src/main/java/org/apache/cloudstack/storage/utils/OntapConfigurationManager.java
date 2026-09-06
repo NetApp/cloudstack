@@ -87,11 +87,10 @@ public class OntapConfigurationManager implements Configurable {
 
     private static String asupIntervalRangeMessage() {
         return String.format(
-                "%s must be between %d and %d seconds. Default: %d.",
+                "%s must be between %d and %d seconds.",
                 OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
                 OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
-                OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
-                OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS);
+                OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS);
     }
 
     @Override
