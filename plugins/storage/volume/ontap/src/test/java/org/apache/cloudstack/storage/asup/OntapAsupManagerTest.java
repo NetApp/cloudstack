@@ -540,6 +540,7 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("2"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("0"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("25"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("abc"));
@@ -552,7 +553,7 @@ class OntapAsupManagerTest {
                 asupManager.getAsupIntervalHours(null));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(0));
-        assertEquals(2,
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(2));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(25));
