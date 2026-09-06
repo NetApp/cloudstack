@@ -82,7 +82,7 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  *
  * <p>Runs are booked one at a time: after each cycle starts, the next run is scheduled for
- * {@link OntapConfigurationManager#AsupIntervalSeconds} after that start, so production
+ * {@link OntapConfigurationManager#AsupIntervalHours} after that start, so production
  * intervals (hours) are start-to-start. REST work sits inside the interval; it is not added
  * after it. Editing either ONTAP ASUP setting re-books the pending run immediately, with no
  * management-server restart.</p>
@@ -112,7 +112,7 @@ public class OntapAsupManager extends ManagerBase {
 
     /**
      * Timestamp of the last ASUP cycle start (or {@link Instant#EPOCH} if none has run).
-     * The next run is due {@link OntapConfigurationManager#AsupIntervalSeconds} after this
+     * The next run is due {@link OntapConfigurationManager#AsupIntervalHours} after this
      * instant. {@code volatile} so the scheduler thread's write is visible without extra locking.
      */
     volatile Instant lastPushTime = Instant.EPOCH;
@@ -152,9 +152,9 @@ public class OntapAsupManager extends ManagerBase {
     @Override
     public boolean start() {
         asupScheduler = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("OntapAsup"));
-        logger.info("OntapAsupManager started; ASUP telemetry enabled={}, interval={}s",
+        logger.info("OntapAsupManager started; ASUP telemetry enabled={}, interval={}h",
                 OntapConfigurationManager.AsupEnabled.value(),
-                getAsupIntervalSeconds(OntapConfigurationManager.AsupIntervalSeconds.value()));
+                getAsupIntervalHours(OntapConfigurationManager.AsupIntervalHours.value()));
         scheduleNextRun();
         return super.start();
     }
@@ -200,8 +200,8 @@ public class OntapAsupManager extends ManagerBase {
      * {@link #lastPushTime} is still {@link Instant#EPOCH}.
      */
     long millisUntilNextPush() {
-        Duration configuredInterval = Duration.ofSeconds(
-                getAsupIntervalSeconds(OntapConfigurationManager.AsupIntervalSeconds.value()));
+        Duration configuredInterval = Duration.ofHours(
+                getAsupIntervalHours(OntapConfigurationManager.AsupIntervalHours.value()));
         Duration remaining = configuredInterval.minus(Duration.between(lastPushTime, Instant.now()));
         return remaining.isNegative() ? 0L : remaining.toMillis();
     }
@@ -219,7 +219,7 @@ public class OntapAsupManager extends ManagerBase {
         }
         String updatedKey = ((Ternary<String, ConfigKey.Scope, Long>) args).first();
         if (!OntapConfigurationManager.AsupEnabled.key().equals(updatedKey)
-                && !OntapConfigurationManager.AsupIntervalSeconds.key().equals(updatedKey)) {
+                && !OntapConfigurationManager.AsupIntervalHours.key().equals(updatedKey)) {
             return;
         }
         logger.debug("ONTAP ASUP: [{}] was updated; re-booking the next push.", updatedKey);
@@ -618,22 +618,23 @@ public class OntapAsupManager extends ManagerBase {
     }
 
     /**
-     * Returns a usable interval for the poller. Out-of-range or missing DB values
+     * Returns a usable interval in hours. Out-of-range or missing DB values
      * (for example set outside the API) fall back to the default so ASUP is not
-     * sent every poll cycle.
+     * sent on an unintended cadence. The scheduler converts this to seconds via
+     * {@link Duration#ofHours(long)}.
      */
-    int getAsupIntervalSeconds(Integer configured) {
+    int getAsupIntervalHours(Integer configured) {
         if (configured == null) {
-            return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+            return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS;
         }
-        if (configured < OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS
-                || configured > OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS) {
+        if (configured < OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS
+                || configured > OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS) {
             logger.warn("ONTAP ASUP: {} value [{}] is outside [{}-{}]; using default [{}]",
                     OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY, configured,
-                    OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
-                    OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
-                    OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS);
-            return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS;
+                    OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,
+                    OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS,
+                    OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS);
+            return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS;
         }
         return configured;
     }

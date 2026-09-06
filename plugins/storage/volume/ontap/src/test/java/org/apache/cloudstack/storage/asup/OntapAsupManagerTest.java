@@ -50,6 +50,7 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
@@ -513,16 +514,16 @@ class OntapAsupManagerTest {
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
-    void asupIntervalSeconds_defaultIsProductionValue() {
-        assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS),
-                OntapConfigurationManager.AsupIntervalSeconds.defaultValue());
+    void asupIntervalHours_defaultIsProductionValue() {
+        assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS),
+                OntapConfigurationManager.AsupIntervalHours.defaultValue());
     }
 
     @Test
-    void asupIntervalSeconds_descriptionIncludesAllowedRange() {
-        String description = OntapConfigurationManager.AsupIntervalSeconds.description();
-        assertTrue(description.contains("10800"));
-        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS)));
+    void asupIntervalHours_descriptionIncludesAllowedRange() {
+        String description = OntapConfigurationManager.AsupIntervalHours.description();
+        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS)));
+        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS)));
     }
 
     @Test
@@ -532,34 +533,33 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_acceptsMinMaxAndDefault() {
-        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
-        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
-        OntapConfigurationManager.AsupIntervalSeconds.validateValue(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS));
+        OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS));
+        OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS));
+        OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS));
     }
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("10799"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("86401"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("0"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("abc"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue(""));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("0"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("25"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("abc"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue(""));
     }
 
     @Test
-    void getAsupIntervalSeconds_fallsBackOutsideRange() {
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(null));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(0));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(10799));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(86401));
-        assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS));
-        assertEquals(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(OntapStorageConstants.ASUP_MAX_INTERVAL_SECONDS));
+    void getAsupIntervalHours_fallsBackOutsideRange() {
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(null));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(0));
+        assertEquals(2,
+                asupManager.getAsupIntervalHours(2));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(25));
+        assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS));
+        assertEquals(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -576,7 +576,7 @@ class OntapAsupManagerTest {
     void millisUntilNextPush_remainderOfConfiguredInterval() {
         asupManager.lastPushTime = Instant.now();
         long remaining = asupManager.millisUntilNextPush();
-        long configured = OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS * 1000L;
+        long configured = Duration.ofHours(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS).toMillis();
         assertTrue(remaining > configured - 5000L && remaining <= configured,
                 "remaining=" + remaining);
     }
