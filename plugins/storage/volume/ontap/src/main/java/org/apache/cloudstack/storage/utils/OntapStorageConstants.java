@@ -190,8 +190,8 @@ public class OntapStorageConstants {
             "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
                     + "Changes take effect immediately and do not require a management server restart.";
     public static final String ASUP_INTERVAL_DESCRIPTION =
-            "Set the telemetry reporting interval for the CloudStack ONTAP plugin, in hours. "
-                    + "Valid values range from " + ASUP_MIN_INTERVAL_HOURS + " to " + ASUP_MAX_INTERVAL_HOURS
-                    + ". Default: " + ASUP_DEFAULT_INTERVAL_HOURS + ". "
+            "Sets the telemetry reporting interval (in hours) for the CloudStack ONTAP plugin. "
+                    + "Allowed range: " + ASUP_MIN_INTERVAL_HOURS + "-" + ASUP_MAX_INTERVAL_HOURS
+                    + " hours, with a default of " + ASUP_DEFAULT_INTERVAL_HOURS + " hours. "
                     + "Changes take effect immediately and do not require a management server restart.";
 }
