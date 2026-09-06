@@ -32,8 +32,6 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.vm.snapshot.VMSnapshot;
 import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
-import org.apache.cloudstack.framework.config.ConfigKey;
-import org.apache.cloudstack.framework.config.impl.ConfigDepotImpl;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -52,12 +50,10 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -149,8 +145,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         // heartbeat (event-id 0) + pool (event-id 1) = 2 messages
@@ -165,23 +161,23 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void pushAsupForStoragePool_clusterAlreadyHeartbeated_sendsOnlyPoolMessage() {
+    void pushAsupForStoragePool_cachedStorageIp_sendsOnlyPoolMessage() {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
-        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
         when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
-        HashSet<String> clustersHeartbeated = new HashSet<>();
-        clustersHeartbeated.add("cluster-uuid-1"); // already sent this cycle
+        Map<String, OntapAsupManager.AsupClusterClient> clientsByStorageIp = new HashMap<>();
+        clientsByStorageIp.put("192.168.1.10", new OntapAsupManager.AsupClusterClient(mockStrategy, mockCluster));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, clustersHeartbeated);
+            asupManager.pushAsupForStoragePool(pool, clientsByStorageIp);
+            u.verify(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any()), never());
         }
 
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
         verify(mockStrategy, times(1)).sendAsupMessage(cap.capture());
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, cap.getValue().getEventId());
+        verify(mockStrategy, never()).getClusterInfo();
     }
 
     @Test
@@ -189,9 +185,9 @@ class OntapAsupManagerTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any()))
                     .thenThrow(new RuntimeException("connection refused"));
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         verify(mockStrategy, never()).sendAsupMessage(any());
@@ -202,9 +198,9 @@ class OntapAsupManagerTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(Collections.emptyMap());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any()))
                     .thenThrow(new RuntimeException("no details"));
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         verify(mockStrategy, never()).sendAsupMessage(any());
@@ -222,8 +218,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -244,8 +240,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -260,8 +256,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -278,8 +274,8 @@ class OntapAsupManagerTest {
         when(volumeDao.hasMultiPrimaryStoragePoolVm(1L)).thenReturn(true);
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -303,12 +299,13 @@ class OntapAsupManagerTest {
         when(snapshotDao.searchByVolumes(anyList())).thenReturn(Arrays.asList(s1, s2, s3));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
         assertTrue(desc.contains("\"volumeSnapshotCount\":2"), "Destroyed must be excluded; desc=" + desc);
+        verify(volumeDao, times(1)).findNonDestroyedVolumesByPoolId(eq(1L), isNull());
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -334,8 +331,8 @@ class OntapAsupManagerTest {
         when(vmSnapshotDao.searchByVms(anyList())).thenReturn(Arrays.asList(vmSnap1, vmSnap2, vmSnapExp));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -357,8 +354,8 @@ class OntapAsupManagerTest {
         when(vmSnapshotDao.searchByVms(anyList())).thenReturn(Arrays.asList(active, deleted));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -376,8 +373,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.singletonList(vol));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         String desc = capturePoolMessage();
@@ -398,8 +395,8 @@ class OntapAsupManagerTest {
                 .thenThrow(new RuntimeException("DB error"));
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         // heartbeat + pool both sent even when DAO fails
@@ -423,13 +420,16 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(anyLong(), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
 
-            HashSet<String> clustersHeartbeated = new HashSet<>();
-            asupManager.pushAsupForStoragePool(pool,  clustersHeartbeated);
-            asupManager.pushAsupForStoragePool(pool2, clustersHeartbeated);
+            Map<String, OntapAsupManager.AsupClusterClient> clientsByStorageIp = new HashMap<>();
+            asupManager.pushAsupForStoragePool(pool, clientsByStorageIp);
+            asupManager.pushAsupForStoragePool(pool2, clientsByStorageIp);
+
+            u.verify(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any()), times(1));
         }
 
+        verify(mockStrategy, times(1)).getClusterInfo();
         // 1 heartbeat + 2 pool messages = 3 total
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
         verify(mockStrategy, times(3)).sendAsupMessage(cap.capture());
@@ -438,6 +438,45 @@ class OntapAsupManagerTest {
                 .filter(m -> OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT.equals(m.getEventId()))
                 .count();
         assertEquals(1, heartbeats, "exactly 1 heartbeat for two pools sharing a cluster");
+    }
+
+    @Test
+    void twoPoolsDifferentStorageIp_resolvesStrategyPerCluster() {
+        StoragePoolVO pool2 = mock(StoragePoolVO.class);
+        when(pool2.getId()).thenReturn(2L);
+        when(pool2.getName()).thenReturn("ontap-pool-2");
+
+        Map<String, String> otherCluster = new HashMap<>(poolDetails);
+        otherCluster.put(OntapStorageConstants.STORAGE_IP, "192.168.1.20");
+
+        Cluster cluster2 = mock(Cluster.class);
+        when(cluster2.getUuid()).thenReturn("cluster-uuid-2");
+
+        StorageStrategy strategy2 = mock(StorageStrategy.class);
+        when(strategy2.getClusterInfo()).thenReturn(cluster2);
+        when(strategy2.getClusterVersion(cluster2)).thenReturn("9.16.1");
+
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(2L)).thenReturn(otherCluster);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        when(volumeDao.findNonDestroyedVolumesByPoolId(anyLong(), isNull())).thenReturn(Collections.emptyList());
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(poolDetails)).thenReturn(mockStrategy);
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(otherCluster)).thenReturn(strategy2);
+
+            Map<String, OntapAsupManager.AsupClusterClient> clientsByStorageIp = new HashMap<>();
+            asupManager.pushAsupForStoragePool(pool, clientsByStorageIp);
+            asupManager.pushAsupForStoragePool(pool2, clientsByStorageIp);
+
+            u.verify(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any()), times(2));
+        }
+
+        verify(mockStrategy, times(1)).getClusterInfo();
+        verify(strategy2, times(1)).getClusterInfo();
+        verify(mockStrategy, times(2)).sendAsupMessage(any());
+        verify(strategy2, times(2)).sendAsupMessage(any());
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -452,8 +491,8 @@ class OntapAsupManagerTest {
         when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
 
         try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
-            u.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(mockStrategy);
-            asupManager.pushAsupForStoragePool(pool, new HashSet<>());
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
 
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
@@ -500,7 +539,7 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("59"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("359"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("86401"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("0"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalSeconds.validateValue("abc"));
@@ -514,7 +553,7 @@ class OntapAsupManagerTest {
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
                 asupManager.getAsupIntervalSeconds(0));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
-                asupManager.getAsupIntervalSeconds(59));
+                asupManager.getAsupIntervalSeconds(359));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_SECONDS,
                 asupManager.getAsupIntervalSeconds(86401));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_SECONDS,
@@ -524,7 +563,7 @@ class OntapAsupManagerTest {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // OntapAsupTask – self-throttle (interval change takes effect without restart)
+    // OntapAsupTask / schedule
     // ──────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -543,40 +582,16 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void asupTask_whenDisabled_doesNotAdvanceLastPushTime() throws Exception {
-        Instant original = Instant.EPOCH;
-        asupManager.lastPushTime = original;
-        ConfigDepotImpl previousDepot = getConfigDepot();
-        try {
-            ConfigDepotImpl depot = mock(ConfigDepotImpl.class);
-            when(depot.getConfigStringValue(eq(OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY),
-                    eq(ConfigKey.Scope.Global), isNull())).thenReturn("false");
-            setConfigDepot(depot);
-            OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
-            task.run();
-        } finally {
-            setConfigDepot(previousDepot);
-        }
-        assertEquals(original, asupManager.lastPushTime);
-        verify(storagePoolDao, never()).findPoolsByProvider(any());
-    }
-
-    @Test
-    void asupTask_skipsWhenIntervalNotElapsed() {
-        asupManager.lastPushTime = Instant.now(); // just pushed
-        OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
-        task.run();
-        verify(storagePoolDao, never()).findPoolsByProvider(any());
-    }
-
-    @Test
-    void asupTask_pushesWhenIntervalElapsed() {
+    void asupTask_stampsLastPushTimeAndPushes() {
         asupManager.lastPushTime = Instant.EPOCH; // never pushed
         when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
                 .thenReturn(Collections.emptyList());
+        Instant before = Instant.now();
         OntapAsupManager.OntapAsupTask task = asupManager.new OntapAsupTask();
         task.run();
         verify(storagePoolDao).findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME);
+        assertFalse(asupManager.lastPushTime.equals(Instant.EPOCH));
+        assertFalse(asupManager.lastPushTime.isBefore(before));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -651,18 +666,6 @@ class OntapAsupManagerTest {
         SnapshotVO snap = mock(SnapshotVO.class);
         when(snap.getState()).thenReturn(state);
         return snap;
-    }
-
-    private static ConfigDepotImpl getConfigDepot() throws Exception {
-        Field field = ConfigKey.class.getDeclaredField("s_depot");
-        field.setAccessible(true);
-        return (ConfigDepotImpl) field.get(null);
-    }
-
-    private static void setConfigDepot(ConfigDepotImpl depot) throws Exception {
-        Field field = ConfigKey.class.getDeclaredField("s_depot");
-        field.setAccessible(true);
-        field.set(null, depot);
     }
 
     /** Creates a mock VMSnapshotVO with the given state and removed timestamp. */

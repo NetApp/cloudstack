@@ -182,7 +182,7 @@ public class OntapStorageConstants {
     public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
     public static final String ASUP_ENABLED_DEFAULT = "true";
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_SECONDS = 60; // 1 minute (testing; production is 10800)
+    public static final int ASUP_MIN_INTERVAL_SECONDS = 360; // 6 minutes (demo; production is 10800)
     public static final int ASUP_MAX_INTERVAL_SECONDS = 86400; // 24 hours
     public static final int ASUP_DEFAULT_INTERVAL_SECONDS = 43200; // 12 hours (twice a day)
 
