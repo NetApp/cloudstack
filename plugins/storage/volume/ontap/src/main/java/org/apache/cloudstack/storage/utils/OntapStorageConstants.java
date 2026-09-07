@@ -182,7 +182,7 @@ public class OntapStorageConstants {
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.autosupport.interval";
     /** {@code ontap.autosupport.interval} value that disables telemetry reporting. */
     public static final int ASUP_DISABLED_INTERVAL_HOURS = 0;
-    public static final int ASUP_MIN_INTERVAL_HOURS = 1;
+    public static final int ASUP_MIN_INTERVAL_HOURS = 4;
     public static final int ASUP_MAX_INTERVAL_HOURS = 168; // once a week
     public static final int ASUP_DEFAULT_INTERVAL_HOURS = 24; // once a day
 

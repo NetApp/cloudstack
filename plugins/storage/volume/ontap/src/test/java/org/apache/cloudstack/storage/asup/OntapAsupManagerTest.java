@@ -515,6 +515,7 @@ class OntapAsupManagerTest {
 
     @Test
     void asupIntervalHours_defaultIsProductionValue() {
+        assertEquals(4, OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS);
         assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS),
                 OntapConfigurationManager.AsupIntervalHours.defaultValue());
     }
@@ -559,7 +560,11 @@ class OntapAsupManagerTest {
         assertEquals(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(1));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(2));
+        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(3));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(169));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,
