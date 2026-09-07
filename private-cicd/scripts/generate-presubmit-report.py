@@ -144,7 +144,7 @@ def log_to_html(source, destination):
             f'<a id="{anchor_name}"></a>'
             for anchor_name in anchor_positions.get(index, []))
         escaped = html.escape(line)
-        error_pattern = r"\b(FAIL(?:ED|URE)?|EXCEPTION|ERROR|Traceback)\b"
+        error_pattern = r"\b(FAIL(?:ED)?|FAILURE|EXCEPTION|ERROR|Traceback)\b"
         if re.search(error_pattern, line, re.I):
             escaped = (
                 f'<span style="color:#b42318;font-weight:bold">'
