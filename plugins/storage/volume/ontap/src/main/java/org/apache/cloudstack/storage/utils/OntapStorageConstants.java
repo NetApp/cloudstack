@@ -178,20 +178,19 @@ public class OntapStorageConstants {
     public static final String ASUP_TOTAL_LOGICAL_SIZE_BYTES = "totalLogicalSizeBytes";
     public static final String ASUP_VOLUME_SNAPSHOT_COUNT = "volumeSnapshotCount";
     public static final String ASUP_VM_SNAPSHOT_COUNT = "vmSnapshotCount";
-    public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.asup.push";
-    public static final String ASUP_ENABLED_CONFIG_KEY = "ontap.asup.enabled";
-    public static final String ASUP_ENABLED_DEFAULT = "true";
-    public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.asup.interval";
-    public static final int ASUP_MIN_INTERVAL_HOURS = 3;
-    public static final int ASUP_MAX_INTERVAL_HOURS = 24;
-    public static final int ASUP_DEFAULT_INTERVAL_HOURS = 12;
+    public static final String ASUP_GLOBAL_LOCK_NAME = "ontap.autosupport.push";
+    public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.autosupport.interval";
+    /** {@code ontap.autosupport.interval} value that disables telemetry reporting. */
+    public static final int ASUP_DISABLED_INTERVAL_HOURS = 0;
+    public static final int ASUP_MIN_INTERVAL_HOURS = 1;
+    public static final int ASUP_MAX_INTERVAL_HOURS = 168; // once a week
+    public static final int ASUP_DEFAULT_INTERVAL_HOURS = 24; // once a day
+    public static final String ASUP_INTERVAL_DISPLAY_TEXT = "NetApp ONTAP AutoSupport interval";
 
-    public static final String ASUP_ENABLED_DESCRIPTION =
-            "Set to true to enable telemetry reporting from the CloudStack ONTAP plugin, or false to disable it. "
-                    + "Changes take effect immediately and do not require a management server restart.";
     public static final String ASUP_INTERVAL_DESCRIPTION =
-            "Sets the telemetry reporting interval (in hours) for the CloudStack ONTAP plugin. "
-                    + "Allowed range: " + ASUP_MIN_INTERVAL_HOURS + "-" + ASUP_MAX_INTERVAL_HOURS
-                    + " hours, with a default of " + ASUP_DEFAULT_INTERVAL_HOURS + " hours. "
-                    + "Changes take effect immediately and do not require a management server restart.";
+            "The interval in hours between telemetry reports sent to the ONTAP cluster. "
+                    + ASUP_DISABLED_INTERVAL_HOURS + " disables reporting; the default is "
+                    + ASUP_DEFAULT_INTERVAL_HOURS + " (allowed range "
+                    + ASUP_MIN_INTERVAL_HOURS + "-" + ASUP_MAX_INTERVAL_HOURS
+                    + " hours). Changes take effect immediately and do not require a management server restart.";
 }

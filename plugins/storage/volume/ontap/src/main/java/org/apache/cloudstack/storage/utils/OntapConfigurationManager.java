@@ -32,21 +32,16 @@ import java.util.function.Consumer;
  * construct new {@code ConfigKey} instances.
  */
 public class OntapConfigurationManager implements Configurable {
-    public static final ConfigKey<Boolean> AsupEnabled = new ConfigKey<>(
-            OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Boolean.class,
-            OntapStorageConstants.ASUP_ENABLED_CONFIG_KEY, OntapStorageConstants.ASUP_ENABLED_DEFAULT,
-            OntapStorageConstants.ASUP_ENABLED_DESCRIPTION,
-            true, ConfigKey.Scope.Global);
-
     public static final ValidatedConfigKey<Integer> AsupIntervalHours = new ValidatedConfigKey<>(
             OntapStorageConstants.ADVANCED_CONFIG_KEY_CATEGORY, Integer.class,
             OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
             String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS),
             OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            true, ConfigKey.Scope.Global, null, asupIntervalValidator());
+            true, ConfigKey.Scope.Global, null,
+            OntapStorageConstants.ASUP_INTERVAL_DISPLAY_TEXT, asupIntervalValidator());
 
     public static final ConfigKey<?>[] CONFIG_KEYS = new ConfigKey<?>[] {
-            AsupEnabled, AsupIntervalHours
+            AsupIntervalHours
     };
 
     /**
@@ -60,7 +55,8 @@ public class OntapConfigurationManager implements Configurable {
     }
 
     /**
-     * Rejects {@code ontap.asup.interval} values that are not integers in
+     * Rejects {@code ontap.autosupport.interval} values that are not {@link
+     * OntapStorageConstants#ASUP_DISABLED_INTERVAL_HOURS} (disabled) or integers in
      * [{@link OntapStorageConstants#ASUP_MIN_INTERVAL_HOURS},
      * {@link OntapStorageConstants#ASUP_MAX_INTERVAL_HOURS}] hours.
      * Invoked by {@link ValidatedConfigKey} when the setting is saved in Global Settings.
@@ -79,6 +75,9 @@ public class OntapConfigurationManager implements Configurable {
                     OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY + " must be an integer. "
                             + asupIntervalRangeMessage());
         }
+        if (parsed == OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS) {
+            return;
+        }
         if (parsed < OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS
                 || parsed > OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS) {
             throw new InvalidParameterValueException(asupIntervalRangeMessage());
@@ -87,8 +86,9 @@ public class OntapConfigurationManager implements Configurable {
 
     private static String asupIntervalRangeMessage() {
         return String.format(
-                "%s must be between %d and %d hours.",
+                "%s must be %d to disable, or between %d and %d hours.",
                 OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
+                OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS,
                 OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,
                 OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS);
     }

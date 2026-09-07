@@ -84,7 +84,7 @@ import java.util.concurrent.TimeUnit;
  * <p>Runs are booked one at a time: after each cycle starts, the next run is scheduled for
  * {@link OntapConfigurationManager#AsupIntervalHours} after that start, so production
  * intervals (hours) are start-to-start. REST work sits inside the interval; it is not added
- * after it. Editing either ONTAP ASUP setting re-books the pending run immediately, with no
+ * after it. Editing the ONTAP ASUP interval re-books the pending run immediately, with no
  * management-server restart.</p>
  */
 public class OntapAsupManager extends ManagerBase {
@@ -143,7 +143,7 @@ public class OntapAsupManager extends ManagerBase {
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
         super.configure(name, params);
-        // React to edits of the ONTAP ASUP settings so a new interval re-books the pending run
+        // React to edits of ontap.autosupport.interval so a new value re-books the pending run
         // instead of waiting for it to fire on the old schedule.
         messageBus.subscribe(EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, this::onAsupConfigEdited);
         return true;
@@ -152,8 +152,7 @@ public class OntapAsupManager extends ManagerBase {
     @Override
     public boolean start() {
         asupScheduler = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("OntapAsup"));
-        logger.info("OntapAsupManager started; ASUP telemetry enabled={}, interval={}h",
-                OntapConfigurationManager.AsupEnabled.value(),
+        logger.info("OntapAsupManager started; ASUP telemetry interval={}h",
                 getAsupIntervalHours(OntapConfigurationManager.AsupIntervalHours.value()));
         scheduleNextRun();
         return super.start();
@@ -169,11 +168,12 @@ public class OntapAsupManager extends ManagerBase {
 
     /**
      * Books the single pending run for the moment the configured interval elapses, cancelling
-     * whatever was booked before. Called at start-up, after every run, and whenever one of the
-     * ONTAP ASUP settings is edited, so the live config always decides the next run.
+     * whatever was booked before. Called at start-up, after every run, and whenever
+     * {@code ontap.autosupport.interval} is edited, so the live config always decides the next run.
      *
-     * <p>When ASUP is disabled nothing is booked; re-enabling it publishes a configuration-edit
-     * event, which books a run again.</p>
+     * <p>When the interval is {@link OntapStorageConstants#ASUP_DISABLED_INTERVAL_HOURS}
+     * nothing is booked; setting a non-zero interval publishes a configuration-edit event,
+     * which books a run again.</p>
      */
     private synchronized void scheduleNextRun() {
         if (asupScheduler == null || asupScheduler.isShutdown()) {
@@ -183,9 +183,11 @@ public class OntapAsupManager extends ManagerBase {
             pendingRun.cancel(false);
             pendingRun = null;
         }
-        if (Boolean.FALSE.equals(OntapConfigurationManager.AsupEnabled.value())) {
-            logger.debug("ONTAP ASUP: telemetry is disabled ({}=false); no run scheduled.",
-                    OntapConfigurationManager.AsupEnabled.key());
+        int intervalHours = getAsupIntervalHours(OntapConfigurationManager.AsupIntervalHours.value());
+        if (intervalHours == OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS) {
+            logger.debug("ONTAP ASUP: telemetry is disabled ({}={}); no run scheduled.",
+                    OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
+                    OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS);
             return;
         }
         long delayMs = millisUntilNextPush();
@@ -218,8 +220,7 @@ public class OntapAsupManager extends ManagerBase {
             return;
         }
         String updatedKey = ((Ternary<String, ConfigKey.Scope, Long>) args).first();
-        if (!OntapConfigurationManager.AsupEnabled.key().equals(updatedKey)
-                && !OntapConfigurationManager.AsupIntervalHours.key().equals(updatedKey)) {
+        if (!OntapConfigurationManager.AsupIntervalHours.key().equals(updatedKey)) {
             return;
         }
         logger.debug("ONTAP ASUP: [{}] was updated; re-booking the next push.", updatedKey);
@@ -618,14 +619,17 @@ public class OntapAsupManager extends ManagerBase {
     }
 
     /**
-     * Returns a usable interval in hours. Out-of-range or missing DB values
-     * (for example set outside the API) fall back to the default so ASUP is not
-     * sent on an unintended cadence. The scheduler converts this to seconds via
-     * {@link Duration#ofHours(long)}.
+     * Returns a usable interval in hours. {@link OntapStorageConstants#ASUP_DISABLED_INTERVAL_HOURS}
+     * means telemetry is off. Out-of-range or missing DB values (for example set outside the API)
+     * fall back to the default so ASUP is not sent on an unintended cadence. The scheduler
+     * converts a non-zero value to seconds via {@link Duration#ofHours(long)}.
      */
     int getAsupIntervalHours(Integer configured) {
         if (configured == null) {
             return OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS;
+        }
+        if (configured == OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS) {
+            return OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS;
         }
         if (configured < OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS
                 || configured > OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS) {

@@ -520,19 +520,24 @@ class OntapAsupManagerTest {
     }
 
     @Test
+    void asupIntervalHours_keyAndDisplayText() {
+        assertEquals(OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
+                OntapConfigurationManager.AsupIntervalHours.key());
+        assertEquals(OntapStorageConstants.ASUP_INTERVAL_DISPLAY_TEXT,
+                OntapConfigurationManager.AsupIntervalHours.displayText());
+    }
+
+    @Test
     void asupIntervalHours_descriptionIncludesAllowedRange() {
         String description = OntapConfigurationManager.AsupIntervalHours.description();
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS)));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS)));
+        assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS)));
     }
 
     @Test
-    void asupEnabled_defaultIsTrue() {
-        assertEquals("true", OntapConfigurationManager.AsupEnabled.defaultValue());
-    }
-
-    @Test
-    void validateAsupInterval_acceptsMinMaxAndDefault() {
+    void validateAsupInterval_acceptsDisabledMinMaxAndDefault() {
+        OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS));
         OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS));
         OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS));
         OntapConfigurationManager.AsupIntervalHours.validateValue(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS));
@@ -540,9 +545,10 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("1"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("2"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("0"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("25"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("3"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("169"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("abc"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue(""));
     }
@@ -551,16 +557,17 @@ class OntapAsupManagerTest {
     void getAsupIntervalHours_fallsBackOutsideRange() {
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(null));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
-                asupManager.getAsupIntervalHours(0));
+        assertEquals(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS,
+                asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(2));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
-                asupManager.getAsupIntervalHours(25));
+                asupManager.getAsupIntervalHours(169));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS));
         assertEquals(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS));
+        assertEquals(25, asupManager.getAsupIntervalHours(25));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
