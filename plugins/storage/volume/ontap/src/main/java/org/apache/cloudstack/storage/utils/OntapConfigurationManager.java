@@ -37,8 +37,7 @@ public class OntapConfigurationManager implements Configurable {
             OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
             String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS),
             OntapStorageConstants.ASUP_INTERVAL_DESCRIPTION,
-            true, ConfigKey.Scope.Global, null,
-            OntapStorageConstants.ASUP_INTERVAL_DISPLAY_TEXT, asupIntervalValidator());
+            true, ConfigKey.Scope.Global, null, asupIntervalValidator());
 
     public static final ConfigKey<?>[] CONFIG_KEYS = new ConfigKey<?>[] {
             AsupIntervalHours

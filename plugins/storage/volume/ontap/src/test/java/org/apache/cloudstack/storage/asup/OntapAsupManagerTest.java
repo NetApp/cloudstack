@@ -520,11 +520,10 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void asupIntervalHours_keyAndDisplayText() {
+    void asupIntervalHours_keyIsAutosupportInterval() {
         assertEquals(OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
                 OntapConfigurationManager.AsupIntervalHours.key());
-        assertEquals(OntapStorageConstants.ASUP_INTERVAL_DISPLAY_TEXT,
-                OntapConfigurationManager.AsupIntervalHours.displayText());
+        assertEquals("ontap.autosupport.interval", OntapConfigurationManager.AsupIntervalHours.key());
     }
 
     @Test

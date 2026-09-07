@@ -185,7 +185,6 @@ public class OntapStorageConstants {
     public static final int ASUP_MIN_INTERVAL_HOURS = 1;
     public static final int ASUP_MAX_INTERVAL_HOURS = 168; // once a week
     public static final int ASUP_DEFAULT_INTERVAL_HOURS = 24; // once a day
-    public static final String ASUP_INTERVAL_DISPLAY_TEXT = "NetApp ONTAP AutoSupport interval";
 
     public static final String ASUP_INTERVAL_DESCRIPTION =
             "The interval in hours between telemetry reports sent to the ONTAP cluster. "
