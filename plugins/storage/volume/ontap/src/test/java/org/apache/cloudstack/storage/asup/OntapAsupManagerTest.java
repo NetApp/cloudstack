@@ -383,6 +383,27 @@ class OntapAsupManagerTest {
         verify(vmSnapshotDao, never()).searchByVms(anyList());
     }
 
+    @Test
+    void poolMessage_vmSnapshots_countedOnlyOnRootDiskPool() {
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+
+        // Data disk of a VM whose ROOT lives on another pool — must not count that VM snapshot.
+        VolumeVO dataDisk = mockVolume(20L, 100L, 1_073_741_824L, Volume.Type.DATADISK);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull()))
+                .thenReturn(Collections.singletonList(dataDisk));
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
+        }
+
+        String desc = capturePoolMessage();
+        assertTrue(desc.contains("\"vmSnapshotCount\":0"), "desc=" + desc);
+        verify(vmSnapshotDao, never()).searchByVms(anyList());
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // Best-effort: DAO failures must never suppress the pool message
     // ──────────────────────────────────────────────────────────────────────────
@@ -665,11 +686,16 @@ class OntapAsupManagerTest {
      * and getSize() is exercised (avoiding UnnecessaryStubbingException in strict mode).
      */
     private VolumeVO mockVolume(long id, Long instanceId, long size) {
+        return mockVolume(id, instanceId, size, Volume.Type.ROOT);
+    }
+
+    private VolumeVO mockVolume(long id, Long instanceId, long size, Volume.Type type) {
         VolumeVO vol = mock(VolumeVO.class);
         when(vol.getId()).thenReturn(id);
-        when(vol.getInstanceId()).thenReturn(instanceId);
+        lenient().when(vol.getInstanceId()).thenReturn(instanceId);
         when(vol.getSize()).thenReturn(size);
         when(vol.getState()).thenReturn(Volume.State.Ready);
+        when(vol.getVolumeType()).thenReturn(type);
         return vol;
     }
 

@@ -466,8 +466,8 @@ public class OntapAsupManager extends ManagerBase {
      * non-destroyed CloudStack volume-level snapshots for volumes on this pool.</p>
      *
      * <p><b>VM-snapshot metrics</b> ({@code vmSnapshotCount}): counts all active
-     * (non-expunging, non-removed) VM snapshots for VMs that have at least one volume on
-     * this pool.</p>
+     * (non-expunging, non-removed) VM snapshots for VMs whose ROOT disk is on this pool.
+     * A data disk on another pool does not duplicate the count.</p>
      *
      * <p>Best-effort: any failure leaves the fields out without breaking telemetry.</p>
      */
@@ -505,8 +505,8 @@ public class OntapAsupManager extends ManagerBase {
 
     /**
      * Adds {@code vmSnapshotCount} to the payload.
-     * Counts all active (non-expunging, non-removed) VM snapshots for VMs that have at
-     * least one volume on this pool.
+     * Counts all active (non-expunging, non-removed) VM snapshots for VMs whose ROOT
+     * disk is on this pool, so a multi-pool VM is counted once (on the root pool).
      */
     private void addVmSnapshotMetrics(StoragePoolVO pool, Map<String, Object> payload, List<VolumeVO> volumes) {
         try {
@@ -516,6 +516,7 @@ public class OntapAsupManager extends ManagerBase {
             }
 
             java.util.Set<Long> vmIds = volumes.stream()
+                    .filter(v -> Volume.Type.ROOT.equals(v.getVolumeType()))
                     .map(VolumeVO::getInstanceId)
                     .filter(java.util.Objects::nonNull)
                     .collect(java.util.stream.Collectors.toSet());
