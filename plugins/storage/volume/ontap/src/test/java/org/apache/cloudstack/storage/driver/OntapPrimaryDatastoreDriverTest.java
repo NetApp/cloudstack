@@ -61,6 +61,7 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.cloud.agent.api.to.DataObjectType.TEMPLATE;
@@ -1223,6 +1224,147 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).disableLogicalAccess(argThat(map ->
                     map != null && "template-lun-uuid".equals(map.get("lun.uuid"))
                             && "igroup-uuid-123".equals(map.get("igroup.uuid"))));
+        }
+    }
+
+    @Test
+    void testGetUsedIops_SumsMinIopsIncludingCreatingVolumes() {
+        VolumeVO readyVolume = mock(VolumeVO.class);
+        VolumeVO creatingVolume = mock(VolumeVO.class);
+        VolumeVO volumeWithoutMinIops = mock(VolumeVO.class);
+
+        when(storagePool.getId()).thenReturn(1L);
+        when(readyVolume.getMinIops()).thenReturn(700L);
+        when(creatingVolume.getMinIops()).thenReturn(300L);
+        when(volumeWithoutMinIops.getMinIops()).thenReturn(null);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(1L, null))
+                .thenReturn(List.of(readyVolume, creatingVolume, volumeWithoutMinIops));
+
+        assertEquals(1000L, driver.getUsedIops(storagePool));
+    }
+
+    @Test
+    void testResize_IsNotSupported() {
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Volume resize is not supported"));
+    }
+
+    @Test
+    void testCreateAsync_MinIopsBeyondPoolCapacity_FailsWithCapacityDetails() {
+        VolumeVO allocatedVolume = mock(VolumeVO.class);
+        when(allocatedVolume.getId()).thenReturn(50L);
+        when(allocatedVolume.getMinIops()).thenReturn(800L);
+
+        when(dataStore.getId()).thenReturn(1L);
+        when(dataStore.getName()).thenReturn("ontap-pool");
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getName()).thenReturn("test-volume");
+        when(volumeInfo.getMinIops()).thenReturn(300L);
+
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getName()).thenReturn("ontap-pool");
+        when(storagePool.getCapacityIops()).thenReturn(1000L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(1L, null)).thenReturn(List.of(allocatedVolume));
+
+        driver.createAsync(dataStore, volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains(
+                "storage pool ontap-pool: requested total of 1100 IOPS exceeds the pool IOPS capacity of 1000"));
+        verify(sanStrategy, never()).createCloudStackVolume(any());
+    }
+
+    @Test
+    void testCreateAsync_OtherCreatingVolumeCountsAgainstCapacity() {
+        VolumeVO readyVolume = mock(VolumeVO.class);
+        when(readyVolume.getId()).thenReturn(50L);
+        when(readyVolume.getMinIops()).thenReturn(500L);
+
+        VolumeVO otherCreatingVolume = mock(VolumeVO.class);
+        when(otherCreatingVolume.getId()).thenReturn(60L);
+        when(otherCreatingVolume.getMinIops()).thenReturn(300L);
+
+        when(dataStore.getId()).thenReturn(1L);
+        when(dataStore.getName()).thenReturn("ontap-pool");
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getName()).thenReturn("test-volume");
+        when(volumeInfo.getMinIops()).thenReturn(300L);
+
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getName()).thenReturn("ontap-pool");
+        when(storagePool.getCapacityIops()).thenReturn(1000L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(1L, null))
+                .thenReturn(List.of(readyVolume, otherCreatingVolume));
+
+        driver.createAsync(dataStore, volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains(
+                "storage pool ontap-pool: requested total of 1100 IOPS exceeds the pool IOPS capacity of 1000"));
+        verify(sanStrategy, never()).createCloudStackVolume(any());
+    }
+
+    @Test
+    void testCreateAsync_DoesNotDoubleCountSelfWhenAlreadyCreating() {
+        VolumeVO readyVolume = mock(VolumeVO.class);
+        when(readyVolume.getId()).thenReturn(50L);
+        when(readyVolume.getMinIops()).thenReturn(500L);
+
+        VolumeVO selfCreatingVolume = mock(VolumeVO.class);
+        when(selfCreatingVolume.getId()).thenReturn(100L);
+
+        when(dataStore.getId()).thenReturn(1L);
+        when(dataStore.getName()).thenReturn("ontap-pool");
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getName()).thenReturn("test-volume");
+        when(volumeInfo.getMinIops()).thenReturn(300L);
+
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getName()).thenReturn("vol1");
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(storagePool.getCapacityIops()).thenReturn(1000L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(1L, null))
+                .thenReturn(List.of(readyVolume, selfCreatingVolume));
+
+        Lun mockLun = new Lun();
+        mockLun.setName("/vol/vol1/lun1");
+        mockLun.setUuid("lun-uuid-123");
+        CloudStackVolume cloudStackVolume = new CloudStackVolume();
+        cloudStackVolume.setLun(mockLun);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.createCloudStackVolume(any())).thenReturn(cloudStackVolume);
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+            verify(sanStrategy).createCloudStackVolume(any());
         }
     }
 

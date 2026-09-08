@@ -226,6 +226,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * Creates a volume on the ONTAP backend.
      */
     private CloudStackVolume createCloudStackVolume(StoragePoolVO storagePool, VolumeInfo volumeObject, Map<String, String> details) {
+        verifySufficientIopsForStoragePool(storagePool, volumeObject.getMinIops(), volumeObject.getId());
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
         return storageStrategy.createCloudStackVolume(createVolumeRequest(storagePool, details, volumeObject));
     }
@@ -441,6 +442,28 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
+     * Rejects the request when the minimum IOPS being asked for would push the pool past its
+     * configured IOPS capacity. Pools without an IOPS capacity enforce no ceiling.
+     *
+     * Used IOPS include volumes still in {@link Volume.State#Creating} so a second overlapping
+     * create sees the first reservation. The volume being checked is omitted so its own min IOPS
+     * are not counted twice (CloudStack has already moved it to Creating before this runs).
+     */
+    private void verifySufficientIopsForStoragePool(StoragePoolVO storagePool, Long requestedMinIops, long excludeVolumeId) {
+        Long capacityIops = storagePool.getCapacityIops();
+        if (capacityIops == null || requestedMinIops == null || requestedMinIops <= 0) {
+            return;
+        }
+
+        long requestedTotalIops = getAllocatedMinIops(storagePool, excludeVolumeId) + requestedMinIops;
+        if (requestedTotalIops > capacityIops) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient IOPS capacity on storage pool %s: requested total of %d IOPS exceeds the pool IOPS capacity of %d",
+                    storagePool.getName(), requestedTotalIops, capacityIops));
+        }
+    }
+
+    /**
      * Deletes a volume or snapshot from the ONTAP storage system.
      *
      * <p>For volumes, deletes the backend storage object (LUN for iSCSI, file for NFS) via
@@ -595,8 +618,18 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return false;
     }
 
+    /**
+     * Volume size and IOPS updates are not applied here. Pool IOPS capacity is enforced at
+     * volume create; resize and QoS belong to a later offering story.
+     */
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+        String path = data instanceof VolumeInfo ? ((VolumeInfo) data).getPath() : null;
+        String errMsg = "Volume resize is not supported for ONTAP primary storage";
+        CreateCmdResult result = new CreateCmdResult(path, new Answer(null, false, errMsg));
+        result.setResult(errMsg);
+        callback.complete(result);
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -1023,9 +1056,31 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return 0;
     }
 
+    /**
+     * Returns min IOPS reserved on the pool, including volumes still being created.
+     * Destroyed and expunged volumes are omitted by the DAO query.
+     */
     @Override
     public long getUsedIops(StoragePool storagePool) {
-        return 0;
+        return getAllocatedMinIops(storagePool, null);
+    }
+
+    private long getAllocatedMinIops(StoragePool storagePool, Long excludeVolumeId) {
+        long usedIops = 0;
+
+        List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(storagePool.getId(), null);
+        if (volumes != null) {
+            for (VolumeVO volume : volumes) {
+                if (excludeVolumeId != null && excludeVolumeId.equals(volume.getId())) {
+                    continue;
+                }
+                if (volume.getMinIops() != null) {
+                    usedIops += volume.getMinIops();
+                }
+            }
+        }
+
+        return usedIops;
     }
 
     /**
