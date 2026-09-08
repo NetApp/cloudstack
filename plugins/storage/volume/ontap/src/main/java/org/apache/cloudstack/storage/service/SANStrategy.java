@@ -41,7 +41,20 @@ public abstract class SANStrategy extends StorageStrategy {
      * @param accessGroupName the igroup name
      * @return the logical unit number as a String
      */
-    public abstract String ensureLunMapped(String svmName, String lunName, String accessGroupName);
+    public String ensureLunMapped(String svmName, String lunName, String accessGroupName) {
+        return ensureLunMapped(svmName, lunName, accessGroupName, null);
+    }
+
+    /**
+     * Ensures the LUN is mapped to the specified access group (igroup).
+     *
+     * @param svmName the SVM name
+     * @param lunName the LUN name
+     * @param accessGroupName the igroup name
+     * @param logicalUnitNumber requested logical unit number, or null to let ONTAP assign one
+     * @return the logical unit number as a String
+     */
+    public abstract String ensureLunMapped(String svmName, String lunName, String accessGroupName, Integer logicalUnitNumber);
 
     /**
      * Validates that the host initiator is present in the access group (igroup).

@@ -42,6 +42,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import javax.inject.Inject;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -388,6 +389,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         String svmName = values.get(OntapStorageConstants.SVM_DOT_NAME);
         String lunName = values.get(OntapStorageConstants.LUN_DOT_NAME);
         String igroupName = values.get(OntapStorageConstants.IGROUP_DOT_NAME);
+        String logicalUnitNumber = values.get(OntapStorageConstants.LOGICAL_UNIT_NUMBER);
         if (svmName == null || lunName == null || igroupName == null || svmName.isEmpty() || lunName.isEmpty() || igroupName.isEmpty()) {
             logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: {}", values);
             throw new CloudRuntimeException("Failed to create LunMap, invalid request");
@@ -408,6 +410,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             Igroup igroup = new Igroup();
             igroup.setName(igroupName);
             lunMapRequest.setIgroup(igroup);
+            if (logicalUnitNumber != null) {
+                lunMapRequest.setLogicalUnitNumber(Integer.valueOf(logicalUnitNumber));
+            }
             try {
                 sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
             } catch (Exception feignEx) {
@@ -514,7 +519,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public String ensureLunMapped(String svmName, String lunName, String accessGroupName) {
+    public String ensureLunMapped(String svmName, String lunName, String accessGroupName, Integer logicalUnitNumber) {
         logger.trace("ensureLunMapped: Ensuring LUN [{}] is mapped to igroup [{}] on SVM [{}]", lunName, accessGroupName, svmName);
 
         // Check existing map first
@@ -525,22 +530,33 @@ public class UnifiedSANStrategy extends SANStrategy {
         );
         String lunNumber = getLogicalAccess(getMap);
         if (lunNumber != null) {
+            validateLogicalUnitNumber(lunName, accessGroupName, logicalUnitNumber, lunNumber);
             logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
             return lunNumber;
         }
 
         // Create if not exists
-        Map<String, String> enableMap = Map.of(
-                OntapStorageConstants.LUN_DOT_NAME, lunName,
-                OntapStorageConstants.SVM_DOT_NAME, svmName,
-                OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName
-        );
+        Map<String, String> enableMap = new HashMap<>();
+        enableMap.put(OntapStorageConstants.LUN_DOT_NAME, lunName);
+        enableMap.put(OntapStorageConstants.SVM_DOT_NAME, svmName);
+        enableMap.put(OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName);
+        if (logicalUnitNumber != null) {
+            enableMap.put(OntapStorageConstants.LOGICAL_UNIT_NUMBER, logicalUnitNumber.toString());
+        }
         String response = enableLogicalAccess(enableMap);
         if (response == null ) {
             throw new CloudRuntimeException("Failed to map LUN [" + lunName + "] to iGroup [" + accessGroupName + "]");
         }
+        validateLogicalUnitNumber(lunName, accessGroupName, logicalUnitNumber, response);
         logger.trace("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}] with LUN number [{}]", lunName, accessGroupName, response);
         return response;
+    }
+
+    private void validateLogicalUnitNumber(String lunName, String accessGroupName, Integer requestedLogicalUnitNumber, String actualLogicalUnitNumber) {
+        if (requestedLogicalUnitNumber != null && !requestedLogicalUnitNumber.toString().equals(actualLogicalUnitNumber)) {
+            throw new CloudRuntimeException(String.format("LUN [%s] is mapped to Igroup [%s] with LUN number [%s], expected [%s]",
+                    lunName, accessGroupName, actualLogicalUnitNumber, requestedLogicalUnitNumber));
+        }
     }
     /**
      * Reverts a LUN to a snapshot using the ONTAP CLI-based snapshot file restore API.

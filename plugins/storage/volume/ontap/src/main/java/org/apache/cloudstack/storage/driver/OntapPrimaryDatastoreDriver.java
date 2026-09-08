@@ -120,6 +120,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return true;
     }
 
+    @Override
+    public boolean requiresAccessForMigration(DataObject dataObject) {
+        return true;
+    }
+
+    @Override
+    public boolean zoneWideVolumesAvailableWithoutClusterMotion() {
+        return true;
+    }
+
     /**
      * Creates a volume on the ONTAP storage system.
      */
@@ -465,13 +475,32 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         }
         logger.info("grantAccess: Igroup {}  is present now with initiators {} ", accessGroup.getIgroup().getName(), accessGroup.getIgroup().getInitiators());
         // Create or retrieve existing LUN mapping
-        String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
+        Integer requestedLunNumber = getLunNumber(volumeVO.getPath());
+        String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName, requestedLunNumber);
 
-        // Update volume path if changed (e.g., after migration or re-mapping)
+        // Set the path on the initial mapping. Existing paths must remain stable across hosts during migration.
         String iscsiPath = OntapStorageConstants.SLASH + storagePool.getPath() + OntapStorageConstants.SLASH + lunNumber;
-        if (volumeVO.getPath() == null || !volumeVO.getPath().equals(iscsiPath)) {
+        if (volumeVO.getPath() == null) {
             volumeVO.set_iScsiName(iscsiPath);
             volumeVO.setPath(iscsiPath);
+        } else if (!volumeVO.getPath().equals(iscsiPath)) {
+            throw new CloudRuntimeException(String.format("LUN [%s] was mapped to host [%s] with LUN number [%s], expected [%s]",
+                    cloudStackVolumeName, host.getName(), lunNumber, requestedLunNumber));
+        }
+    }
+
+    private Integer getLunNumber(String volumePath) {
+        if (volumePath == null) {
+            return null;
+        }
+        int separatorIndex = volumePath.lastIndexOf(OntapStorageConstants.SLASH);
+        if (separatorIndex < 0 || separatorIndex == volumePath.length() - 1) {
+            throw new CloudRuntimeException("Invalid iSCSI volume path: " + volumePath);
+        }
+        try {
+            return Integer.valueOf(volumePath.substring(separatorIndex + 1));
+        } catch (NumberFormatException e) {
+            throw new CloudRuntimeException("Invalid LUN number in iSCSI volume path: " + volumePath, e);
         }
     }
 

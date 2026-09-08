@@ -716,6 +716,48 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
+    void testEnsureLunMapped_CreatesMappingWithRequestedLunNumber() {
+        String svmName = "svm1";
+        String lunName = "/vol/vol1/lun1";
+        String accessGroupName = "igroup1";
+        LunMap lunMap = new LunMap();
+        lunMap.setLogicalUnitNumber(7);
+        OntapResponse<LunMap> emptyResponse = new OntapResponse<>();
+        emptyResponse.setRecords(new ArrayList<>());
+        OntapResponse<LunMap> response = new OntapResponse<>();
+        response.setRecords(List.of(lunMap));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password")).thenReturn(authHeader);
+            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse).thenReturn(response);
+
+            String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName, 7);
+
+            ArgumentCaptor<LunMap> requestCaptor = ArgumentCaptor.forClass(LunMap.class);
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), requestCaptor.capture());
+            assertEquals(7, requestCaptor.getValue().getLogicalUnitNumber());
+            assertEquals("7", result);
+        }
+    }
+
+    @Test
+    void testEnsureLunMapped_ExistingMappingWithDifferentLunNumberThrowsException() {
+        LunMap lunMap = new LunMap();
+        lunMap.setLogicalUnitNumber(3);
+        OntapResponse<LunMap> response = new OntapResponse<>();
+        response.setRecords(List.of(lunMap));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password")).thenReturn(authHeader);
+            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(response);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.ensureLunMapped("svm1", "/vol/vol1/lun1", "igroup1", 7));
+            verify(sanFeignClient, never()).createLunMap(any(), anyBoolean(), any());
+        }
+    }
+
+    @Test
     void testValidateInitiatorInAccessGroup_InitiatorFound_ReturnsTrue() {
         // Setup
         String hostInitiator = "iqn.1993-08.org.debian:01:host1";

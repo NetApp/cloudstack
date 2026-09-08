@@ -69,6 +69,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -389,6 +390,12 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testMigrationCapabilities() {
+        assertTrue(driver.requiresAccessForMigration(volumeInfo));
+        assertTrue(driver.zoneWideVolumesAvailableWithoutClusterMotion());
+    }
+
+    @Test
     void testGrantAccess_ClusterScope_Success() {
         // Setup
         when(dataStore.getId()).thenReturn(1L);
@@ -404,6 +411,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeVO.getId()).thenReturn(100L);
+        when(volumeVO.getPath()).thenReturn("/iqn.1992-08.com.netapp:sn.123456/7");
 
         when(host.getName()).thenReturn("host1");
         when(host.getUuid()).thenReturn("host-uuid-1");
@@ -424,7 +432,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString(), nullable(Integer.class))).thenReturn("7");
 
             // Execute
             boolean result = driver.grantAccess(volumeInfo, host, dataStore);
@@ -433,7 +441,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertTrue(result);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
             verify(sanStrategy).getAccessGroup(any());
-            verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
+            verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString(), eq(7));
             verify(sanStrategy, never()).validateInitiatorInAccessGroup(anyString(), anyString(), any(Igroup.class));
         }
     }
@@ -476,7 +484,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(null);
             when(sanStrategy.createAccessGroup(any())).thenReturn(createdAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString(), nullable(Integer.class))).thenReturn("0");
 
             // Execute
             boolean result = driver.grantAccess(volumeInfo, hostVO, dataStore);
@@ -485,7 +493,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertTrue(result);
             verify(sanStrategy).getAccessGroup(any());
             verify(sanStrategy).createAccessGroup(any());
-            verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
+            verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString(), nullable(Integer.class));
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
