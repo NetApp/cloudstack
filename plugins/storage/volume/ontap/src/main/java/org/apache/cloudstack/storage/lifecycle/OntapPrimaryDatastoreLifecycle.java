@@ -57,6 +57,7 @@ import org.apache.logging.log4j.Logger;
 
 import com.cloud.agent.api.StoragePoolInfo;
 import com.cloud.alert.AlertManager;
+import com.cloud.capacity.CapacityManager;
 import com.cloud.dc.ClusterVO;
 import com.cloud.dc.dao.ClusterDao;
 import com.cloud.exception.InvalidParameterValueException;
@@ -81,6 +82,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     @Inject private PrimaryDataStoreDao storagePoolDao;
     @Inject private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject private AlertManager _alertMgr;
+    @Inject private CapacityManager _capacityMgr;
     private static final Logger logger = LogManager.getLogger(OntapPrimaryDatastoreLifecycle.class);
 
     private static final long ONTAP_MIN_VOLUME_SIZE_IN_BYTES = 20971520L;
@@ -101,6 +103,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         String storagePoolName = (String) dsInfos.get("name");
         String providerName = (String) dsInfos.get("providerName");
         Long capacityBytes = (Long) dsInfos.get("capacityBytes");
+        Long capacityIops = (Long) dsInfos.get("capacityIops");
         boolean managed = (boolean) dsInfos.get("managed");
         String tags = (String) dsInfos.get("tags");
         Boolean isTagARule = (Boolean) dsInfos.get("isTagARule");
@@ -113,7 +116,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         @SuppressWarnings("unchecked")
         Map<String, String> details = (Map<String, String>) dsInfos.get("details");
 
-        validateInitializeInputs(capacityBytes, podId, clusterId, zoneId, storagePoolName, providerName, managed, details);
+        validateInitializeInputs(capacityBytes, capacityIops, podId, clusterId, zoneId, storagePoolName, providerName, managed, details);
 
         PrimaryDataStoreParameters parameters = new PrimaryDataStoreParameters();
         if (clusterId != null) {
@@ -207,12 +210,13 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         parameters.setProviderName(providerName);
         parameters.setManaged(managed);
         parameters.setCapacityBytes(capacityBytes);
+        parameters.setCapacityIops(capacityIops);
         parameters.setUsedBytes(0);
 
         return _dataStoreHelper.createPrimaryDataStore(parameters);
     }
 
-    private void validateInitializeInputs(Long capacityBytes, Long podId, Long clusterId, Long zoneId,
+    private void validateInitializeInputs(Long capacityBytes, Long capacityIops, Long podId, Long clusterId, Long zoneId,
                                           String storagePoolName, String providerName, boolean managed, Map<String, String> details) {
 
         if (capacityBytes == null || capacityBytes <= 0) {
@@ -222,6 +226,10 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         if (capacityBytes < ONTAP_MIN_VOLUME_SIZE_IN_BYTES) {
             throw new InvalidParameterValueException("Storage pool capacity " + capacityBytes + " bytes is below the ONTAP minimum volume size of "
                     + ONTAP_MIN_VOLUME_SIZE_IN_BYTES + " bytes (20 MB)");
+        }
+        // IOPS capacity is optional; when left blank no pool-level IOPS ceiling is enforced.
+        if (capacityIops != null && capacityIops <= 0) {
+            throw new InvalidParameterValueException("Storage pool IOPS capacity must be greater than 0");
         }
 
         // Validate scope
@@ -551,6 +559,11 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
 
     @Override
     public void updateStoragePool(StoragePool storagePool, Map<String, String> details) {
+        String newCapacityIopsStr = details.get(PrimaryDataStoreLifeCycle.CAPACITY_IOPS);
+        if (newCapacityIopsStr != null) {
+            validateUpdatedCapacityIops(storagePool, newCapacityIopsStr);
+        }
+
         String newCapacityStr = details.get(PrimaryDataStoreLifeCycle.CAPACITY_BYTES);
         if (newCapacityStr == null) {
             logger.debug("No capacity change requested for pool: {}, skipping FlexVolume resize", storagePool.getName());
@@ -578,6 +591,29 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         } catch (Exception e) {
             logger.error("Exception while resizing FlexVolume for pool: {}. Error: {}", storagePool.getName(), e.getMessage(), e);
             throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume for pool: " + storagePool.getName() + ". " + e.getMessage(), e);
+        }
+    }
+
+    private void validateUpdatedCapacityIops(StoragePool storagePool, String newCapacityIopsStr) {
+        long newCapacityIops;
+        try {
+            newCapacityIops = Long.parseLong(newCapacityIopsStr);
+        } catch (NumberFormatException e) {
+            throw new InvalidParameterValueException("Invalid storage pool IOPS capacity: " + newCapacityIopsStr);
+        }
+        if (newCapacityIops <= 0) {
+            throw new InvalidParameterValueException("Storage pool IOPS capacity must be greater than 0");
+        }
+
+        StoragePoolVO storagePoolVO = storagePoolDao.findById(storagePool.getId());
+        if (storagePoolVO == null) {
+            throw new InvalidParameterValueException("Storage pool not found for id: " + storagePool.getId());
+        }
+        long allocatedIops = _capacityMgr.getUsedIops(storagePoolVO);
+        if (newCapacityIops < allocatedIops) {
+            throw new InvalidParameterValueException(String.format(
+                    "Cannot set IOPS capacity of storage pool %s to %d IOPS because %d IOPS are already allocated",
+                    storagePool.getName(), newCapacityIops, allocatedIops));
         }
     }
 
