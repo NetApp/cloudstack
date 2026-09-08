@@ -629,13 +629,10 @@ openssl pkcs8 -topk8 -inform PEM -outform PEM \
 head -1 converted-github-app.pem
 ```
 
-The first line must be:
+The first line must be the unencrypted PKCS#8 PEM header
+(five hyphens, BEGIN, a space, PRIVATE KEY, five hyphens).
 
-```text
------BEGIN PRIVATE KEY-----
-```
-
-`BEGIN RSA PRIVATE KEY` is not the converted PKCS#8 form expected by the
+A PKCS#1 RSA PEM header is not the converted PKCS#8 form expected by the
 Jenkins GitHub App credential.
 
 ### 9.4 Add the App credential to Jenkins
@@ -1227,8 +1224,8 @@ Use `SOURCE_MODE=discover`. Do not ask GitHub to redeliver.
 | 403 | missing Checks write permission, policy, or rate limit |
 | 404 | App not installed on `NetApp/cloudstack` or wrong repository |
 
-Also confirm the private key begins `BEGIN PRIVATE KEY`, the credential Kind is
-GitHub App, and the ID matches `GITHUB_APP_CREDENTIALS_ID`.
+Also confirm the private key is unencrypted PKCS#8 PEM (not PKCS#1 RSA), the
+credential Kind is GitHub App, and the ID matches `GITHUB_APP_CREDENTIALS_ID`.
 
 GitHub reporting errors do not replace the build result, but a missing success
 cannot satisfy a required Check.
