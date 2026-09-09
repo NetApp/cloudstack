@@ -23,10 +23,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import feign.FeignException;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -53,6 +60,57 @@ public class OntapStorageUtils {
     public static String generateAuthHeader (String username, String password) {
         byte[] encodedBytes = Base64Utils.encode((username + AUTH_HEADER_COLON + password).getBytes(StandardCharsets.UTF_8));
         return BASIC + StringUtils.SPACE + new String(encodedBytes);
+    }
+
+    public static CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details,
+                                                                           DataObject volumeObject, VolumeQosPolicy qosPolicy) {
+        CloudStackVolume cloudStackVolumeRequest = null;
+        VolumeQosPolicy qosPolicyReference = null;
+        if (qosPolicy != null) {
+            qosPolicyReference = new VolumeQosPolicy();
+            qosPolicyReference.setName(qosPolicy.getName());
+            qosPolicyReference.setUuid(qosPolicy.getUuid());
+        }
+
+        String protocol = details.get(OntapStorageConstants.PROTOCOL);
+        ProtocolType protocolType = ProtocolType.valueOf(protocol);
+        switch (protocolType) {
+            case NFS3:
+                cloudStackVolumeRequest = new CloudStackVolume();
+                cloudStackVolumeRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                cloudStackVolumeRequest.setFlexVolumeUuid(details.get(OntapStorageConstants.VOLUME_UUID));
+                cloudStackVolumeRequest.setVolumeInfo(volumeObject);
+                if (qosPolicyReference != null) {
+                    FileInfo fileInfo = new FileInfo();
+                    fileInfo.setQosPolicy(qosPolicyReference);
+                    cloudStackVolumeRequest.setFile(fileInfo);
+                }
+                break;
+            case ISCSI:
+                Svm svm = new Svm();
+                svm.setName(details.get(OntapStorageConstants.SVM_NAME));
+                cloudStackVolumeRequest = new CloudStackVolume();
+                Lun lunRequest = new Lun();
+                lunRequest.setSvm(svm);
+
+                LunSpace lunSpace = new LunSpace();
+                lunSpace.setSize(volumeObject.getSize());
+                lunRequest.setSpace(lunSpace);
+                String lunName = volumeObject.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
+                if (!isValidName(lunName)) {
+                    String errMsg = "createAsync: Invalid dataObject name [" + lunName
+                            + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.";
+                    throw new InvalidParameterValueException(errMsg);
+                }
+                lunRequest.setName(getLunName(storagePool.getName(), lunName));
+                lunRequest.setOsType(Lun.OsTypeEnum.valueOf(getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
+                lunRequest.setQosPolicy(qosPolicyReference);
+                cloudStackVolumeRequest.setLun(lunRequest);
+                break;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol " + protocol);
+        }
+        return cloudStackVolumeRequest;
     }
 
     public static boolean isValidName(String name) {
