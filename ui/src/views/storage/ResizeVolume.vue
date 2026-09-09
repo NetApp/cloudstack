@@ -105,14 +105,21 @@ export default {
     },
     fetchData () {
       this.loading = true
+      if (this.resource.size != null) {
+        this.form.size = this.resource.size / (1024 * 1024 * 1024)
+      }
       getAPI('listDiskOfferings', {
         zoneid: this.resource.zoneid,
         listall: true
       }).then(json => {
         this.offerings = json.listdiskofferingsresponse.diskoffering || []
-        this.form.diskofferingid = this.offerings[0].id || ''
-        this.customDiskOffering = this.offerings[0].iscustomized || false
-        this.customDiskOfferingIops = this.offerings[0].iscustomizediops || false
+        const currentOffering = this.offerings.find(offering => offering.id === this.resource.diskofferingid)
+        this.customDiskOffering = currentOffering?.iscustomized || false
+        this.customDiskOfferingIops = currentOffering?.iscustomizediops || false
+        if (this.customDiskOfferingIops) {
+          this.form.miniops = this.resource.miniops
+          this.form.maxiops = this.resource.maxiops
+        }
       }).finally(() => {
         this.loading = false
       })
