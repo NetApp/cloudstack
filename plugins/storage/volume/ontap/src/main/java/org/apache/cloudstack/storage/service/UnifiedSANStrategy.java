@@ -29,6 +29,7 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
+import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -78,6 +79,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                 throw new CloudRuntimeException("Failed to create Lun: " + cloudstackVolume.getLun().getName());
             }
             Lun lun = createdLun.getRecords().get(0);
+            validateCreatedLun(lun, cloudstackVolume.getLun().getName(), "createCloudStackVolume");
             logger.debug("createCloudStackVolume: LUN created successfully. Lun: {}", lun);
 
             CloudStackVolume createdCloudStackVolume = new CloudStackVolume();
@@ -87,6 +89,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             logger.error("FeignException occurred while creating LUN: {}, Status: {}, Exception: {}",
                     cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
+        } catch (CloudRuntimeException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("Exception occurred while creating LUN: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
             throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
@@ -124,8 +128,99 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
+    /**
+     * Clones a LUN inside the FlexVolume using ONTAP's {@code clone.source} form of LUN create.
+     *
+     * <p>The resulting LUN shares blocks with its source and is created in constant time.
+     * It is a sis-clone, so it stays readable after the source LUN is deleted.</p>
+     */
     @Override
-    public void copyCloudStackVolume(CloudStackVolume cloudstackVolume) {}
+    public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null) {
+            logger.error("cloneCloudStackVolume: LUN clone failed. Invalid request: {}", cloudstackVolume);
+            throw new CloudRuntimeException("Failed to clone Lun, invalid request");
+        }
+        Lun lunRequest = cloudstackVolume.getLun();
+        if (lunRequest.getClone() == null || lunRequest.getClone().getSource() == null) {
+            logger.error("cloneCloudStackVolume: LUN clone failed. No clone source in request for Lun {}", lunRequest.getName());
+            throw new CloudRuntimeException("Failed to clone Lun, no clone source provided");
+        }
+        logger.trace("cloneCloudStackVolume: Cloning Lun {} from source name={} uuid={}",
+                lunRequest.getName(),
+                lunRequest.getClone().getSource().getName(),
+                lunRequest.getClone().getSource().getUuid());
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            OntapResponse<Lun> clonedLun = sanFeignClient.createLun(authHeader, true, lunRequest);
+            if (clonedLun == null || CollectionUtils.isEmpty(clonedLun.getRecords())) {
+                logger.error("cloneCloudStackVolume: LUN clone returned no records for Lun {}", lunRequest.getName());
+                throw new CloudRuntimeException("Failed to clone Lun: " + lunRequest.getName());
+            }
+            Lun lun = clonedLun.getRecords().get(0);
+            validateCreatedLun(lun, lunRequest.getName(), "cloneCloudStackVolume");
+            logger.debug("cloneCloudStackVolume: LUN cloned successfully. Lun: {}", lun);
+
+            CloudStackVolume clonedCloudStackVolume = new CloudStackVolume();
+            clonedCloudStackVolume.setLun(lun);
+            return clonedCloudStackVolume;
+        } catch (FeignException e) {
+            logger.error("FeignException occurred while cloning LUN: {}, Status: {}, Exception: {}",
+                    lunRequest.getName(), e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to clone Lun: " + e.getMessage());
+        } catch (CloudRuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("Exception occurred while cloning LUN: {}, Exception: {}", lunRequest.getName(), e.getMessage());
+            throw new CloudRuntimeException("Failed to clone Lun: " + e.getMessage());
+        }
+    }
+
+
+    /**
+     * Ensures ONTAP returned a usable LUN identity from create/clone. Callers in the datastore
+     * driver rely on non-null name and uuid, so reject incomplete records at the Feign boundary.
+     */
+    private void validateCreatedLun(Lun lun, String requestName, String operation) {
+        if (lun == null || lun.getName() == null || lun.getUuid() == null) {
+            logger.error("{}: ONTAP returned incomplete LUN for {}", operation, requestName);
+            throw new CloudRuntimeException("ONTAP returned incomplete LUN for: " + requestName);
+        }
+    }
+
+    /**
+     * Grows an existing LUN to {@code sizeInBytes}.
+     *
+     * <p>Needed after cloning a cached template, because a clone inherits the size of its source
+     * while the service offering may ask for a larger disk.</p>
+     */
+    @Override
+    public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+            logger.error("resizeCloudStackVolume: Lun resize failed. Invalid request: {}", cloudstackVolume);
+            throw new CloudRuntimeException("Failed to resize Lun, invalid request");
+        }
+        if (sizeInBytes <= 0) {
+            throw new CloudRuntimeException("Failed to resize Lun, invalid size " + sizeInBytes);
+        }
+        String lunUuid = cloudstackVolume.getLun().getUuid();
+        logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            LunSpace lunSpace = new LunSpace();
+            lunSpace.setSize(sizeInBytes);
+            Lun patch = new Lun();
+            patch.setSpace(lunSpace);
+            sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
+        } catch (FeignException e) {
+            logger.error("FeignException occurred while resizing LUN: {}, Status: {}, Exception: {}",
+                    lunUuid, e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
+            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+        }
+    }
 
     @Override
     public CloudStackVolume getCloudStackVolume(Map<String, String> values) {
