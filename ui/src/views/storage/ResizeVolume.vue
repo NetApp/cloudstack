@@ -96,7 +96,9 @@ export default {
   methods: {
     initForm () {
       this.formRef = ref()
-      this.form = reactive({})
+      this.form = reactive({
+        size: this.resource.size != null ? this.resource.size / (1024 * 1024 * 1024) : undefined
+      })
       this.rules = reactive({
         size: [{ required: true, message: this.$t('message.error.size') }],
         miniops: [{ required: true, message: this.$t('message.error.number') }],
