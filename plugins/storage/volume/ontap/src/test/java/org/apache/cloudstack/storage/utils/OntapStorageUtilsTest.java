@@ -18,12 +18,24 @@
  */
 package org.apache.cloudstack.storage.utils;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import com.cloud.hypervisor.Hypervisor;
 import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
+import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class OntapStorageUtilsTest {
 
@@ -80,6 +92,55 @@ public class OntapStorageUtilsTest {
         String result = OntapStorageUtils.getIgroupName(svmName, hostUuid);
 
         assertEquals(OntapStorageConstants.IGROUP_NAME_MAX_LENGTH, result.length());
+    }
+
+    @Test
+    public void createCloudStackVolumeRequestByProtocol_attachesQosToIscsiLun() {
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("pool1");
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("data_disk");
+        when(volumeInfo.getSize()).thenReturn(1073741824L);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name());
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to200_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
+
+        CloudStackVolume request = OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
+                storagePool, details, volumeInfo, qosPolicy);
+
+        assertNotNull(request.getLun().getQosPolicy());
+        assertEquals("qos-uuid", request.getLun().getQosPolicy().getUuid());
+        assertEquals("cs_100_to200_iops_svm1", request.getLun().getQosPolicy().getName());
+    }
+
+    @Test
+    public void createCloudStackVolumeRequestByProtocol_attachesQosToNfsFile() {
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        when(storagePool.getId()).thenReturn(1L);
+
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        details.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to200_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
+
+        CloudStackVolume request = OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
+                storagePool, details, volumeInfo, qosPolicy);
+
+        assertEquals("flex-uuid", request.getFlexVolumeUuid());
+        assertNotNull(request.getFile().getQosPolicy());
+        assertEquals("qos-uuid", request.getFile().getQosPolicy().getUuid());
     }
 
     @Test

@@ -30,6 +30,7 @@ import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
@@ -351,6 +352,31 @@ class UnifiedSANStrategyTest {
             // Execute & Verify
             assertThrows(CloudRuntimeException.class,
                 () -> unifiedSANStrategy.createCloudStackVolume(request));
+        }
+    }
+
+    @Test
+    void testCreateCloudStackVolume_MinThroughputRejected_PropagatesOntapError() {
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(400);
+        when(feignException.contentUTF8()).thenReturn(
+                "{\"error\":{\"code\":\"8454269\",\"message\":\"Invalid QoS policy group specified\"}}");
+        when(feignException.getMessage()).thenReturn("Bad Request");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
+                    .thenThrow(feignException);
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.createCloudStackVolume(request));
+            assertTrue(ex.getMessage().contains("8454269"));
         }
     }
 
@@ -1122,10 +1148,10 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testUpdateCloudStackVolume_ReturnsNull() {
+    void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
         CloudStackVolume request = new CloudStackVolume();
-        CloudStackVolume result = unifiedSANStrategy.updateCloudStackVolume(request);
-        assertNull(result);
+        assertThrows(CloudRuntimeException.class,
+            () -> unifiedSANStrategy.updateCloudStackVolume(request));
     }
 
     @Test
@@ -2180,6 +2206,37 @@ class UnifiedSANStrategyTest {
             assertEquals("3", result);
             // Verify createLunMap was NOT called
             verify(sanFeignClient, never()).createLunMap(any(), anyBoolean(), any(LunMap.class));
+        }
+    }
+
+    @Test
+    void testCreateCloudStackVolume_PassesQosPolicyOnLunCreate() {
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/lun1");
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to200_iops_svm1");
+        lun.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        Lun createdLun = new Lun();
+        createdLun.setName("/vol/vol1/lun1");
+        createdLun.setUuid("lun-uuid-123");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(createdLun));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
+                    .thenReturn(response);
+
+            unifiedSANStrategy.createCloudStackVolume(request);
+
+            ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+            verify(sanFeignClient).createLun(eq(authHeader), eq(true), lunCaptor.capture());
+            assertNotNull(lunCaptor.getValue().getQosPolicy());
+            assertEquals("cs_100_to200_iops_svm1", lunCaptor.getValue().getQosPolicy().getName());
         }
     }
 }

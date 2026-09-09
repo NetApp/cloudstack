@@ -29,6 +29,7 @@ import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
+import org.apache.cloudstack.storage.feign.client.QosFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
@@ -41,6 +42,7 @@ import org.apache.cloudstack.storage.feign.model.Nas;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -74,6 +76,7 @@ public abstract class StorageStrategy {
     protected SvmFeignClient svmFeignClient;
     protected JobFeignClient jobFeignClient;
     protected NetworkFeignClient networkFeignClient;
+    protected QosFeignClient qosFeignClient;
     protected SANFeignClient sanFeignClient;
     protected NASFeignClient nasFeignClient;
     protected SnapshotFeignClient snapshotFeignClient;
@@ -105,6 +108,7 @@ public abstract class StorageStrategy {
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
         this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
+        this.qosFeignClient = feignClientFactory.createClient(QosFeignClient.class, baseURL);
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
         this.snapshotFeignClient = feignClientFactory.createClient(SnapshotFeignClient.class, baseURL);
@@ -813,6 +817,101 @@ public abstract class StorageStrategy {
      */
     public String getAuthHeader() {
         return OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+    }
+
+    public VolumeQosPolicy createVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
+        VolumeQosPolicy existingPolicy = getVolumeQosPolicy(policyName);
+        if (existingPolicy != null) {
+            logger.info("Reusing existing ONTAP QoS policy [{}]", policyName);
+            return existingPolicy;
+        }
+
+        VolumeQosPolicy policy = buildVolumeQosPolicy(policyName, minIops, maxIops);
+        Svm svm = new Svm();
+        svm.setName(storage.getSvmName());
+        policy.setSvm(svm);
+        try {
+            JobResponse response = qosFeignClient.createPolicy(getAuthHeader(), policy);
+            pollJobIfPresent(response, "create QoS policy [" + policyName + "]");
+        } catch (FeignException e) {
+            if (e.status() != 409) {
+                throw new CloudRuntimeException("Failed to create ONTAP QoS policy [" + policyName + "]: "
+                        + e.getMessage(), e);
+            }
+            logger.info("QoS policy [{}] already exists; using the existing policy", policyName);
+        }
+
+        VolumeQosPolicy createdPolicy = getVolumeQosPolicy(policyName);
+        if (createdPolicy == null || createdPolicy.getUuid() == null) {
+            throw new CloudRuntimeException("Unable to resolve ONTAP QoS policy [" + policyName + "] after creation");
+        }
+        return createdPolicy;
+    }
+
+    /**
+     * Prefers the ONTAP REST error body (includes codes such as 8454269) over Feign's status line.
+     */
+    protected String getOntapErrorDetail(Throwable error) {
+        if (error instanceof FeignException) {
+            try {
+                String body = ((FeignException) error).contentUTF8();
+                if (body != null && !body.isBlank()) {
+                    return body;
+                }
+            } catch (RuntimeException ignored) {
+                // Mocked or empty Feign responses may not expose a body.
+            }
+        }
+        return error != null ? error.getMessage() : null;
+    }
+
+    protected CloudRuntimeException wrapOntapApiFailure(String operation, Throwable error) {
+        return new CloudRuntimeException(operation + ": " + getOntapErrorDetail(error), error);
+    }
+
+    public void deleteVolumeQosPolicy(String policyUuid) {
+        if (policyUuid == null || policyUuid.isEmpty()) {
+            return;
+        }
+        try {
+            JobResponse response = qosFeignClient.deletePolicy(getAuthHeader(), policyUuid);
+            pollJobIfPresent(response, "delete QoS policy [" + policyUuid + "]");
+        } catch (FeignException e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                logger.info("QoS policy [{}] is already absent", policyUuid);
+                return;
+            }
+            throw new CloudRuntimeException("Failed to delete ONTAP QoS policy [" + policyUuid + "]: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private VolumeQosPolicy getVolumeQosPolicy(String policyName) {
+        Map<String, Object> queryParams = new HashMap<>();
+        queryParams.put(OntapStorageConstants.NAME, policyName);
+        queryParams.put(OntapStorageConstants.SVM_DOT_NAME, storage.getSvmName());
+        OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
+        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+            return null;
+        }
+        return response.getRecords().get(0);
+    }
+
+    private VolumeQosPolicy buildVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
+        VolumeQosPolicy.Fixed fixed = new VolumeQosPolicy.Fixed();
+        fixed.setCapacityShared(false);
+        // ONTAP rejects a policy whose throughput limit is zero, so only unlimited-side values are omitted.
+        if (minIops != null && minIops > 0) {
+            fixed.setMinThroughputIops(minIops);
+        }
+        if (maxIops != null && maxIops > 0) {
+            fixed.setMaxThroughputIops(maxIops);
+        }
+
+        VolumeQosPolicy policy = new VolumeQosPolicy();
+        policy.setName(policyName);
+        policy.setFixed(fixed);
+        return policy;
     }
 
     /**
