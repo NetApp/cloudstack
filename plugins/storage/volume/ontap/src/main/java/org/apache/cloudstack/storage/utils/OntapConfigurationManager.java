@@ -85,7 +85,7 @@ public class OntapConfigurationManager implements Configurable {
 
     private static String asupIntervalRangeMessage() {
         return String.format(
-                "%s must be %d to disable, or between %d and %d hours.",
+                "%s must be %d to disable, or between %d hours and %d hours (1 week).",
                 OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY,
                 OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS,
                 OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,

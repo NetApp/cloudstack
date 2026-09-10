@@ -554,6 +554,8 @@ class OntapAsupManagerTest {
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS)));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS)));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS)));
+        assertTrue(description.contains("1 week"), description);
+        assertTrue(description.contains("once a day"), description);
     }
 
     @Test

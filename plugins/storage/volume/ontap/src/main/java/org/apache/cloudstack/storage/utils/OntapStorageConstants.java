@@ -187,9 +187,9 @@ public class OntapStorageConstants {
     public static final int ASUP_DEFAULT_INTERVAL_HOURS = 24; // once a day
 
     public static final String ASUP_INTERVAL_DESCRIPTION =
-            "The interval in hours between telemetry reports sent to the ONTAP cluster. "
-                    + ASUP_DISABLED_INTERVAL_HOURS + " disables reporting; the default is "
-                    + ASUP_DEFAULT_INTERVAL_HOURS + " (allowed range "
-                    + ASUP_MIN_INTERVAL_HOURS + "-" + ASUP_MAX_INTERVAL_HOURS
-                    + " hours). Changes take effect immediately and do not require a management server restart.";
+            "Interval in hours between telemetry reports sent to the ONTAP cluster. "
+                    + ASUP_DISABLED_INTERVAL_HOURS + " disables reporting. Allowed range is "
+                    + ASUP_MIN_INTERVAL_HOURS + " hours to " + ASUP_MAX_INTERVAL_HOURS
+                    + " hours (1 week). Default is " + ASUP_DEFAULT_INTERVAL_HOURS
+                    + " hours (once a day). Changes take effect immediately and do not require a management server restart.";
 }
