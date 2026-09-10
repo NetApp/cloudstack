@@ -795,7 +795,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.createCloudStackVolume(any())).thenReturn(created);
+            when(sanStrategy.createTemplateCache(any(), any(), any(), anyLong())).thenReturn(created);
 
             driver.createAsync(dataStore, templateInfo, createCallback);
 
@@ -838,7 +838,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.createCloudStackVolume(any())).thenReturn(created);
+            when(sanStrategy.createTemplateCache(any(), any(), any(), anyLong())).thenReturn(created);
             doNothing().when(sanStrategy).deleteCloudStackVolume(any());
 
             driver.createAsync(dataStore, templateInfo, createCallback);
@@ -865,13 +865,18 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        when(vmTemplatePoolDao.findByPoolTemplate(1L, 50L, null)).thenReturn(templatePoolRef);
 
-        driver.createAsync(dataStore, templateInfo, createCallback);
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
+            when(sanStrategy.createTemplateCache(any(), any(), any(), anyLong()))
+                    .thenThrow(new CloudRuntimeException("Unknown virtual size for template [50]"));
 
-        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-        verify(createCallback).complete(resultCaptor.capture());
-        assertFalse(resultCaptor.getValue().isSuccess());
+            driver.createAsync(dataStore, templateInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+        }
     }
 
     @Test
@@ -887,12 +892,17 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        driver.createAsync(dataStore, templateInfo, createCallback);
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(nasStrategy);
+            when(nasStrategy.createTemplateCache(any(), any(), any(), anyLong())).thenReturn(new CloudStackVolume());
 
-        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-        verify(createCallback).complete(resultCaptor.capture());
-        assertTrue(resultCaptor.getValue().isSuccess());
-        verify(vmTemplatePoolDao, never()).update(any(Long.class), any(VMTemplateStoragePoolVO.class));
+            driver.createAsync(dataStore, templateInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+            verify(vmTemplatePoolDao, never()).update(any(Long.class), any(VMTemplateStoragePoolVO.class));
+        }
     }
 
     @Test
