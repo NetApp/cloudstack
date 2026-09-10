@@ -104,7 +104,7 @@ public class OntapStorageConstants {
     public static final String QOS_POLICY_NAME = "qosPolicyName";
     public static final String QOS_POLICY_UUID = "qosPolicyUuid";
     public static final String QOS_POLICY_NAME_PREFIX = "cs_";
-    public static final String QOS_POLICY_NAME_TO = "to";
+    public static final String QOS_POLICY_NAME_TO = "to_";
     public static final String QOS_POLICY_NAME_IOPS = "iops_";
     public static final String LOGICAL_UNIT_NUMBER = "logical_unit_number";
     public static final String IGROUP_DOT_NAME = "igroup.name";

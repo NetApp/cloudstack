@@ -662,7 +662,7 @@ public abstract class StorageStrategy {
      * @param cloudstackVolume the CloudStack volume to update
      * @return the updated CloudStackVolume object
      */
-    abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
+    public abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
