@@ -959,7 +959,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         lenient().when(storagePool.getName()).thenReturn("vol1");
-        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.Iscsi);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
         when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
@@ -1098,6 +1098,7 @@ class OntapPrimaryDatastoreDriverTest {
     void testCreateAsync_VolumeClonedFromTemplateNFS_ClonesFile() {
         storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
         stubVolumeCloneFromTemplate(5368709120L, 5368709120L);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
         when(volumeInfo.getUuid()).thenReturn("volume-uuid");
         when(templatePoolRef.getInstallPath()).thenReturn("template-uuid");
 
