@@ -85,6 +85,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -161,6 +162,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(dataStore.getId());
+            validateProtocol(details, dataStore);
 
             if (dataObject.getType() == DataObjectType.VOLUME) {
                 VolumeInfo volInfo = (VolumeInfo) dataObject;
@@ -177,8 +179,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormatByHypervisorAndProtocol(storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL)));
-                    logger.info("createAsync: Volume format set to [{}] for hypervisor [{}] and protocol [{}]", volumeVO.getFormat(), storagePool.getHypervisor(), details.get(OntapStorageConstants.PROTOCOL));
+                    volumeVO.setFormat(getImageFormat(storagePool));
+                    logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
 
                     if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                         // createCloudStackVolume validates the Feign response (LUN name + uuid) before returning
@@ -231,61 +233,48 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     /**
      * Creates the backend object that caches a template on this pool's FlexVolume.
      *
-     * <p>This is the first half of the cache-and-clone flow driven by
-     * {@code VolumeServiceImpl.createManagedStorageVolumeFromTemplateAsync}. Only the empty
-     * container is created here; the framework then sends a {@code CopyCommand} to a KVM host
-     * which writes the image content into it.</p>
-     *
-     * <p>For iSCSI the ONTAP identity of the cache is recorded on {@code template_spool_ref}:
-     * {@code local_download_path} holds the LUN uuid, which is the clone source later on.
-     * {@code install_path} is deliberately left for {@code grantAccess} to fill, because it must
-     * be {@code /<targetIQN>/<lunNumber>} and the LUN number does not exist until the LUN is
-     * mapped to an igroup.</p>
-     *
-     * <p>For NFS nothing is pre-created on the array: the KVM agent writes the qcow2 into the
-     * mounted FlexVolume and reports the path, which the framework stores as {@code install_path}.</p>
+     * <p>Protocol-specific work is delegated to {@link StorageStrategy#createTemplateCache}.
+     * This method maps the result to {@link CreateCmdResult} and records SAN identity on
+     * {@code template_spool_ref} ({@code local_download_path} = LUN uuid).</p>
      */
     private CreateCmdResult createTemplateOnPrimary(StoragePoolVO storagePool, TemplateInfo templateInfo, Map<String, String> details) {
-        if (!isIscsi(details)) {
-            logger.info("createTemplateOnPrimary: NFS pool [{}], template [{}] will be written directly to the mounted FlexVolume",
-                    storagePool.getId(), templateInfo.getId());
-            return new CreateCmdResult(templateInfo.getUuid(), new Answer(null, true, null));
-        }
-
-        VMTemplateStoragePoolVO templatePoolRef = findTemplatePoolRef(storagePool.getId(), templateInfo.getId());
-
-        long sizeInBytes = getDataObjectSizeIncludingHypervisorSnapshotReserve(templateInfo, storagePool);
-        if (sizeInBytes <= 0) {
-            throw new CloudRuntimeException("Unknown virtual size for template [" + templateInfo.getId()
-                    + "]; cannot size the template LUN on pool [" + storagePool.getId() + "]");
-        }
-
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-        CloudStackVolume createdCloudStackVolume = null;
+        long sizeInBytes = getDataObjectSizeIncludingHypervisorSnapshotReserve(templateInfo, storagePool);
+        CloudStackVolume created = null;
         try {
-            createdCloudStackVolume = storageStrategy.createCloudStackVolume(
-                    createTemplateLunRequest(storagePool, details, templateInfo.getId(), sizeInBytes));
-            // createCloudStackVolume validates the Feign response (LUN name + uuid) before returning
-            Lun lun = createdCloudStackVolume.getLun();
-            templatePoolRef.setLocalDownloadPath(lun.getUuid());
-            templatePoolRef.setTemplateSize(sizeInBytes);
-            vmTemplatePoolDao.update(templatePoolRef.getId(), templatePoolRef);
-
-            logger.info("createTemplateOnPrimary: Created template cache LUN [{}] (uuid [{}], {} bytes) on pool [{}] for template [{}]",
-                    lun.getName(), lun.getUuid(), sizeInBytes, storagePool.getId(), templateInfo.getId());
-
-            return new CreateCmdResult(lun.getName(), new Answer(null, true, null));
+            created = storageStrategy.createTemplateCache(storagePool, templateInfo, details, sizeInBytes);
+            String path = recordTemplateCacheOnSpoolRef(storagePool, templateInfo, created, sizeInBytes);
+            return new CreateCmdResult(path, new Answer(null, true, null));
         } catch (Exception e) {
-            // Compensating delete: orchestrator only cleans DB metadata on create failure.
-            bestEffortDeleteTemplateCacheLun(storageStrategy, details.get(OntapStorageConstants.SVM_NAME),
-                    getTemplateLunName(storagePool, templateInfo.getId()),
-                    createdCloudStackVolume != null && createdCloudStackVolume.getLun() != null ? createdCloudStackVolume.getLun().getUuid() : null);
+            // Compensating delete for SAN: strategy cleans create-time LUN failures; this covers
+            // post-create failures (e.g. template_spool_ref update) after a LUN was returned.
+            if (created != null && created.getLun() != null) {
+                bestEffortDeleteTemplateCacheLun(storageStrategy, details.get(OntapStorageConstants.SVM_NAME),
+                        created.getLun().getName(), created.getLun().getUuid());
+            }
             if (e instanceof CloudRuntimeException) {
                 throw (CloudRuntimeException) e;
             }
-            throw new CloudRuntimeException("Failed to create template cache LUN for template [" + templateInfo.getId()
+            throw new CloudRuntimeException("Failed to create template cache for template [" + templateInfo.getId()
                     + "]: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Persists SAN cache identity on {@code template_spool_ref} when a LUN was created.
+     * NFS returns the template uuid as the create path; {@code install_path} is filled later.
+     */
+    private String recordTemplateCacheOnSpoolRef(StoragePoolVO storagePool, TemplateInfo templateInfo,
+                                                 CloudStackVolume created, long sizeInBytes) {
+        if (created == null || created.getLun() == null) {
+            return templateInfo.getUuid();
+        }
+        Lun lun = created.getLun();
+        VMTemplateStoragePoolVO templatePoolRef = findTemplatePoolRef(storagePool.getId(), templateInfo.getId());
+        templatePoolRef.setLocalDownloadPath(lun.getUuid());
+        templatePoolRef.setTemplateSize(sizeInBytes);
+        vmTemplatePoolDao.update(templatePoolRef.getId(), templatePoolRef);
+        return lun.getName();
     }
 
     /**
@@ -385,7 +374,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String lunName = getTemplateLunName(storagePool, templateInfo.getId());
         String lunUuid = templatePoolRef.getLocalDownloadPath();
         deleteTemplateCacheLun(storageStrategy, details.get(OntapStorageConstants.SVM_NAME), lunName, lunUuid);
-        logger.info("deleteTemplateOnPrimary: Deleted template cache LUN [{}] for template [{}] on pool [{}]",
+        logger.info("deleteIscsiTemplateCache: Deleted template cache LUN [{}] for template [{}] on pool [{}]",
                 lunName, templateInfo.getId(), storagePool.getId());
     }
 
@@ -433,7 +422,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                                         VMTemplateStoragePoolVO templatePoolRef, StorageStrategy storageStrategy) {
         String filePath = templatePoolRef.getInstallPath();
         if (filePath == null || filePath.isEmpty()) {
-            logger.warn("deleteTemplateOnPrimary: No install_path recorded for template [{}]; nothing to delete",
+            logger.warn("deleteNfsTemplateCache: No install_path recorded for template [{}]; nothing to delete",
                     templateInfo.getId());
             return;
         }
@@ -447,7 +436,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     + templateInfo.getId() + "]");
         }
         ((UnifiedNASStrategy) storageStrategy).deleteFileByPath(flexVolUuid, filePath);
-        logger.info("deleteTemplateOnPrimary: Deleted template cache file [{}] for template [{}]",
+        logger.info("deleteNfsTemplateCache: Deleted template cache file [{}] for template [{}]",
                 filePath, templateInfo.getId());
     }
 
@@ -1416,31 +1405,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Builds the request that creates an empty LUN to cache a template.
-     *
-     * <p>The LUN is sized to the template's virtual disk size. That is the size KVM writes
-     * after {@code qemu-img convert} to RAW, so it must not be the compressed QCOW2 physical size.</p>
-     */
-    private CloudStackVolume createTemplateLunRequest(StoragePoolVO storagePool, Map<String, String> details,
-                                                      long templateId, long sizeInBytes) {
-        Svm svm = new Svm();
-        svm.setName(details.get(OntapStorageConstants.SVM_NAME));
-
-        Lun lunRequest = new Lun();
-        lunRequest.setSvm(svm);
-        lunRequest.setName(getTemplateLunName(storagePool, templateId));
-        lunRequest.setOsType(Lun.OsTypeEnum.valueOf(
-                OntapStorageUtils.getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
-        LunSpace lunSpace = new LunSpace();
-        lunSpace.setSize(sizeInBytes);
-        lunRequest.setSpace(lunSpace);
-
-        CloudStackVolume request = new CloudStackVolume();
-        request.setLun(lunRequest);
-        return request;
-    }
-
-    /**
      * Builds the request that clones the cached template LUN into a new volume LUN.
      *
      * <p>Source identity mirrors the NFS file-clone path workflow: {@code clone.source.name} is
@@ -1519,21 +1483,36 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return OntapStorageUtils.buildOntapSnapshotName(cloudStackSnapshotName, OntapStorageConstants.CS + snapshotId);
     }
 
-
-    private Storage.ImageFormat getImageFormatByHypervisorAndProtocol(HypervisorType hypervisorType, String protocol) {
-        if (HypervisorType.KVM.equals(hypervisorType)) {
-            ProtocolType protocolType = ProtocolType.valueOf(protocol);
-            switch (protocolType) {
-                case NFS3:
-                    return Storage.ImageFormat.QCOW2;
-                case ISCSI:
-                    return Storage.ImageFormat.RAW;
-                default:
-                    throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] for ONTAP image format resolution");
-            }
+    /**
+     * Only ISCSI and NFS3 pools can be provisioned; any other protocol would fall through
+     * createAsync without producing a result, leaving the caller with a null callback value.
+     */
+    private void validateProtocol(Map<String, String> details, DataStore dataStore) {
+        String protocol = details == null ? null : details.get(OntapStorageConstants.PROTOCOL);
+        boolean supported = protocol != null && Arrays.stream(ProtocolType.values())
+                .anyMatch(type -> type.name().equalsIgnoreCase(protocol));
+        if (!supported) {
+            throw new CloudRuntimeException("Unsupported protocol [" + protocol + "] on storage pool ["
+                    + dataStore.getName() + "]; supported protocols are " + Arrays.toString(ProtocolType.values()));
         }
-        throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
     }
+
+    private Storage.ImageFormat getImageFormat(StoragePoolVO storagePool) {
+        HypervisorType hypervisorType = storagePool.getHypervisor();
+        if (!HypervisorType.KVM.equals(hypervisorType)) {
+            throw new CloudRuntimeException("Unsupported hypervisor [" + hypervisorType + "] for ONTAP image format resolution");
+        }
+        Storage.StoragePoolType spType = storagePool.getPoolType();
+        switch (spType) {
+            case OntapiSCSI:
+                return Storage.ImageFormat.RAW;
+            case NetworkFilesystem:
+                return Storage.ImageFormat.QCOW2;
+            default:
+                throw new CloudRuntimeException("Unsupported pool type [" +  spType + "] for ONTAP image format resolution");
+        }
+    }
+
     /**
      * Persists snapshot metadata in snapshot_details table.
      *

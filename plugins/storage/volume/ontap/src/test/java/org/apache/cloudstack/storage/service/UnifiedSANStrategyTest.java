@@ -158,6 +158,172 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
+    void testCreateTemplateCache_Success() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getName()).thenReturn("vol1");
+        when(storagePool.getHypervisor()).thenReturn(com.cloud.hypervisor.Hypervisor.HypervisorType.KVM);
+
+        org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo templateInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo.class);
+        when(templateInfo.getId()).thenReturn(50L);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+
+        Lun createdLun = new Lun();
+        createdLun.setName("/vol/vol1/cs_tmpl_50");
+        createdLun.setUuid("template-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(createdLun));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+
+            CloudStackVolume result = unifiedSANStrategy.createTemplateCache(
+                    storagePool, templateInfo, details, 5368709120L);
+
+            assertNotNull(result);
+            assertEquals("template-lun-uuid", result.getLun().getUuid());
+            assertEquals("/vol/vol1/cs_tmpl_50", result.getLun().getName());
+
+            ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+            verify(sanFeignClient).createLun(eq(authHeader), eq(true), lunCaptor.capture());
+            assertEquals("/vol/vol1/cs_tmpl_50", lunCaptor.getValue().getName());
+            assertEquals(5368709120L, lunCaptor.getValue().getSpace().getSize());
+        }
+    }
+
+    @Test
+    void testCreateTemplateCache_UnknownSize_ThrowsException() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getId()).thenReturn(1L);
+        org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo templateInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo.class);
+        when(templateInfo.getId()).thenReturn(50L);
+
+        assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createTemplateCache(storagePool, templateInfo, Map.of(), 0L));
+        verify(sanFeignClient, never()).createLun(any(), anyBoolean(), any());
+    }
+
+    @Test
+    void testCreateTemplateCache_CreateFails_BestEffortDeletesLeftoverLun() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        when(storagePool.getHypervisor()).thenReturn(com.cloud.hypervisor.Hypervisor.HypervisorType.KVM);
+
+        org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo templateInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo.class);
+        when(templateInfo.getId()).thenReturn(50L);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+
+        FeignException createEx = mock(FeignException.class);
+        when(createEx.status()).thenReturn(500);
+        when(createEx.getMessage()).thenReturn("create failed");
+
+        Lun leftover = new Lun();
+        leftover.setName("/vol/vol1/cs_tmpl_50");
+        leftover.setUuid("leftover-uuid");
+        OntapResponse<Lun> leftoverResponse = new OntapResponse<>();
+        leftoverResponse.setRecords(List.of(leftover));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(createEx);
+            when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(leftoverResponse);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.createTemplateCache(storagePool, templateInfo, details, 5368709120L));
+
+            verify(sanFeignClient).deleteLun(eq(authHeader), eq("leftover-uuid"), anyMap());
+        }
+    }
+
+    @Test
+    void testCreateTemplateCache_CreateFails_NoLeftoverLun_SkipsDelete() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        when(storagePool.getHypervisor()).thenReturn(com.cloud.hypervisor.Hypervisor.HypervisorType.KVM);
+
+        org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo templateInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo.class);
+        when(templateInfo.getId()).thenReturn(50L);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+
+        FeignException createEx = mock(FeignException.class);
+        when(createEx.status()).thenReturn(500);
+        when(createEx.getMessage()).thenReturn("create failed");
+
+        OntapResponse<Lun> empty = new OntapResponse<>();
+        empty.setRecords(List.of());
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(createEx);
+            when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(empty);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.createTemplateCache(storagePool, templateInfo, details, 5368709120L));
+
+            verify(sanFeignClient, never()).deleteLun(any(), any(), anyMap());
+        }
+    }
+
+    @Test
+    void testCreateTemplateCache_CleanupFailureDoesNotMaskCreateError() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        when(storagePool.getHypervisor()).thenReturn(com.cloud.hypervisor.Hypervisor.HypervisorType.KVM);
+
+        org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo templateInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo.class);
+        when(templateInfo.getId()).thenReturn(50L);
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+
+        FeignException createEx = mock(FeignException.class);
+        when(createEx.status()).thenReturn(500);
+        when(createEx.getMessage()).thenReturn("create failed");
+
+        Lun leftover = new Lun();
+        leftover.setName("/vol/vol1/cs_tmpl_50");
+        leftover.setUuid("leftover-uuid");
+        OntapResponse<Lun> leftoverResponse = new OntapResponse<>();
+        leftoverResponse.setRecords(List.of(leftover));
+
+        FeignException deleteEx = mock(FeignException.class);
+        when(deleteEx.status()).thenReturn(500);
+        when(deleteEx.getMessage()).thenReturn("delete failed");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(createEx);
+            when(sanFeignClient.getLunResponse(eq(authHeader), anyMap())).thenReturn(leftoverResponse);
+            doThrow(deleteEx).when(sanFeignClient).deleteLun(eq(authHeader), eq("leftover-uuid"), anyMap());
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.createTemplateCache(storagePool, templateInfo, details, 5368709120L));
+            assertTrue(thrown.getMessage().contains("create failed") || thrown.getMessage().contains("Failed to create"));
+        }
+    }
+
+    @Test
     void testCreateCloudStackVolume_NullRequest_ThrowsException() {
         assertThrows(CloudRuntimeException.class,
             () -> unifiedSANStrategy.createCloudStackVolume(null));
@@ -861,6 +1027,92 @@ class UnifiedSANStrategyTest {
 
         assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 100L));
         verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
+    void testResizeCloudStackVolume_InvalidSize_Throws() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 0L));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(null, 100L));
+        verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
+    void testResizeCloudStackVolume_FeignException_Throws() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(500);
+        when(feignException.getMessage()).thenReturn("resize failed");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            doThrow(feignException).when(sanFeignClient).updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class));
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L));
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolume_EmptyRecords_ThrowsException() {
+        Lun.Source source = new Lun.Source();
+        source.setUuid("source-lun-uuid");
+        Lun.Clone clone = new Lun.Clone();
+        clone.setSource(source);
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/cloned");
+        lun.setClone(clone);
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of());
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolume_FeignException_ThrowsException() {
+        Lun.Source source = new Lun.Source();
+        source.setUuid("source-lun-uuid");
+        Lun.Clone clone = new Lun.Clone();
+        clone.setSource(source);
+        Lun lun = new Lun();
+        lun.setName("/vol/vol1/cloned");
+        lun.setClone(clone);
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(500);
+        when(feignException.getMessage()).thenReturn("clone failed");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(feignException);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        }
     }
 
     @Test

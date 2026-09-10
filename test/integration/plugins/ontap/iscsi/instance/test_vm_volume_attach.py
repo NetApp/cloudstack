@@ -404,12 +404,42 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             time.sleep(interval)
         return None
 
-    def _lun_maps(self):
-        """Return current LUN-maps for the pool's FlexVol."""
-        if self.__class__.pool is None:
+    def _data_lun_name(self, volume=None):
+        """
+        Full ONTAP path of the LUN backing the CloudStack data volume.
+
+        UnifiedSANStrategy names the LUN after the CloudStack volume with
+        hyphens replaced by underscores, inside the pool's FlexVol.
+        """
+        volume = volume or self.__class__.volume
+        if volume is None or self.__class__.pool is None:
+            return None
+        return "/vol/%s/%s" % (self.__class__.pool.name,
+                               volume.name.replace("-", "_"))
+
+    def _lun_maps(self, volume=None):
+        """
+        Return LUN-maps belonging to the data volume's LUN only.
+
+        The same FlexVol also holds the VM's ROOT LUN whenever the allocator
+        places the root disk on this pool, so the unfiltered map list is not a
+        measure of the data volume's accessibility.
+        """
+        lun_name = self._data_lun_name(volume)
+        if lun_name is None:
             return []
-        return self.ontap.list_lun_maps_for_volume(
-            self.svm_name, self.__class__.pool.name)
+        return [m for m in self.ontap.list_lun_maps_for_volume(
+                    self.svm_name, self.__class__.pool.name)
+                if m.get("lun", {}).get("name") == lun_name]
+
+    def _data_luns(self, volume=None):
+        """Return LUN records for the data volume's LUN only."""
+        lun_name = self._data_lun_name(volume)
+        if lun_name is None:
+            return []
+        return [lun for lun in self.ontap.list_luns_in_volume(
+                    self.svm_name, self.__class__.pool.name)
+                if lun.get("name") == lun_name]
 
     # ==================================================================
     # Test steps
@@ -424,7 +454,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         """
         Create an iSCSI primary storage pool on ONTAP.
         Verifies:
-          - Pool reaches 'Up' state; type is 'Iscsi'
+          - Pool reaches 'Up' state; type is 'OntapiSCSI'
           - ONTAP: FlexVol is online
           - ONTAP: igroup exists for every host in the cluster that has an IQN
         """
@@ -433,8 +463,8 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
         self.assertEqual(pool.state, "Up",
                          "Pool state should be 'Up', got '%s'" % pool.state)
-        self.assertEqual(pool.type, "Iscsi",
-                         "Pool type should be 'Iscsi', got '%s'" % pool.type)
+        self.assertEqual(pool.type, "OntapiSCSI",
+                         "Pool type should be 'OntapiSCSI', got '%s'" % pool.type)
 
         ontap_vol = self.ontap.get_volume(pool.name)
         self.assertIsNotNone(
@@ -462,12 +492,12 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.__class__.volume = vol
         self.assertIsNotNone(vol, "createVolume returned None")
 
-        luns = self.ontap.list_luns_in_volume(
-            self.svm_name, self.__class__.pool.name)
+        luns = self._data_luns()
         self.assertTrue(
             len(luns) > 0,
-            "Expected ≥1 LUN in ONTAP FlexVol '%s' after volume creation, "
-            "found 0" % self.__class__.pool.name
+            "Expected the data volume's LUN '%s' in ONTAP FlexVol '%s' after "
+            "volume creation, found none"
+            % (self._data_lun_name(), self.__class__.pool.name)
         )
 
     # ------------------------------------------------------------------
@@ -511,7 +541,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         lun_maps = self._lun_maps()
         self.assertEqual(
             len(lun_maps), 0,
-            "Expected 0 LUN-maps before volume attach, found %d: %s"
+            "Expected 0 data-volume LUN-maps before volume attach, found %d: %s"
             % (len(lun_maps), lun_maps)
         )
 
@@ -590,16 +620,15 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         lun_maps = self._lun_maps()
         self.assertEqual(
             len(lun_maps), 0,
-            "Expected 0 LUN-maps after VM stop, found %d: %s"
+            "Expected 0 data-volume LUN-maps after VM stop, found %d: %s"
             % (len(lun_maps), lun_maps)
         )
 
         # ONTAP: LUN itself must still exist in the FlexVol
-        luns = self.ontap.list_luns_in_volume(
-            self.svm_name, self.__class__.pool.name)
+        luns = self._data_luns()
         self.assertTrue(
             len(luns) > 0,
-            "LUN should still exist in ONTAP FlexVol after VM stop"
+            "Data volume LUN should still exist in ONTAP FlexVol after VM stop"
         )
 
     # ------------------------------------------------------------------
@@ -689,16 +718,15 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         lun_maps = self._lun_maps()
         self.assertEqual(
             len(lun_maps), 0,
-            "Expected 0 LUN-maps after volume detach, found %d: %s"
+            "Expected 0 data-volume LUN-maps after volume detach, found %d: %s"
             % (len(lun_maps), lun_maps)
         )
 
         # ONTAP: LUN still exists in FlexVol
-        luns = self.ontap.list_luns_in_volume(
-            self.svm_name, self.__class__.pool.name)
+        luns = self._data_luns()
         self.assertTrue(
             len(luns) > 0,
-            "LUN should still exist in ONTAP FlexVol after detach"
+            "Data volume LUN should still exist in ONTAP FlexVol after detach"
         )
 
     # ------------------------------------------------------------------
@@ -751,11 +779,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             self.__class__.volume = None
 
             # ONTAP: LUN must be removed after volume deletion
-            luns = self.ontap.list_luns_in_volume(self.svm_name, pool_name)
+            luns = self._data_luns(vol)
             self.assertEqual(
                 len(luns), 0,
-                "Expected 0 LUNs in FlexVol '%s' after volume delete, "
-                "found %d" % (pool_name, len(luns))
+                "Expected the data volume's LUN to be gone from FlexVol '%s' "
+                "after volume delete, found %d" % (pool_name, len(luns))
             )
 
             # Enter maintenance and force-delete the pool

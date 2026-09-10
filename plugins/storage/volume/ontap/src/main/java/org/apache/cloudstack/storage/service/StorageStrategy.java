@@ -43,6 +43,7 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -55,6 +56,8 @@ import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
+
+import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -384,7 +387,25 @@ public abstract class StorageStrategy {
      * @return the updated Volume object
      */
     public Volume updateStorageVolume(Volume volume) {
-        return null;
+        logger.info("Resizing ONTAP FlexVolume '{}' (UUID: {}) to {} bytes", volume.getName(), volume.getUuid(), volume.getSize());
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        try {
+            Volume resizeRequest = new Volume();
+            resizeRequest.setSize(volume.getSize());
+            JobResponse jobResponse = volumeFeignClient.updateVolume(authHeader, volume.getUuid(), resizeRequest);
+            pollJobIfPresent(jobResponse, "resize FlexVolume [" + volume.getUuid() + "]",
+                    OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES, OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
+            logger.info("FlexVolume '{}' (UUID: {}) resized successfully to {} bytes", volume.getName(), volume.getUuid(), volume.getSize());
+        } catch (FeignException e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                String msg = String.format("Cannot resize FlexVolume '%s' (UUID: %s): volume not found on ONTAP (404). ", volume.getName(), volume.getUuid());
+                logger.error(msg);
+                throw new CloudRuntimeException(msg, e);
+            }
+            logger.error("Exception while resizing FlexVolume '{}' (UUID: {}): {}", volume.getName(), volume.getUuid(), e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume: " + e.getMessage(), e);
+        }
+        return volume;
     }
 
     /**
@@ -605,6 +626,27 @@ public abstract class StorageStrategy {
      * @return the created CloudStackVolume object
      */
     abstract public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Creates the protocol-specific backend object that caches a template on this pool.
+     *
+     * <p>iSCSI creates an empty LUN ({@code /vol/&lt;flexVol&gt;/cs_tmpl_&lt;id&gt;}) sized to
+     * {@code sizeInBytes}. NFS is a no-op on the array: the KVM agent later writes the qcow2
+     * into the mounted FlexVolume.</p>
+     *
+     * <p>Returns a {@link CloudStackVolume} so the driver can map it to {@code CreateCmdResult}
+     * and update {@code template_spool_ref}. SAN populates {@code lun}; NAS returns an empty
+     * volume (no LUN / file yet).</p>
+     *
+     * @param storagePool   CloudStack primary storage pool (one FlexVolume)
+     * @param templateInfo  template being cached
+     * @param details       pool details (SVM, protocol, etc.)
+     * @param sizeInBytes   virtual size for the cache object (required for SAN; ignored for NAS)
+     * @return created cache identity, or an empty {@link CloudStackVolume} when nothing is
+     *         pre-created on the array
+     */
+    abstract public CloudStackVolume createTemplateCache(StoragePoolVO storagePool, TemplateInfo templateInfo,
+            Map<String, String> details, long sizeInBytes);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
