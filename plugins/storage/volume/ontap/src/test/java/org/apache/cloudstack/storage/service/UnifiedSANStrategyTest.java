@@ -55,11 +55,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -1152,6 +1154,31 @@ class UnifiedSANStrategyTest {
         CloudStackVolume request = new CloudStackVolume();
         assertThrows(CloudRuntimeException.class,
             () -> unifiedSANStrategy.updateCloudStackVolume(request));
+    }
+
+    @Test
+    void testUpdateCloudStackVolume_AppliesQosPolicyToLun() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_0_to5000_iops_svm1");
+        lun.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class)))
+                    .thenReturn(null);
+
+            CloudStackVolume result = unifiedSANStrategy.updateCloudStackVolume(request);
+
+            assertSame(request, result);
+            verify(sanFeignClient).updateLun(eq(authHeader), eq("lun-uuid-123"), argThat(update ->
+                    update.getQosPolicy() != null
+                            && "cs_0_to5000_iops_svm1".equals(update.getQosPolicy().getName())));
+        }
     }
 
     @Test

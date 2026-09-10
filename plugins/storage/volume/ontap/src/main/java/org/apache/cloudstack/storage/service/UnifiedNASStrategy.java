@@ -135,7 +135,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null
                 || cloudstackVolume.getFlexVolumeUuid() == null || cloudstackVolume.getFile() == null) {
             throw new CloudRuntimeException("Invalid NFS volume QoS update request");
