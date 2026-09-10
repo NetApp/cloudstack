@@ -249,7 +249,7 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
         CloudStack calls attachZone(), which connects all eligible KVM hosts
         in the zone and creates igroups for each host's IQN.
         Verifies:
-          - pool.state is Up, type is Iscsi
+          - pool.state is Up, type is OntapiSCSI
           - ONTAP: FlexVol is online
           - ONTAP: igroup exists for each cluster host with the correct IQN
         """
@@ -261,8 +261,8 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
             "Pool state should be 'Up', got '%s'" % pool.state
         )
         self.assertEqual(
-            pool.type, "Iscsi",
-            "Pool type should be 'Iscsi', got '%s'" % pool.type
+            pool.type, "OntapiSCSI",
+            "Pool type should be 'OntapiSCSI', got '%s'" % pool.type
         )
 
         # ONTAP: FlexVol must be online
