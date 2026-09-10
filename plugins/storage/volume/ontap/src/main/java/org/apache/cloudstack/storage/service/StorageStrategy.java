@@ -43,6 +43,7 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
@@ -55,6 +56,8 @@ import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
+
+import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -625,6 +628,27 @@ public abstract class StorageStrategy {
     abstract public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
+     * Creates the protocol-specific backend object that caches a template on this pool.
+     *
+     * <p>iSCSI creates an empty LUN ({@code /vol/&lt;flexVol&gt;/cs_tmpl_&lt;id&gt;}) sized to
+     * {@code sizeInBytes}. NFS is a no-op on the array: the KVM agent later writes the qcow2
+     * into the mounted FlexVolume.</p>
+     *
+     * <p>Returns a {@link CloudStackVolume} so the driver can map it to {@code CreateCmdResult}
+     * and update {@code template_spool_ref}. SAN populates {@code lun}; NAS returns an empty
+     * volume (no LUN / file yet).</p>
+     *
+     * @param storagePool   CloudStack primary storage pool (one FlexVolume)
+     * @param templateInfo  template being cached
+     * @param details       pool details (SVM, protocol, etc.)
+     * @param sizeInBytes   virtual size for the cache object (required for SAN; ignored for NAS)
+     * @return created cache identity, or an empty {@link CloudStackVolume} when nothing is
+     *         pre-created on the array
+     */
+    abstract public CloudStackVolume createTemplateCache(StoragePoolVO storagePool, TemplateInfo templateInfo,
+            Map<String, String> details, long sizeInBytes);
+
+    /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
      * it is going to mimic
      * updateLun       for iSCSI, FC protocols
@@ -648,14 +672,28 @@ public abstract class StorageStrategy {
     abstract public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
-     * Method encapsulates the behavior based on the opted protocol in subclasses.
+     * Creates a space-efficient clone of an existing object inside the same FlexVolume.
      * it is going to mimic
      *     cloneLun       for iSCSI, FC protocols
      *     cloneFile      for NFS3.0 and NFS4.1 protocols
      *     cloneNameSpace for Nvme/TCP and Nvme/FC protocol
-     * @param cloudstackVolume the CloudStack volume to copy
+     *
+     * <p>ONTAP requires the source and the destination to live in the same FlexVolume, which
+     * holds because a CloudStack primary storage pool maps one-to-one onto a FlexVolume.</p>
+     *
+     * @param cloudstackVolume describes the clone to create; the source is carried in the
+     *                         protocol-specific clone reference (for SAN, {@code lun.clone.source})
+     * @return the created CloudStackVolume, populated with the backend identity of the clone
      */
-    abstract public void copyCloudStackVolume(CloudStackVolume cloudstackVolume);
+    abstract public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Grows an existing backend object to {@code sizeInBytes}.
+     *
+     * <p>Needed after cloning a cached template, because a clone inherits the size of its source
+     * while the service offering may ask for a larger disk.</p>
+     */
+    abstract public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
