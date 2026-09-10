@@ -302,6 +302,34 @@ public class UnifiedNASStrategyTest {
         verify(endPoint).sendMessage(any(DeleteCommand.class));
     }
 
+    @Test
+    public void testUpdateCloudStackVolume_AppliesQosPolicy() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to200_iops_svm1");
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(qosPolicy);
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+        request.setFlexVolumeUuid("flex-uuid");
+        request.setFile(fileInfo);
+
+        CloudStackVolume result = strategy.updateCloudStackVolume(request);
+
+        assertSame(request, result);
+        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid-123"),
+                argThat(file -> file.getQosPolicy() != null
+                        && "cs_100_to200_iops_svm1".equals(file.getQosPolicy().getName())));
+    }
+
+    @Test
+    public void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.updateCloudStackVolume(new CloudStackVolume()));
+    }
+
     // Test createCloudStackVolume - Volume Not Found
     @Test
     public void testCreateCloudStackVolume_VolumeNotFound() {
