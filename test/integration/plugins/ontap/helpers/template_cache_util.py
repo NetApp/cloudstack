@@ -227,3 +227,30 @@ def wait_for_spool_ref(db_connection, pool_db_id, template_db_id,
             return last
         time.sleep(interval)
     return last
+
+
+def assert_no_nfs_template_cache_file(testcase, ontap, flexvol_name, install_path):
+    """Assert the NFS cache file referenced by install_path is absent."""
+    testcase.assertTrue(
+        install_path,
+        "install_path is required to assert NFS cache file absence",
+    )
+    file_name = install_path.rstrip("/").rsplit("/", 1)[-1]
+    parent = _normalize_nfs_path(install_path)
+    names = ontap.list_files_in_volume(flexvol_name, path=parent) or []
+    root_names = ontap.list_files_in_volume(flexvol_name, path="/") or []
+    testcase.assertNotIn(
+        file_name, names + root_names,
+        "NFS template cache file '%s' should be absent under '%s' or '/' in "
+        "FlexVol '%s'" % (file_name, parent, flexvol_name),
+    )
+
+
+def get_template_size_bytes(db_connection, template_db_id):
+    """Return vm_template.size (bytes) for the given DB id, or None."""
+    rows = db_connection.execute(
+        "SELECT size FROM vm_template WHERE id = %s" % int(template_db_id)
+    )
+    if not rows or rows[0][0] is None:
+        return None
+    return int(rows[0][0])

@@ -152,6 +152,8 @@ bash test/integration/plugins/ontap/run_tests.sh all
 # Template-cache suites only
 bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache
 bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache
+bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache_negative
+bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
 ```
 
 Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach → template cache (last).
@@ -165,6 +167,8 @@ Each protocol batch runs suites in this order: pool lifecycle → pool with volu
 | `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
 | `run_tests.sh nfs3_template_cache` | NFS3 template-cache suite only |
 | `run_tests.sh iscsi_template_cache` | iSCSI template-cache suite only |
+| `run_tests.sh nfs3_template_cache_negative` | NFS3 template-cache boundary/negative suite |
+| `run_tests.sh iscsi_template_cache_negative` | iSCSI template-cache boundary/negative suite |
 | `run_tests.sh setup_zone` | Zone setup only |
 | `run_tests.sh cleanup_zone` | Zone teardown (manual; destructive) |
 
@@ -316,12 +320,14 @@ self.assertEqual(result.state, "Maintenance")
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
 | NFS3 Template Cache | `nfs3/template/test_template_cache.py` | 6 | ROOT on tagged pool; seed/reuse cache; survive VM delete |
+| NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
 | iSCSI Template Cache | `iscsi/template/test_template_cache.py` | 6 | ROOT on tagged pool; `cs_tmpl_*` LUN cache seed/reuse |
+| iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
 

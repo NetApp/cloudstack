@@ -259,6 +259,36 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 ---
 
+## Suite 13 — NFS3 Template Cache Negative / Boundary
+
+**File:** `nfs3/template/test_template_cache_negative.py`
+**Class:** `TestOntapNfs3TemplateCacheNegative`
+**Tag:** `nfs3_template_cache_negative`
+**Total:** 3 tests | **Scope:** Boundary conditions for NFS3 primary template cache (isolated from happy path)
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | Deploy may succeed elsewhere; ROOT not on ONTAP pool; no `template_spool_ref` for pool | No cache file for template on FlexVol | negative |
+| 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but `capacitybytes` ≪ template size | setUpClass | Deploy fails / never Running; spool_ref not Ready/DOWNLOADED | No cache file | negative |
+| 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete file out-of-band, redeploy | setUpClass | spool_ref still Ready after ONTAP delete; second deploy fails | Cache file absent after delete | negative |
+
+---
+
+## Suite 14 — iSCSI Template Cache Negative / Boundary
+
+**File:** `iscsi/template/test_template_cache_negative.py`
+**Class:** `TestOntapIscsiTemplateCacheNegative`
+**Tag:** `iscsi_template_cache_negative`
+**Total:** 3 tests | **Scope:** Boundary conditions for iSCSI primary template cache (isolated from happy path)
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | ROOT not on ONTAP pool; no `template_spool_ref` | No `cs_tmpl_*` LUN | negative |
+| 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but undersized capacity | setUpClass | Deploy fails; spool_ref not Ready/DOWNLOADED | No `cs_tmpl_*` LUN | negative |
+| 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete LUN out-of-band, redeploy | setUpClass | spool_ref still Ready; second deploy fails | `cs_tmpl_*` absent after delete | negative |
+
+---
+
 ## Cross-suite summary
 
 | Suite | Protocol | Scope | Tests | Status |
@@ -269,10 +299,12 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
 | NFS3 Template Cache | NFS3 | Cluster | 6 | 🆕 |
+| NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 8 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
 | iSCSI Template Cache | iSCSI | Cluster | 6 | 🆕 |
-| **Total** | | | **74** | |
+| iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
+| **Total** | | | **80** | |

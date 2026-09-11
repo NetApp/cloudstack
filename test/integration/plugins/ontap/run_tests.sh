@@ -66,6 +66,7 @@ ISCSI_SUITES=(
     "iSCSI zone-scoped pool|iscsi_zone_pool|${ONTAP_DIR}/iscsi/pool/test_zone_scoped_pool.py"
     "iSCSI VM volume workflow|iscsi_vm_workflow|${ONTAP_DIR}/iscsi/instance/test_vm_volume_attach.py"
     "iSCSI template cache|iscsi_template_cache|${ONTAP_DIR}/iscsi/template/test_template_cache.py"
+    "iSCSI template cache negative|iscsi_template_cache_negative|${ONTAP_DIR}/iscsi/template/test_template_cache_negative.py"
 )
 
 NFS3_SUITES=(
@@ -75,6 +76,7 @@ NFS3_SUITES=(
     "NFS3 zone-scoped pool|zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
     "NFS3 VM volume attach|vm_volume_workflow|${ONTAP_DIR}/nfs3/instance/test_vm_volume_attach.py"
     "NFS3 template cache|nfs3_template_cache|${ONTAP_DIR}/nfs3/template/test_template_cache.py"
+    "NFS3 template cache negative|nfs3_template_cache_negative|${ONTAP_DIR}/nfs3/template/test_template_cache_negative.py"
 )
 
 record_results() {
