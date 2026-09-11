@@ -118,6 +118,7 @@ class OntapAsupManagerTest {
         lenient().when(mockCluster.getName()).thenReturn("ontap-cluster-1");
         lenient().when(managementService.getVersion()).thenReturn("4.23.0.0-SNAPSHOT");
         lenient().when(managementServerHostDao.listAll()).thenReturn(Collections.emptyList());
+        lenient().when(mockStrategy.getClusterModel()).thenReturn("AFF-A400");
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -159,6 +160,8 @@ class OntapAsupManagerTest {
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, msgs.get(1).getEventId());
         assertTrue(msgs.get(0).getEventDescription().contains("\"managementServerCount\":0"),
                 msgs.get(0).getEventDescription());
+        assertTrue(msgs.get(0).getEventDescription().contains("\"ontapClusterModel\":\"AFF-A400\""),
+                msgs.get(0).getEventDescription());
     }
 
     @Test
@@ -179,6 +182,26 @@ class OntapAsupManagerTest {
         verify(mockStrategy, times(1)).sendAsupMessage(cap.capture());
         assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, cap.getValue().getEventId());
         verify(mockStrategy, never()).getClusterInfo();
+        verify(mockStrategy, never()).getClusterModel();
+    }
+
+    @Test
+    void heartbeat_clusterModelUnknownWhenNodesGetReturnsNull() {
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        when(mockStrategy.getClusterModel()).thenReturn(null);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
+        }
+
+        ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
+        verify(mockStrategy, times(2)).sendAsupMessage(cap.capture());
+        String heartbeat = cap.getAllValues().get(0).getEventDescription();
+        assertTrue(heartbeat.contains("\"ontapClusterModel\":\"unknown\""), heartbeat);
     }
 
     @Test
@@ -452,6 +475,7 @@ class OntapAsupManagerTest {
         }
 
         verify(mockStrategy, times(1)).getClusterInfo();
+        verify(mockStrategy, times(1)).getClusterModel();
         // 1 heartbeat + 2 pool messages = 3 total
         ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
         verify(mockStrategy, times(3)).sendAsupMessage(cap.capture());
@@ -497,8 +521,54 @@ class OntapAsupManagerTest {
 
         verify(mockStrategy, times(1)).getClusterInfo();
         verify(strategy2, times(1)).getClusterInfo();
+        verify(mockStrategy, times(1)).getClusterModel();
+        verify(strategy2, times(1)).getClusterModel();
         verify(mockStrategy, times(2)).sendAsupMessage(any());
         verify(strategy2, times(2)).sendAsupMessage(any());
+    }
+
+    @Test
+    void twoPoolsSameClusterUuidDifferentStorageIp_singleHeartbeatAndClusterModel() {
+        StoragePoolVO pool2 = mock(StoragePoolVO.class);
+        when(pool2.getId()).thenReturn(2L);
+        when(pool2.getName()).thenReturn("ontap-pool-2");
+
+        Map<String, String> otherIpSameCluster = new HashMap<>(poolDetails);
+        otherIpSameCluster.put(OntapStorageConstants.STORAGE_IP, "192.168.1.20");
+
+        Cluster clusterViaSecondIp = mock(Cluster.class);
+        when(clusterViaSecondIp.getUuid()).thenReturn("cluster-uuid-1");
+
+        StorageStrategy strategy2 = mock(StorageStrategy.class);
+        when(strategy2.getClusterInfo()).thenReturn(clusterViaSecondIp);
+
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(2L)).thenReturn(otherIpSameCluster);
+        when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        when(volumeDao.findNonDestroyedVolumesByPoolId(anyLong(), isNull())).thenReturn(Collections.emptyList());
+
+        try (MockedStatic<OntapStorageUtils> u = mockStatic(OntapStorageUtils.class)) {
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(poolDetails)).thenReturn(mockStrategy);
+            u.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(otherIpSameCluster)).thenReturn(strategy2);
+
+            Map<String, OntapAsupManager.AsupClusterClient> clientsByStorageIp = new HashMap<>();
+            asupManager.pushAsupForStoragePool(pool, clientsByStorageIp);
+            asupManager.pushAsupForStoragePool(pool2, clientsByStorageIp);
+        }
+
+        verify(mockStrategy, times(1)).getClusterInfo();
+        verify(strategy2, times(1)).getClusterInfo();
+        verify(mockStrategy, times(1)).getClusterModel();
+        verify(strategy2, never()).getClusterModel();
+
+        ArgumentCaptor<EmsApplicationLog> cap = ArgumentCaptor.forClass(EmsApplicationLog.class);
+        verify(mockStrategy, times(3)).sendAsupMessage(cap.capture());
+        verify(strategy2, never()).sendAsupMessage(any());
+        long heartbeats = cap.getAllValues().stream()
+                .filter(m -> OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT.equals(m.getEventId()))
+                .count();
+        assertEquals(1, heartbeats, "exactly 1 heartbeat when two storage IPs resolve to the same cluster UUID");
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -536,7 +606,8 @@ class OntapAsupManagerTest {
 
     @Test
     void asupIntervalHours_defaultIsProductionValue() {
-        assertEquals(4, OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS);
+        assertEquals(1, OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS);
+        assertEquals(1, OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS);
         assertEquals(String.valueOf(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS),
                 OntapConfigurationManager.AsupIntervalHours.defaultValue());
     }
@@ -555,7 +626,6 @@ class OntapAsupManagerTest {
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS)));
         assertTrue(description.contains(String.valueOf(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS)));
         assertTrue(description.contains("1 week"), description);
-        assertTrue(description.contains("once a day"), description);
     }
 
     @Test
@@ -568,9 +638,7 @@ class OntapAsupManagerTest {
 
     @Test
     void validateAsupInterval_rejectsOutOfRangeAndNonInteger() {
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("1"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("2"));
-        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("3"));
+        assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("-1"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("169"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue("abc"));
         assertThrows(InvalidParameterValueException.class, () -> OntapConfigurationManager.AsupIntervalHours.validateValue(""));
@@ -582,12 +650,11 @@ class OntapAsupManagerTest {
                 asupManager.getAsupIntervalHours(null));
         assertEquals(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(OntapStorageConstants.ASUP_DISABLED_INTERVAL_HOURS));
+        assertEquals(1, asupManager.getAsupIntervalHours(1));
+        assertEquals(2, asupManager.getAsupIntervalHours(2));
+        assertEquals(3, asupManager.getAsupIntervalHours(3));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
-                asupManager.getAsupIntervalHours(1));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
-                asupManager.getAsupIntervalHours(2));
-        assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
-                asupManager.getAsupIntervalHours(3));
+                asupManager.getAsupIntervalHours(-1));
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(169));
         assertEquals(OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS,

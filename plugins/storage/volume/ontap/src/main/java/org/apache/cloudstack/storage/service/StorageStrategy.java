@@ -20,6 +20,7 @@
 package org.apache.cloudstack.storage.service;
 
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +38,7 @@ import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
 import org.apache.cloudstack.storage.feign.model.Cluster;
+import org.apache.cloudstack.storage.feign.model.ClusterNode;
 import org.apache.cloudstack.storage.feign.model.EmsApplicationLog;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
@@ -160,6 +162,37 @@ public abstract class StorageStrategy {
             return version.getFull();
         }
         return null;
+    }
+
+    /**
+     * Hardware model of the ONTAP cluster nodes (for example {@code AFF-A400}), for ASUP
+     * heartbeat. Distinct non-blank models are joined with a comma. Best-effort: returns
+     * {@code null} if the nodes GET fails or no model is present.
+     *
+     * @return unique node models, or {@code null} if they cannot be resolved
+     */
+    public String getClusterModel() {
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            Map<String, Object> query = new HashMap<>();
+            query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_MODEL);
+            OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(authHeader, query);
+            if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+                return null;
+            }
+            LinkedHashSet<String> models = new LinkedHashSet<>();
+            for (ClusterNode node : response.getRecords()) {
+                if (node == null || node.getModel() == null || node.getModel().isBlank()) {
+                    continue;
+                }
+                models.add(node.getModel().trim());
+            }
+            return models.isEmpty() ? null : String.join(OntapStorageConstants.COMMA, models);
+        } catch (Exception e) {
+            logger.warn("getClusterModel: failed to fetch ONTAP node model for storage IP {}: {}",
+                    storage.getStorageIP(), e.getMessage());
+            return null;
+        }
     }
 
     /**

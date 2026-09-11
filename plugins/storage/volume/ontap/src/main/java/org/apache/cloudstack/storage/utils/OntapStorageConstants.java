@@ -64,6 +64,7 @@ public class OntapStorageConstants {
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
+    public static final String CLUSTER_NODE_MODEL = "model";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
@@ -168,6 +169,7 @@ public class OntapStorageConstants {
     public static final String ASUP_CLOUDSTACK_VERSION = "cloudstackVersion";
     public static final String ASUP_PLATFORM = "platform";
     public static final String ASUP_ONTAP_VERSION = "ontapVersion";
+    public static final String ASUP_ONTAP_CLUSTER_MODEL = "ontapClusterModel";
     public static final String ASUP_CLUSTER_UUID = "clusterUuid";
     public static final String ASUP_MANAGEMENT_SERVER_COUNT = "managementServerCount";
     /** Event-id 0 field: VM snapshots spanning multiple ONTAP pools (consistency group). */
@@ -182,7 +184,7 @@ public class OntapStorageConstants {
     public static final String ASUP_INTERVAL_CONFIG_KEY = "ontap.autosupport.interval";
     /** {@code ontap.autosupport.interval} value that disables telemetry reporting. */
     public static final int ASUP_DISABLED_INTERVAL_HOURS = 0;
-    public static final int ASUP_MIN_INTERVAL_HOURS = 4;
+    public static final int ASUP_MIN_INTERVAL_HOURS = 1;
     public static final int ASUP_MAX_INTERVAL_HOURS = 168; // once a week
     public static final int ASUP_DEFAULT_INTERVAL_HOURS = 24; // once a day
 
