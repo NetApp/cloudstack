@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 62 test cases across 10 test suites.
+Complete reference for all 74 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -223,6 +223,72 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 ---
 
+## Suite 11 — NFS3 Template Cache
+
+**File:** `nfs3/template/test_template_cache.py`
+**Class:** `TestOntapNfs3TemplateCache`
+**Tag:** `nfs3_template_cache`
+**Total:** 6 tests | **Scope:** ROOT on tagged NFS3 ONTAP pool; primary template cache seed / reuse / survive VM delete
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_create_tagged_pool_and_service_offering` | Create NFS3 pool + SO sharing `templateCacheTags` | setUpClass | Pool `Up`; SO created | FlexVol `online` | positive |
+| 02 | `test_02_deploy_vm1_seeds_template_cache` | Deploy VM-1 — ROOT on ONTAP; seeds cache | test_01 | VM Running; ROOT `storageid` = pool; `template_spool_ref` Ready/DOWNLOADED | Cache file present at spool `install_path` | positive |
+| 03 | `test_03_assert_single_spool_ref_and_cache` | Exactly one spool_ref + cache object | test_02 | One `template_spool_ref` row | Cache file still present | positive |
+| 04 | `test_04_deploy_vm2_reuses_cache` | Deploy VM-2 — reuses cache | test_03 | Still one spool_ref; VM-2 Running; ROOT on pool | Same cache file (no second cache) | positive |
+| 05 | `test_05_destroy_vms_cache_survives` | Expunge VMs — cache must remain (lazy GC) | test_04 | spool_ref still Ready | Cache file still present | positive |
+| 06 | `test_06_cleanup_pool_and_offering` | Delete SO; force-delete pool | test_05 | Pool gone | FlexVol deleted | cleanup |
+
+---
+
+## Suite 12 — iSCSI Template Cache
+
+**File:** `iscsi/template/test_template_cache.py`
+**Class:** `TestOntapIscsiTemplateCache`
+**Tag:** `iscsi_template_cache`
+**Total:** 6 tests | **Scope:** ROOT on tagged iSCSI ONTAP pool; `cs_tmpl_<templateId>` LUN cache
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_create_tagged_pool_and_service_offering` | Create iSCSI pool + tagged SO | setUpClass | Pool `Up`; SO created | FlexVol `online` | positive |
+| 02 | `test_02_deploy_vm1_seeds_template_cache` | Deploy VM-1 — seeds `cs_tmpl_*` + ROOT LUN | test_01 | VM Running; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | LUN `/vol/<flex>/cs_tmpl_<id>` exists; ≥1 volume LUN | positive |
+| 03 | `test_03_assert_single_spool_ref_and_cache` | Exactly one spool_ref + one cache LUN | test_02 | One spool_ref | Exactly one `cs_tmpl_*` LUN | positive |
+| 04 | `test_04_deploy_vm2_reuses_cache` | Deploy VM-2 — reuse cache | test_03 | Still one spool_ref | Still one `cs_tmpl_*`; volume LUN count +1 | positive |
+| 05 | `test_05_destroy_vms_cache_survives` | Expunge VMs — cache LUN remains | test_04 | spool_ref still Ready | Volume LUNs gone; `cs_tmpl_*` still present | positive |
+| 06 | `test_06_cleanup_pool_and_offering` | Delete SO; force-delete pool | test_05 | Pool gone | FlexVol deleted | cleanup |
+
+---
+
+## Suite 13 — NFS3 Template Cache Negative / Boundary
+
+**File:** `nfs3/template/test_template_cache_negative.py`
+**Class:** `TestOntapNfs3TemplateCacheNegative`
+**Tag:** `nfs3_template_cache_negative`
+**Total:** 3 tests | **Scope:** Boundary conditions for NFS3 primary template cache (isolated from happy path)
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | Deploy may succeed elsewhere; ROOT not on ONTAP pool; no `template_spool_ref` for pool | No cache file for template on FlexVol | negative |
+| 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but `capacitybytes` ≪ template size | setUpClass | Deploy fails / never Running; spool_ref not Ready/DOWNLOADED | No cache file | negative |
+| 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete file out-of-band, redeploy | setUpClass | spool_ref still Ready after ONTAP delete; second deploy fails | Cache file absent after delete | negative |
+
+---
+
+## Suite 14 — iSCSI Template Cache Negative / Boundary
+
+**File:** `iscsi/template/test_template_cache_negative.py`
+**Class:** `TestOntapIscsiTemplateCacheNegative`
+**Tag:** `iscsi_template_cache_negative`
+**Total:** 3 tests | **Scope:** Boundary conditions for iSCSI primary template cache (isolated from happy path)
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+|---|-------------|------|------------|-----------------------------|------------------------|------|
+| 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | ROOT not on ONTAP pool; no `template_spool_ref` | No `cs_tmpl_*` LUN | negative |
+| 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but undersized capacity | setUpClass | Deploy fails; spool_ref not Ready/DOWNLOADED | No `cs_tmpl_*` LUN | negative |
+| 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete LUN out-of-band, redeploy | setUpClass | spool_ref still Ready; second deploy fails | `cs_tmpl_*` absent after delete | negative |
+
+---
+
 ## Cross-suite summary
 
 | Suite | Protocol | Scope | Tests | Status |
@@ -232,9 +298,13 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
+| NFS3 Template Cache | NFS3 | Cluster | 6 | 🆕 |
+| NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 8 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
-| **Total** | | | **62** | **61 passing** |
+| iSCSI Template Cache | iSCSI | Cluster | 6 | 🆕 |
+| iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
+| **Total** | | | **80** | |
