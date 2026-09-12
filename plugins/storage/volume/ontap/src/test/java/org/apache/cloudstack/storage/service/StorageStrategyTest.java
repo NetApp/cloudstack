@@ -35,6 +35,7 @@ import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
+import org.apache.cloudstack.storage.feign.model.Cluster;
 import org.apache.cloudstack.storage.feign.model.ClusterNode;
 import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
@@ -285,7 +286,8 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testGetClusterModel_dedupesIdenticalNodeModels() {
+    public void testGetClusterInfo_dedupesIdenticalNodeModels() {
+        Cluster cluster = stubClusterGet();
         ClusterNode node1 = new ClusterNode();
         node1.setModel("AFF-A400");
         ClusterNode node2 = new ClusterNode();
@@ -293,11 +295,14 @@ public class StorageStrategyTest {
         when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
                 .thenReturn(new OntapResponse<>(List.of(node1, node2)));
 
-        assertEquals("AFF-A400", storageStrategy.getClusterModel());
+        Cluster result = storageStrategy.getClusterInfo();
+        assertEquals(cluster, result);
+        assertEquals("AFF-A400", result.getModel());
     }
 
     @Test
-    public void testGetClusterModel_joinsDistinctModels() {
+    public void testGetClusterInfo_joinsDistinctModels() {
+        stubClusterGet();
         ClusterNode node1 = new ClusterNode();
         node1.setModel("AFF-A400");
         ClusterNode node2 = new ClusterNode();
@@ -305,15 +310,88 @@ public class StorageStrategyTest {
         when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
                 .thenReturn(new OntapResponse<>(List.of(node1, node2)));
 
-        assertEquals("AFF-A400,FAS8300", storageStrategy.getClusterModel());
+        assertEquals("AFF-A400,FAS8300", storageStrategy.getClusterInfo().getModel());
     }
 
     @Test
-    public void testGetClusterModel_failureReturnsNull() {
+    public void testGetClusterInfo_allFlashPerformance() {
+        stubClusterGet();
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("AFF-A400", true, true, false))));
+
+        Cluster result = storageStrategy.getClusterInfo();
+        assertEquals("AFF-A400", result.getModel());
+        assertEquals(OntapStorageConstants.ASUP_PLATFORM_TYPE_PERFORMANCE, result.getPlatformType());
+    }
+
+    @Test
+    public void testGetClusterInfo_allFlashCapacity() {
+        stubClusterGet();
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-C800", true, false, true),
+                        clusterNode("AFF-C800", true, false, true))));
+
+        Cluster result = storageStrategy.getClusterInfo();
+        assertEquals("AFF-C800", result.getModel());
+        assertEquals(OntapStorageConstants.ASUP_PLATFORM_TYPE_CAPACITY, result.getPlatformType());
+    }
+
+    @Test
+    public void testGetClusterInfo_notAllFlashIsFas() {
+        stubClusterGet();
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("FAS8300", false, false, false),
+                        clusterNode("FAS8300", false, false, false))));
+
+        Cluster result = storageStrategy.getClusterInfo();
+        assertEquals("FAS8300", result.getModel());
+        assertEquals(OntapStorageConstants.ASUP_PLATFORM_TYPE_FAS, result.getPlatformType());
+    }
+
+    @Test
+    public void testGetClusterInfo_mixedPersonalitiesIsComposite() {
+        stubClusterGet();
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("FAS8300", false, false, false),
+                        clusterNode("FAS8300", false, false, false))));
+
+        Cluster result = storageStrategy.getClusterInfo();
+        assertEquals("AFF-A400,FAS8300", result.getModel());
+        assertEquals(OntapStorageConstants.ASUP_PLATFORM_TYPE_COMPOSITE, result.getPlatformType());
+    }
+
+    @Test
+    public void testGetClusterInfo_nodesGetFailureLeavesModelUnset() {
+        stubClusterGet();
         when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
                 .thenThrow(new RuntimeException("connection refused"));
 
-        assertNull(storageStrategy.getClusterModel());
+        Cluster result = storageStrategy.getClusterInfo();
+        assertNotNull(result);
+        assertNull(result.getModel());
+        assertNull(result.getPlatformType());
+    }
+
+    private Cluster stubClusterGet() {
+        Cluster cluster = new Cluster();
+        when(clusterFeignClient.getCluster(anyString(), eq(true))).thenReturn(cluster);
+        return cluster;
+    }
+
+    private static ClusterNode clusterNode(String model, Boolean allFlash, Boolean performance, Boolean capacity) {
+        ClusterNode node = new ClusterNode();
+        node.setModel(model);
+        node.setAllFlashOptimized(allFlash);
+        node.setPerformanceOptimized(performance);
+        node.setCapacityOptimized(capacity);
+        return node;
     }
 
     @Test

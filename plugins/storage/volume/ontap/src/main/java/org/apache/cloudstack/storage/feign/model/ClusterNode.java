@@ -24,7 +24,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * Subset of {@code GET /api/cluster/nodes} used for ASUP heartbeat (hardware model).
+ * Subset of {@code GET /api/cluster/nodes} used for ASUP
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -33,11 +33,44 @@ public class ClusterNode {
     @JsonProperty("model")
     private String model;
 
+    @JsonProperty("is_all_flash_optimized")
+    private Boolean allFlashOptimized;
+
+    @JsonProperty("is_performance_optimized")
+    private Boolean performanceOptimized;
+
+    @JsonProperty("is_capacity_optimized")
+    private Boolean capacityOptimized;
+
     public String getModel() {
         return model;
     }
 
     public void setModel(String model) {
         this.model = model;
+    }
+
+    public Boolean getAllFlashOptimized() {
+        return allFlashOptimized;
+    }
+
+    public void setAllFlashOptimized(Boolean allFlashOptimized) {
+        this.allFlashOptimized = allFlashOptimized;
+    }
+
+    public Boolean getPerformanceOptimized() {
+        return performanceOptimized;
+    }
+
+    public void setPerformanceOptimized(Boolean performanceOptimized) {
+        this.performanceOptimized = performanceOptimized;
+    }
+
+    public Boolean getCapacityOptimized() {
+        return capacityOptimized;
+    }
+
+    public void setCapacityOptimized(Boolean capacityOptimized) {
+        this.capacityOptimized = capacityOptimized;
     }
 }

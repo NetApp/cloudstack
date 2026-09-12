@@ -59,12 +59,11 @@ public class OntapStorageConstants {
     public static final String JOB_SUCCESS = "success";
 
     public static final String TRUE = "true";
-    public static final String FALSE = "false";
 
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
-    public static final String CLUSTER_NODE_MODEL = "model";
+    public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_performance_optimized,is_capacity_optimized";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
@@ -170,6 +169,11 @@ public class OntapStorageConstants {
     public static final String ASUP_PLATFORM = "platform";
     public static final String ASUP_ONTAP_VERSION = "ontapVersion";
     public static final String ASUP_ONTAP_CLUSTER_MODEL = "ontapClusterModel";
+    public static final String ASUP_ONTAP_PLATFORM_TYPE = "ontapPlatformType";
+    public static final String ASUP_PLATFORM_TYPE_PERFORMANCE = "performance";
+    public static final String ASUP_PLATFORM_TYPE_CAPACITY = "capacity";
+    public static final String ASUP_PLATFORM_TYPE_FAS = "fas";
+    public static final String ASUP_PLATFORM_TYPE_COMPOSITE = "composite";
     public static final String ASUP_CLUSTER_UUID = "clusterUuid";
     public static final String ASUP_MANAGEMENT_SERVER_COUNT = "managementServerCount";
     /** Event-id 0 field: VM snapshots spanning multiple ONTAP pools (consistency group). */

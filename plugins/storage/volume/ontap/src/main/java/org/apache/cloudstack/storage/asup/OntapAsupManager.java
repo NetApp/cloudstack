@@ -282,19 +282,15 @@ public class OntapAsupManager extends ManagerBase {
     /**
      * Pushes the heartbeat (event-id 0) and pool (event-id 1) ASUP messages for a single pool.
      *
-     * <p>{@code clientsByStorageIp} is the per-cycle cache. It is keyed by management
-     * {@code storageIP} and also reused when a later pool's {@code GET /api/cluster} returns the
-     * same cluster UUID (two IPs, one ONTAP). A miss builds the strategy, GETs cluster info and
-     * node model, and sends event-0; a hit reuses that client and skips those calls and event-0.
-     * Event-1 is always sent. SVM name in the payload still comes from this pool's details.</p>
+     * <p>{@code clientsByStorageIp} is the per-cycle cache keyed by management {@code storageIP}.
+     * A miss builds the strategy, GETs cluster info and node model, and sends event-0. A hit
+     * reuses that client and skips those calls and event-0. Event-1 is always sent. SVM name
+     * in the payload still comes from this pool's details.</p>
      *
      * <p>Best-effort: any failure is logged and swallowed.</p>
      */
     protected void pushAsupForStoragePool(StoragePoolVO pool, Map<String, AsupClusterClient> clientsByStorageIp) {
         try {
-            StorageStrategy strategy;
-            Cluster cluster;
-            boolean sendHeartbeat;
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(pool.getId());
             if (details == null || details.isEmpty()) {
                 logger.warn("ONTAP ASUP: storage pool [{}] has no details; skipping.", pool.getId());
@@ -304,27 +300,18 @@ public class OntapAsupManager extends ManagerBase {
             String storageIp = details.get(OntapStorageConstants.STORAGE_IP);
             AsupClusterClient asupClusterClient = StringUtils.isNotBlank(storageIp)
                     ? clientsByStorageIp.get(storageIp) : null;
-            if (asupClusterClient != null) {
-                strategy = asupClusterClient.strategy;
-                cluster = asupClusterClient.cluster;
-                sendHeartbeat = false;
-            } else {
-                strategy = OntapStorageUtils.resolveStrategyFromPoolDetails(details);
-                cluster = strategy.getClusterInfo();
-                AsupClusterClient sameCluster = findCachedClientForCluster(clientsByStorageIp, cluster);
-                if (sameCluster != null) {
-                    strategy = sameCluster.strategy;
-                    cluster = sameCluster.cluster;
-                    asupClusterClient = sameCluster;
-                    sendHeartbeat = false;
-                } else {
-                    asupClusterClient = new AsupClusterClient(strategy, cluster, strategy.getClusterModel());
-                    sendHeartbeat = true;
-                }
+            boolean sendHeartbeat = asupClusterClient == null;
+            if (asupClusterClient == null) {
+                StorageStrategy strategy = OntapStorageUtils.resolveStrategyFromPoolDetails(details);
+                Cluster cluster = strategy.getClusterInfo();
+                asupClusterClient = new AsupClusterClient(strategy, cluster);
                 if (StringUtils.isNotBlank(storageIp)) {
                     clientsByStorageIp.put(storageIp, asupClusterClient);
                 }
             }
+
+            StorageStrategy strategy = asupClusterClient.strategy;
+            Cluster cluster = asupClusterClient.cluster;
             String ontapVersion = strategy.getClusterVersion(cluster);
             String clusterUuid = cluster != null ? cluster.getUuid() : null;
             String cloudStackVersion = getCloudStackVersion();
@@ -334,11 +321,11 @@ public class OntapAsupManager extends ManagerBase {
                 EmsApplicationLog heartbeat = buildBaseMessage(computerName, cloudStackVersion);
                 heartbeat.setEventId(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT);
                 heartbeat.setEventDescription(buildHeartbeatDescription(
-                        cloudStackVersion, ontapVersion, asupClusterClient.clusterModel, clusterUuid));
+                        cloudStackVersion, ontapVersion, cluster));
                 strategy.sendAsupMessage(heartbeat);
             } else {
-                logger.debug("ONTAP ASUP: heartbeat already sent this cycle for cluster [{}]; skipping for pool [{}]",
-                        defaultUnknown(clusterUuid), pool.getId());
+                logger.debug("ONTAP ASUP: heartbeat already sent this cycle for storage IP [{}]; skipping for pool [{}]",
+                        storageIp, pool.getId());
             }
 
             // event-id 1: CloudStack storage pool -> backing ONTAP volume mapping, once per pool.
@@ -362,17 +349,21 @@ public class OntapAsupManager extends ManagerBase {
      * and the ONTAP cluster UUID.
      * Example: {@code {"message":"CloudStack connected to ONTAP cluster","cloudstackVersion":
      * "4.23.0.0","platform":"Linux 5.15.0-91-generic (amd64)","ontapVersion":"9.17.1",
-     * "ontapClusterModel":"AFF-A400","clusterUuid":"...","managementServerCount":2}}
+     * "ontapClusterModel":"AFF-A400","ontapPlatformType":"performance","clusterUuid":"...",
+     * "managementServerCount":2}}
      */
-    private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion,
-            String ontapClusterModel, String clusterUuid) {
+    private String buildHeartbeatDescription(String cloudStackVersion, String ontapVersion, Cluster cluster) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put(OntapStorageConstants.ASUP_MESSAGE, OntapStorageConstants.ASUP_HEARTBEAT_MESSAGE);
         payload.put(OntapStorageConstants.ASUP_CLOUDSTACK_VERSION, defaultUnknown(cloudStackVersion));
         payload.put(OntapStorageConstants.ASUP_PLATFORM, getOperatingSystem());
         payload.put(OntapStorageConstants.ASUP_ONTAP_VERSION, defaultUnknown(ontapVersion));
-        payload.put(OntapStorageConstants.ASUP_ONTAP_CLUSTER_MODEL, defaultUnknown(ontapClusterModel));
-        payload.put(OntapStorageConstants.ASUP_CLUSTER_UUID, defaultUnknown(clusterUuid));
+        payload.put(OntapStorageConstants.ASUP_ONTAP_CLUSTER_MODEL,
+                defaultUnknown(cluster != null ? cluster.getModel() : null));
+        payload.put(OntapStorageConstants.ASUP_ONTAP_PLATFORM_TYPE,
+                defaultUnknown(cluster != null ? cluster.getPlatformType() : null));
+        payload.put(OntapStorageConstants.ASUP_CLUSTER_UUID,
+                defaultUnknown(cluster != null ? cluster.getUuid() : null));
         payload.put(OntapStorageConstants.ASUP_MANAGEMENT_SERVER_COUNT, getManagementServerCount());
         return toJson(payload);
     }
@@ -659,40 +650,16 @@ public class OntapAsupManager extends ManagerBase {
     }
 
     /**
-     * Already-seen client for this ASUP cycle: same {@code storageIP}, or a different IP whose
-     * {@code GET /api/cluster} returned the same UUID. Discarded when the cycle ends.
-     */
-    static AsupClusterClient findCachedClientForCluster(Map<String, AsupClusterClient> clientsByStorageIp,
-            Cluster cluster) {
-        if (cluster == null || StringUtils.isBlank(cluster.getUuid()) || clientsByStorageIp == null) {
-            return null;
-        }
-        for (AsupClusterClient client : clientsByStorageIp.values()) {
-            if (client != null && client.cluster != null
-                    && cluster.getUuid().equals(client.cluster.getUuid())) {
-                return client;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * One ONTAP cluster HTTP client plus the cluster GET and node-model GET for this ASUP cycle.
-     * Discarded when the cycle ends.
+     * One ONTAP cluster HTTP client plus the cluster GET and node-model GET for this ASUP cycle,
+     * keyed by {@code storageIP}. Discarded when the cycle ends.
      */
     static final class AsupClusterClient {
         final StorageStrategy strategy;
         final Cluster cluster;
-        final String clusterModel;
 
         AsupClusterClient(StorageStrategy strategy, Cluster cluster) {
-            this(strategy, cluster, null);
-        }
-
-        AsupClusterClient(StorageStrategy strategy, Cluster cluster, String clusterModel) {
             this.strategy = strategy;
             this.cluster = cluster;
-            this.clusterModel = clusterModel;
         }
     }
 

@@ -122,20 +122,59 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Fetches the full ONTAP {@link Cluster} object (name, uuid, version) in a single REST call,
-     * for ASUP telemetry. Best-effort: returns {@code null} if it cannot be retrieved, and callers
-     * must never fail a storage operation because of it.
+     * Fetches the ONTAP {@link Cluster} (name, uuid, version) and, for ASUP, the rolled-up node
+     * {@code model} and {@code platformType} from {@code GET /api/cluster/nodes}. Best-effort:
+     * returns {@code null} if the cluster GET fails. Node fields are left unset if the nodes GET
+     * fails. Callers must never fail a storage operation because of this.
      *
      * @return the ONTAP {@link Cluster}, or {@code null} if it cannot be resolved
      */
     public Cluster getClusterInfo() {
         try {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            return clusterFeignClient.getCluster(authHeader, true);
+            Cluster cluster = clusterFeignClient.getCluster(authHeader, true);
+            if (cluster != null) {
+                populateNodeAsupFields(cluster, authHeader);
+            }
+            return cluster;
         } catch (Exception e) {
             logger.warn("getClusterInfo: failed to fetch ONTAP cluster info for storage IP {}: {}",
                     storage.getStorageIP(), e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Sets {@link Cluster#setModel(String)} and {@link Cluster#setPlatformType(String)} from one
+     * {@code GET /api/cluster/nodes}. Distinct models are joined with a comma. Platform type is
+     * {@code performance}, {@code capacity}, {@code fas}, or {@code composite} when personalities mix.
+     */
+    private void populateNodeAsupFields(Cluster cluster, String authHeader) {
+        try {
+            Map<String, Object> query = new HashMap<>();
+            query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_ASUP_FIELDS);
+            OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(authHeader, query);
+            if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+                return;
+            }
+            LinkedHashSet<String> models = new LinkedHashSet<>();
+            LinkedHashSet<String> platformTypes = new LinkedHashSet<>();
+            for (ClusterNode node : response.getRecords()) {
+                if (node == null) {
+                    continue;
+                }
+                if (node.getModel() != null && !node.getModel().isBlank()) {
+                    models.add(node.getModel().trim());
+                }
+                platformTypes.add(classifyNodePlatformType(node));
+            }
+            if (!models.isEmpty()) {
+                cluster.setModel(String.join(OntapStorageConstants.COMMA, models));
+            }
+            cluster.setPlatformType(rollupPlatformType(platformTypes));
+        } catch (Exception e) {
+            logger.warn("getClusterInfo: failed to fetch ONTAP node hardware for storage IP {}: {}",
+                    storage.getStorageIP(), e.getMessage());
         }
     }
 
@@ -165,34 +204,29 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Hardware model of the ONTAP cluster nodes (for example {@code AFF-A400}), for ASUP
-     * heartbeat. Distinct non-blank models are joined with a comma. Best-effort: returns
-     * {@code null} if the nodes GET fails or no model is present.
-     *
-     * @return unique node models, or {@code null} if they cannot be resolved
+     * Classifies one node: not all-flash → {@code fas}; all-flash + capacity → {@code capacity};
+     * otherwise all-flash (including performance-optimized or classic AFF) → {@code performance}.
      */
-    public String getClusterModel() {
-        try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            Map<String, Object> query = new HashMap<>();
-            query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_MODEL);
-            OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(authHeader, query);
-            if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
-                return null;
-            }
-            LinkedHashSet<String> models = new LinkedHashSet<>();
-            for (ClusterNode node : response.getRecords()) {
-                if (node == null || node.getModel() == null || node.getModel().isBlank()) {
-                    continue;
-                }
-                models.add(node.getModel().trim());
-            }
-            return models.isEmpty() ? null : String.join(OntapStorageConstants.COMMA, models);
-        } catch (Exception e) {
-            logger.warn("getClusterModel: failed to fetch ONTAP node model for storage IP {}: {}",
-                    storage.getStorageIP(), e.getMessage());
+    private static String classifyNodePlatformType(ClusterNode node) {
+        boolean allFlash = Boolean.TRUE.equals(node.getAllFlashOptimized());
+        boolean capacity = Boolean.TRUE.equals(node.getCapacityOptimized());
+        if (!allFlash) {
+            return OntapStorageConstants.ASUP_PLATFORM_TYPE_FAS;
+        }
+        if (capacity) {
+            return OntapStorageConstants.ASUP_PLATFORM_TYPE_CAPACITY;
+        }
+        return OntapStorageConstants.ASUP_PLATFORM_TYPE_PERFORMANCE;
+    }
+
+    private static String rollupPlatformType(LinkedHashSet<String> platformTypes) {
+        if (platformTypes == null || platformTypes.isEmpty()) {
             return null;
         }
+        if (platformTypes.size() == 1) {
+            return platformTypes.iterator().next();
+        }
+        return OntapStorageConstants.ASUP_PLATFORM_TYPE_COMPOSITE;
     }
 
     /**
