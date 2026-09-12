@@ -63,7 +63,7 @@ public class OntapStorageConstants {
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
-    public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_performance_optimized,is_capacity_optimized";
+    public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_capacity_optimized,is_perf_optimized";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";
