@@ -56,7 +56,7 @@ public interface SANFeignClient {
 
     @RequestLine("DELETE /api/storage/luns/{uuid}")
     @Headers({"Authorization: {authHeader}"})
-    void deleteLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, @QueryMap Map<String, Object> queryMap);
+    JobResponse deleteLun(@Param("authHeader") String authHeader, @Param("uuid") String uuid, @QueryMap Map<String, Object> queryMap);
 
     // iGroup Operation APIs
     @RequestLine("POST /api/protocols/san/igroups?return_records={returnRecords}")

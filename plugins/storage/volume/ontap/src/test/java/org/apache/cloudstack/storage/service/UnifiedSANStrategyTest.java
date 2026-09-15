@@ -395,7 +395,7 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            doNothing().when(sanFeignClient).deleteLun(eq(authHeader), eq("lun-uuid-123"), anyMap());
+            when(sanFeignClient.deleteLun(eq(authHeader), eq("lun-uuid-123"), anyMap())).thenReturn(null);
 
             // Execute
             unifiedSANStrategy.deleteCloudStackVolume(request);

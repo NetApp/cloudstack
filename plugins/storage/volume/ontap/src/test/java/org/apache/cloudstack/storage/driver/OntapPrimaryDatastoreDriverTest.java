@@ -937,6 +937,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertEquals("template-lun-uuid", requestCaptor.getValue().getLun().getClone().getSource().getUuid());
             verify(sanStrategy, never()).createCloudStackVolume(any());
             verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("cloned-lun-uuid"), eq(false));
         }
     }
@@ -1135,6 +1136,74 @@ class OntapPrimaryDatastoreDriverTest {
             assertEquals("template-uuid", requestCaptor.getValue().getFile().getPath());
             assertEquals("volume-uuid", requestCaptor.getValue().getDestinationPath());
             verify(nasStrategy, never()).resizeCloudStackVolume(any(), anyLong());
+            verify(nasStrategy, never()).updateCloudStackVolume(any());
+        }
+    }
+
+    @Test
+    void testCreateAsync_VolumeClonedFromTemplate_RootWithIops_SetsQosOnLunCreate() {
+        stubVolumeCloneFromTemplate(5368709120L, 5368709120L);
+        when(volumeInfo.getVolumeType()).thenReturn(Volume.Type.ROOT);
+        when(volumeInfo.getMinIops()).thenReturn(100L);
+        when(volumeInfo.getMaxIops()).thenReturn(200L);
+
+        Lun clonedLun = new Lun();
+        clonedLun.setName("/vol/vol1/test_volume");
+        clonedLun.setUuid("cloned-lun-uuid");
+        CloudStackVolume cloned = new CloudStackVolume();
+        cloned.setLun(clonedLun);
+        VolumeQosPolicy qosPolicy = qosPolicy("qos-root-uuid", "cs_100_to_200_iops_svm1");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            stubQosCreateMocks(utilityMock, sanStrategy, cloned, qosPolicy);
+            when(sanStrategy.cloneCloudStackVolume(any())).thenReturn(cloned);
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+            verify(sanStrategy).createVolumeQosPolicy(eq("cs_100_to_200_iops_svm1"), eq(100L), eq(200L));
+            verify(sanStrategy).cloneCloudStackVolume(argThat(request ->
+                    request.getLun() != null && request.getLun().getQosPolicy() != null
+                            && "qos-root-uuid".equals(request.getLun().getQosPolicy().getUuid())));
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
+            verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.QOS_POLICY_UUID),
+                    eq("qos-root-uuid"), eq(false));
+        }
+    }
+
+    @Test
+    void testCreateAsync_VolumeClonedFromTemplateNFS_RootWithIops_AttachesQosToFile() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
+        stubVolumeCloneFromTemplate(5368709120L, 5368709120L);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        when(volumeInfo.getUuid()).thenReturn("volume-uuid");
+        when(volumeInfo.getVolumeType()).thenReturn(Volume.Type.ROOT);
+        when(volumeInfo.getMinIops()).thenReturn(100L);
+        when(volumeInfo.getMaxIops()).thenReturn(200L);
+        when(templatePoolRef.getInstallPath()).thenReturn("template-uuid");
+
+        CloudStackVolume cloned = new CloudStackVolume();
+        VolumeQosPolicy qosPolicy = qosPolicy("qos-nfs-root-uuid", "cs_100_to_200_iops_svm1");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            stubQosCreateMocks(utilityMock, nasStrategy, cloned, qosPolicy);
+            when(nasStrategy.cloneCloudStackVolume(any())).thenReturn(cloned);
+            when(nasStrategy.updateCloudStackVolume(any())).thenReturn(cloned);
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+            verify(nasStrategy).createVolumeQosPolicy(eq("cs_100_to_200_iops_svm1"), eq(100L), eq(200L));
+            verify(nasStrategy).updateCloudStackVolume(argThat(request ->
+                    request.getFile() != null && request.getFile().getQosPolicy() != null
+                            && "qos-nfs-root-uuid".equals(request.getFile().getQosPolicy().getUuid())));
+            verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.QOS_POLICY_UUID),
+                    eq("qos-nfs-root-uuid"), eq(false));
         }
     }
 
