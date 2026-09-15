@@ -1021,13 +1021,11 @@ public abstract class StorageStrategy {
             JobResponse response = qosFeignClient.deletePolicy(getAuthHeader(), policyUuid);
             pollJobIfPresent(response, "delete QoS policy [" + policyUuid + "]");
         } catch (Exception e) {
-            if (isSkippableQosPolicyDeleteError(e)) {
-                logger.info("QoS policy [{}] was not deleted on ONTAP (already absent or still in use): {}",
+            if ((e instanceof FeignException && ((FeignException) e).status() == 409)
+                    || OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                logger.info("QoS policy [{}] was not deleted on ONTAP (already absent or conflict): {}",
                         policyUuid, e.getMessage());
                 return;
-            }
-            if (e instanceof CloudRuntimeException) {
-                throw (CloudRuntimeException) e;
             }
             throw new CloudRuntimeException("Failed to delete ONTAP QoS policy [" + policyUuid + "]: "
                     + e.getMessage(), e);
@@ -1051,14 +1049,6 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyUuid + "]: "
                     + e.getMessage(), e);
         }
-    }
-
-    private boolean isSkippableQosPolicyDeleteError(Throwable error) {
-        if (error instanceof FeignException && ((FeignException) error).status() == 409) {
-            return true;
-        }
-        return OntapStorageUtils.isOntapObjectNotFoundError(error)
-                || OntapStorageUtils.isOntapObjectInUseError(error);
     }
 
     private VolumeQosPolicy getVolumeQosPolicy(String policyName) {

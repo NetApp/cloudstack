@@ -237,7 +237,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
                     volumeObject.getMinIops(), volumeObject.getMaxIops(), storagePool.getId());
         }
-        CloudStackVolume request = OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
+        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
                 storagePool, details, volumeObject, qosPolicy);
         try {
             CloudStackVolume created = storageStrategy.createCloudStackVolume(request);
@@ -772,7 +772,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private void attachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
                                  Map<String, String> details, VolumeInfo volumeInfo,
                                  VolumeQosPolicy qosPolicy) {
-        CloudStackVolume request = OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
+        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
                 storagePool, details, volumeInfo, qosPolicy);
         if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
             VolumeDetailVO lunUuid = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
@@ -1585,34 +1585,56 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Builds the request that creates a blank volume (LUN for iSCSI, qcow2 file for NFS).
+     * Builds the request that creates or updates a volume (LUN for iSCSI, qcow2 file for NFS),
+     * attaching a QoS policy reference when one is provided.
      */
-    private CloudStackVolume createVolumeRequest(StoragePoolVO storagePool, Map<String, String> details, DataObject volumeObject) {
-        CloudStackVolume request = new CloudStackVolume();
-        String protocol = details.get(OntapStorageConstants.PROTOCOL);
-        if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
-            request.setDatastoreId(String.valueOf(storagePool.getId()));
-            request.setVolumeInfo(volumeObject);
-        } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-            Lun lunRequest = new Lun();
-            Svm svm = new Svm();
-            svm.setName(details.get(OntapStorageConstants.SVM_NAME));
-            String lunName = volumeObject.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
-            if (!OntapStorageUtils.isValidName(lunName)) {
-                throw new InvalidParameterValueException("Invalid dataObject name [" + lunName
-                        + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.");
-            }
-            lunRequest.setSvm(svm);
-            lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
-            lunRequest.setOsType(Lun.OsTypeEnum.valueOf(OntapStorageUtils.getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
-            LunSpace lunSpace = new LunSpace();
-            lunSpace.setSize(volumeObject.getSize());
-            lunRequest.setSpace(lunSpace);
-            request.setLun(lunRequest);
-        } else {
-            throw new CloudRuntimeException("Unsupported protocol " + protocol);
+    private CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details,
+                                                                     DataObject volumeObject, VolumeQosPolicy qosPolicy) {
+        VolumeQosPolicy qosPolicyReference = null;
+        if (qosPolicy != null) {
+            qosPolicyReference = new VolumeQosPolicy();
+            qosPolicyReference.setName(qosPolicy.getName());
+            qosPolicyReference.setUuid(qosPolicy.getUuid());
         }
-        return request;
+
+        String protocol = details.get(OntapStorageConstants.PROTOCOL);
+        ProtocolType protocolType = ProtocolType.valueOf(protocol);
+        switch (protocolType) {
+            case NFS3:
+                CloudStackVolume nfsRequest = new CloudStackVolume();
+                nfsRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                nfsRequest.setFlexVolumeUuid(details.get(OntapStorageConstants.VOLUME_UUID));
+                nfsRequest.setVolumeInfo(volumeObject);
+                if (qosPolicyReference != null) {
+                    FileInfo fileInfo = new FileInfo();
+                    fileInfo.setQosPolicy(qosPolicyReference);
+                    nfsRequest.setFile(fileInfo);
+                }
+                return nfsRequest;
+            case ISCSI:
+                Svm svm = new Svm();
+                svm.setName(details.get(OntapStorageConstants.SVM_NAME));
+                CloudStackVolume iscsiRequest = new CloudStackVolume();
+                Lun lunRequest = new Lun();
+                lunRequest.setSvm(svm);
+
+                LunSpace lunSpace = new LunSpace();
+                lunSpace.setSize(volumeObject.getSize());
+                lunRequest.setSpace(lunSpace);
+                String lunName = volumeObject.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
+                if (!OntapStorageUtils.isValidName(lunName)) {
+                    throw new InvalidParameterValueException("Invalid dataObject name [" + lunName
+                            + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.");
+                }
+                lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
+                lunRequest.setOsType(Lun.OsTypeEnum.valueOf(
+                        OntapStorageUtils.getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
+                lunRequest.setQosPolicy(qosPolicyReference);
+                iscsiRequest.setLun(lunRequest);
+                return iscsiRequest;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol " + protocol);
+        }
     }
 
     /**
