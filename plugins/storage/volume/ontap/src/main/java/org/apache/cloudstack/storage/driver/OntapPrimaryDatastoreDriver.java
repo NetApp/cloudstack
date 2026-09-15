@@ -18,31 +18,14 @@
  */
 package org.apache.cloudstack.storage.driver;
 
-import org.apache.cloudstack.storage.utils.OntapStorageConstants;
-import com.cloud.agent.api.Answer;
-import com.cloud.agent.api.to.DataObjectType;
-import com.cloud.agent.api.to.DataStoreTO;
-import com.cloud.agent.api.to.DataTO;
-import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.host.Host;
-import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor.HypervisorType;
-import com.cloud.storage.Storage;
-import com.cloud.storage.StoragePool;
-import com.cloud.storage.Volume;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.VolumeVO;
-import com.cloud.storage.ScopeType;
-import com.cloud.storage.SnapshotVO;
-import com.cloud.storage.VMTemplateStoragePoolVO;
-import com.cloud.storage.dao.SnapshotDao;
-import com.cloud.storage.dao.SnapshotDetailsDao;
-import com.cloud.storage.dao.SnapshotDetailsVO;
-import com.cloud.storage.dao.VMTemplatePoolDao;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.Pair;
-import com.cloud.utils.exception.CloudRuntimeException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
@@ -55,7 +38,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver
 import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.command.CreateObjectAnswer;
@@ -78,17 +60,38 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
+import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.to.DataObjectType;
+import com.cloud.agent.api.to.DataStoreTO;
+import com.cloud.agent.api.to.DataTO;
+import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.host.Host;
+import com.cloud.host.HostVO;
+import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.storage.ResizeVolumePayload;
+import com.cloud.storage.ScopeType;
+import com.cloud.storage.SnapshotVO;
+import com.cloud.storage.Storage;
+import com.cloud.storage.StoragePool;
+import com.cloud.storage.VMTemplateStoragePoolVO;
+import com.cloud.storage.Volume;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.SnapshotDao;
+import com.cloud.storage.dao.SnapshotDetailsDao;
+import com.cloud.storage.dao.SnapshotDetailsVO;
+import com.cloud.storage.dao.VMTemplatePoolDao;
+import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
+import com.cloud.utils.Pair;
+import com.cloud.utils.exception.CloudRuntimeException;
 
 /**
  * Primary datastore driver for NetApp ONTAP storage systems.
@@ -596,7 +599,62 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+        CreateCmdResult result = null;
+        try {
+            VolumeInfo volumeInfo = (VolumeInfo) data;
+            ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
+            if (payload == null || payload.newSize == null) {
+                throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
+            }
+
+            StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
+            if (storagePool == null) {
+                throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
+            }
+            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+
+            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+            VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
+            if (volumeVO == null) {
+                throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
+            }
+            if (payload.newSize < volumeVO.getSize()) {
+                throw new CloudRuntimeException(String.format(
+                        "Storage pool %s does not support shrinking a volume.", storagePool.getName()));
+            }
+
+            CloudStackVolume cloudStackVolume = new CloudStackVolume();
+            cloudStackVolume.setVolumeInfo(volumeInfo);
+
+            if (ProtocolType.ISCSI.name().equals(details.get(OntapStorageConstants.PROTOCOL))) {
+                VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
+                if (lunUuidDetail == null || lunUuidDetail.getValue() == null) {
+                    throw new CloudRuntimeException("LUN UUID not found in volume details for volume " + volumeInfo.getId());
+                }
+                Lun lun = new Lun();
+                lun.setUuid(lunUuidDetail.getValue());
+                cloudStackVolume.setLun(lun);
+            }
+
+            // delegates to UnifiedSANStrategy (PATCH /api/storage/luns/{uuid}) for iSCSI
+            // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3
+            storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
+
+            volumeVO.setSize(payload.newSize);
+            volumeDao.update(volumeVO.getId(), volumeVO);
+
+            result = new CreateCmdResult(null, new Answer(null, true, null));
+            logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
+        } catch (Exception e) {
+            String errMsg = e.getMessage();
+            logger.error("resize: Failed for volume [{}]: {}", data.getId(), errMsg, e);
+            result = new CreateCmdResult(null, new Answer(null, false, errMsg));
+            result.setResult(errMsg);
+        } finally {
+            callback.complete(result);
+        }
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -1018,9 +1076,46 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return StringUtils.isNotBlank(templatePoolRef.getInstallPath());
     }
 
+    /**
+     * Returns the bytes available on the FlexVolume backing this pool, read directly from ONTAP
+     * ({@code space.available}).
+     *
+     * <p>Returns {@code 0} if the FlexVolume UUID is not yet recorded in pool details, or if the
+     * ONTAP REST call fails for any reason (array unreachable, auth error, etc.).</p>
+     */
     @Override
     public long getUsedBytes(StoragePool storagePool) {
-        return 0;
+        if (storagePool == null) {
+            return 0;
+        }
+
+        try {
+            Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+            String flexVolUuid = poolDetails != null ? poolDetails.get(OntapStorageConstants.VOLUME_UUID) : null;
+
+            if (StringUtils.isBlank(flexVolUuid)) {
+                logger.warn("getUsedBytes: No FlexVolume UUID recorded for pool [{}]; returning 0",
+                        storagePool.getId());
+                return 0;
+            }
+
+            StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
+            var flexVol = strategy.getStorageVolume(flexVolUuid);
+
+            if (flexVol == null || flexVol.getSpace() == null) {
+                logger.warn("getUsedBytes: FlexVolume [{}] not found or has no space info for pool [{}]; returning 0",
+                        flexVolUuid, storagePool.getId());
+                return 0;
+            }
+
+            logger.debug("getUsedBytes: FlexVolume [{}] backing pool [{}] reports {} bytes used",
+                    flexVolUuid, storagePool.getId(), flexVol.getSpace().getUsed());
+            return flexVol.getSpace().getUsed();
+        } catch (Exception e) {
+            logger.warn("getUsedBytes: Could not read used space from ONTAP for pool [{}]; returning 0",
+                    storagePool.getId(), e);
+            return 0;
+        }
     }
 
     @Override
