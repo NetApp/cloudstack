@@ -1,0 +1,8 @@
+config.yaml
+config_sanity.yaml
+.venv/
+__pycache__/
+*.pyc
+results/*.csv
+results/*.md
+results/*.log
