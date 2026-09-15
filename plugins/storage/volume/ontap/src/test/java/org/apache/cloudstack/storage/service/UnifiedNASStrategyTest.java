@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.service;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.host.HostVO;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.exception.CloudRuntimeException;
@@ -1028,6 +1029,40 @@ public class UnifiedNASStrategyTest {
         VolumeVO volumeVO = mock(VolumeVO.class);
         StoragePoolVO storagePool = mock(StoragePoolVO.class);
         EndPoint endPoint = mock(EndPoint.class);
+        ResizeVolumePayload payload = new ResizeVolumePayload(
+                21474836480L, null, null, null, false, "i-2-VM", null, false);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeObject.getpayload()).thenReturn(payload);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("volume-uuid");
+        when(volumeVO.getSize()).thenReturn(5368709120L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(new Answer(null, true, "Success"));
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        strategy.resizeCloudStackVolume(request, 21474836480L);
+
+        ArgumentCaptor<ResizeVolumeCommand> commandCaptor = ArgumentCaptor.forClass(ResizeVolumeCommand.class);
+        verify(endPoint).sendMessage(commandCaptor.capture());
+        ResizeVolumeCommand command = commandCaptor.getValue();
+        assertEquals("volume-uuid", command.getPath());
+        assertEquals(5368709120L, command.getCurrentSize());
+        assertEquals(21474836480L, command.getNewSize());
+        assertEquals("i-2-VM", command.getInstanceName());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_WithoutPayloadUsesDetachedInstanceName() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
 
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid");
@@ -1044,7 +1079,43 @@ public class UnifiedNASStrategyTest {
 
         strategy.resizeCloudStackVolume(request, 21474836480L);
 
-        verify(endPoint).sendMessage(any(ResizeVolumeCommand.class));
+        ArgumentCaptor<ResizeVolumeCommand> commandCaptor = ArgumentCaptor.forClass(ResizeVolumeCommand.class);
+        verify(endPoint).sendMessage(commandCaptor.capture());
+        assertEquals("none", commandCaptor.getValue().getInstanceName());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_AgentFailureThrowsException() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class)))
+                .thenReturn(new Answer(null, false, "qemu-img resize failed"));
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+        assertEquals("qemu-img resize failed", exception.getMessage());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_InvalidSizeDoesNotSendCommand() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(request, 0L));
+
+        verify(epSelector, never()).select(any(org.apache.cloudstack.engine.subsystem.api.storage.DataObject.class));
     }
 
     @Test
@@ -1131,6 +1202,47 @@ public class UnifiedNASStrategyTest {
         CloudStackVolume withVol = new CloudStackVolume();
         withVol.setVolumeInfo(volumeObject);
         assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(withVol, 0L));
+    }
+
+    // =========================================================================
+    // getStorageVolume(String uuid) tests – exercising the new overload added
+    // to StorageStrategy that fetches a FlexVolume by UUID from ONTAP REST API
+    // =========================================================================
+
+    @Test
+    public void testGetStorageVolume_ByUuid_Success() {
+        org.apache.cloudstack.storage.feign.model.Volume expected =
+                new org.apache.cloudstack.storage.feign.model.Volume();
+        expected.setUuid("flexvol-uuid-123");
+
+        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("flexvol-uuid-123"))).thenReturn(expected);
+
+        org.apache.cloudstack.storage.feign.model.Volume result = strategy.getStorageVolume("flexvol-uuid-123");
+
+        assertNotNull(result);
+        assertEquals("flexvol-uuid-123", result.getUuid());
+        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-123"));
+    }
+
+    @Test
+    public void testGetStorageVolume_ByUuid_NotFound_ReturnsNull() {
+        FeignException notFound = mock(FeignException.class);
+        when(notFound.status()).thenReturn(404);
+        doThrow(notFound).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("missing-uuid"));
+
+        org.apache.cloudstack.storage.feign.model.Volume result = strategy.getStorageVolume("missing-uuid");
+
+        assertNull(result);
+    }
+
+    @Test
+    public void testGetStorageVolume_ByUuid_ServerError_Throws() {
+        FeignException serverError = mock(FeignException.class);
+        when(serverError.status()).thenReturn(500);
+        when(serverError.getMessage()).thenReturn("Internal Server Error");
+        doThrow(serverError).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-999"));
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.getStorageVolume("flexvol-uuid-999"));
     }
 
     @Test
