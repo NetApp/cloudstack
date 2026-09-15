@@ -295,4 +295,29 @@ public class OntapStorageUtils {
         return false;
     }
 
+    /**
+     * Returns true when ONTAP rejected the operation because the object is still assigned.
+     */
+    public static boolean isOntapObjectInUseError(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        String text = error.getMessage();
+        if (error instanceof FeignException) {
+            try {
+                String body = ((FeignException) error).contentUTF8();
+                if (body != null && !body.isBlank()) {
+                    text = text == null ? body : text + " " + body;
+                }
+            } catch (RuntimeException ignored) {
+                // Mocked Feign responses may not expose a body.
+            }
+        }
+        if (text == null) {
+            return false;
+        }
+        String lower = text.toLowerCase();
+        return lower.contains("in use") || lower.contains("being used") || lower.contains("still assigned");
+    }
+
 }

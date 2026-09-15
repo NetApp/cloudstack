@@ -1371,8 +1371,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         VolumeDetailVO qosDetail = new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
-        when(volumeDetailsDao.findDetails(eq(OntapStorageConstants.QOS_POLICY_UUID), eq("qos-uuid"), isNull()))
-                .thenReturn(List.of(qosDetail));
         VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
 
@@ -1390,6 +1388,9 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
             verify(sanStrategy).updateCloudStackVolume(any());
+            utilityMock.verify(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
+                    any(), any(), any(), argThat(policy -> policy != null
+                            && OntapStorageConstants.QOS_POLICY_NONE.equals(policy.getName()))));
             verify(sanStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
     }
@@ -1815,8 +1816,6 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn(qosPolicy);
             when(sanStrategy.createCloudStackVolume(any())).thenThrow(new CloudRuntimeException(
                     "Failed to create Lun: {\"error\":{\"code\":\"8454269\"}}"));
-            when(volumeDetailsDao.findDetails(eq(OntapStorageConstants.QOS_POLICY_UUID), eq("qos-uuid"), isNull()))
-                    .thenReturn(List.of());
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
 
@@ -1842,8 +1841,6 @@ class OntapPrimaryDatastoreDriverTest {
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_NAME)).thenReturn(lunNameDetail);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
-        when(volumeDetailsDao.findDetails(eq(OntapStorageConstants.QOS_POLICY_UUID), eq("qos-uuid"), isNull()))
-                .thenReturn(List.of(qosDetail));
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -1856,7 +1853,6 @@ class OntapPrimaryDatastoreDriverTest {
             verify(commandCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
             verify(volumeDetailsDao).removeDetail(100L, OntapStorageConstants.QOS_POLICY_UUID);
-            verify(volumeDetailsDao).removeDetail(100L, OntapStorageConstants.QOS_POLICY_NAME);
             verify(sanStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
     }

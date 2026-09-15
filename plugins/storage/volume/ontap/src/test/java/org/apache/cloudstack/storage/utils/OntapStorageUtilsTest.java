@@ -154,4 +154,17 @@ public class OntapStorageUtilsTest {
         assertFalse(OntapStorageUtils.isOntapObjectNotFoundError(
                 new CloudRuntimeException("Job failed with error: permission denied")));
     }
+
+    @Test
+    public void isOntapObjectInUseError_matchesPolicyStillAssigned() {
+        CloudRuntimeException ex = new CloudRuntimeException(
+                "Job failed with error: The QoS policy group is in use by one or more objects.");
+        assertTrue(OntapStorageUtils.isOntapObjectInUseError(ex));
+    }
+
+    @Test
+    public void isOntapObjectInUseError_rejectsUnrelatedErrors() {
+        assertFalse(OntapStorageUtils.isOntapObjectInUseError(
+                new CloudRuntimeException("Job failed with error: permission denied")));
+    }
 }

@@ -1008,17 +1008,57 @@ public abstract class StorageStrategy {
         if (policyUuid == null || policyUuid.isEmpty()) {
             return;
         }
+        VolumeQosPolicy policy = getVolumeQosPolicyByUuid(policyUuid);
+        if (policy == null) {
+            return;
+        }
+        if (policy.getObjectCount() != null && policy.getObjectCount() > 0) {
+            logger.info("QoS policy [{}] still has object_count={}; skipping delete",
+                    policyUuid, policy.getObjectCount());
+            return;
+        }
         try {
             JobResponse response = qosFeignClient.deletePolicy(getAuthHeader(), policyUuid);
             pollJobIfPresent(response, "delete QoS policy [" + policyUuid + "]");
-        } catch (FeignException e) {
-            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
-                logger.info("QoS policy [{}] is already absent", policyUuid);
+        } catch (Exception e) {
+            if (isSkippableQosPolicyDeleteError(e)) {
+                logger.info("QoS policy [{}] was not deleted on ONTAP (already absent or still in use): {}",
+                        policyUuid, e.getMessage());
                 return;
+            }
+            if (e instanceof CloudRuntimeException) {
+                throw (CloudRuntimeException) e;
             }
             throw new CloudRuntimeException("Failed to delete ONTAP QoS policy [" + policyUuid + "]: "
                     + e.getMessage(), e);
         }
+    }
+
+    private VolumeQosPolicy getVolumeQosPolicyByUuid(String policyUuid) {
+        Map<String, Object> queryParams = new HashMap<>();
+        queryParams.put(OntapStorageConstants.UUID, policyUuid);
+        queryParams.put(OntapStorageConstants.FIELDS, OntapStorageConstants.QOS_POLICY_OBJECT_COUNT_FIELDS);
+        try {
+            OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
+            if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+                return null;
+            }
+            return response.getRecords().get(0);
+        } catch (FeignException e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                return null;
+            }
+            throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyUuid + "]: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private boolean isSkippableQosPolicyDeleteError(Throwable error) {
+        if (error instanceof FeignException && ((FeignException) error).status() == 409) {
+            return true;
+        }
+        return OntapStorageUtils.isOntapObjectNotFoundError(error)
+                || OntapStorageUtils.isOntapObjectInUseError(error);
     }
 
     private VolumeQosPolicy getVolumeQosPolicy(String policyName) {

@@ -34,6 +34,8 @@ public class VolumeQosPolicy {
     private String uuid = null;
     @JsonProperty("svm")
     private Svm svm;
+    @JsonProperty("object_count")
+    private Integer objectCount;
 
     public Fixed getFixed() {
         return fixed;
@@ -65,6 +67,14 @@ public class VolumeQosPolicy {
 
     public void setSvm(Svm svm) {
         this.svm = svm;
+    }
+
+    public Integer getObjectCount() {
+        return objectCount;
+    }
+
+    public void setObjectCount(Integer objectCount) {
+        this.objectCount = objectCount;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
