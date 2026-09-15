@@ -298,7 +298,7 @@ public class UnifiedNASStrategyTest {
 
         CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                 () -> strategy.createCloudStackVolume(cloudStackVolume));
-        assertTrue(ex.getMessage().contains("8454269"));
+        assertTrue(ex.getMessage().contains("Failed to apply QoS policy to NFS volume file"));
         verify(endPoint).sendMessage(any(DeleteCommand.class));
     }
 

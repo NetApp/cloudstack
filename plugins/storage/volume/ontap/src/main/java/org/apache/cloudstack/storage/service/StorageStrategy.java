@@ -246,7 +246,7 @@ public abstract class StorageStrategy {
                     "Unable to determine whether the ONTAP cluster is AFF or FAS");
         }
         for (ClusterNode node : response.getRecords()) {
-            if (node == null || !Boolean.TRUE.equals(node.getAllFlashOptimized())) {
+            if (node == null || Boolean.FALSE.equals(node.getAllFlashOptimized())) {
                 return false;
             }
         }
@@ -982,12 +982,6 @@ public abstract class StorageStrategy {
     }
 
     public VolumeQosPolicy createVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
-        VolumeQosPolicy existingPolicy = getVolumeQosPolicy(policyName);
-        if (existingPolicy != null) {
-            logger.info("Reusing existing ONTAP QoS policy [{}]", policyName);
-            return existingPolicy;
-        }
-
         VolumeQosPolicy policy = buildVolumeQosPolicy(policyName, minIops, maxIops);
         Svm svm = new Svm();
         svm.setName(storage.getSvmName());
@@ -1008,27 +1002,6 @@ public abstract class StorageStrategy {
             throw new CloudRuntimeException("Unable to resolve ONTAP QoS policy [" + policyName + "] after creation");
         }
         return createdPolicy;
-    }
-
-    /**
-     * Prefers the ONTAP REST error body (includes codes such as 8454269) over Feign's status line.
-     */
-    protected String getOntapErrorDetail(Throwable error) {
-        if (error instanceof FeignException) {
-            try {
-                String body = ((FeignException) error).contentUTF8();
-                if (body != null && !body.isBlank()) {
-                    return body;
-                }
-            } catch (RuntimeException ignored) {
-                // Mocked or empty Feign responses may not expose a body.
-            }
-        }
-        return error != null ? error.getMessage() : null;
-    }
-
-    protected CloudRuntimeException wrapOntapApiFailure(String operation, Throwable error) {
-        return new CloudRuntimeException(operation + ": " + getOntapErrorDetail(error), error);
     }
 
     public void deleteVolumeQosPolicy(String policyUuid) {

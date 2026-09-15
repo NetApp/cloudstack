@@ -91,6 +91,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Primary datastore driver for NetApp ONTAP storage systems.
@@ -307,7 +308,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (qosPolicy == null) {
             return;
         }
-        volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.QOS_POLICY_NAME, qosPolicy.getName(), false);
         volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID, qosPolicy.getUuid(), false);
     }
 
@@ -733,9 +733,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return false;
     }
 
-    /**
-     * Applies min/max IOPS as an ONTAP QoS policy.
-     */
     @Override
     public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
         String errMsg = null;
@@ -747,47 +744,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             VolumeInfo volumeInfo = (VolumeInfo) data;
             path = volumeInfo.getPath();
-            ResizeVolumePayload resizeVolumePayload = (ResizeVolumePayload) volumeInfo.getpayload();
-            if (resizeVolumePayload == null) {
-                throw new CloudRuntimeException("Missing resize payload for volume " + volumeInfo.getId());
-            }
-
-            VolumeVO volume = volumeDao.findById(volumeInfo.getId());
-            if (volume == null || volume.getPoolId() == null) {
-                throw new CloudRuntimeException("Unable to resolve volume or storage pool for IOPS update");
-            }
-
-            StoragePoolVO storagePool = storagePoolDao.findById(volume.getPoolId());
-            if (storagePool == null) {
-                throw new CloudRuntimeException("Storage pool not found for volume " + volume.getId());
-            }
-
-            verifySufficientIopsForStoragePool(storagePool, resizeVolumePayload.newMinIops, volume.getId());
-
-            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
-            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-            VolumeDetailVO qosPolicyUuidDetail = volumeDetailsDao.findDetail(
-                    volume.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-            String previousPolicyUuid = qosPolicyUuidDetail != null ? qosPolicyUuidDetail.getValue() : null;
-
-            VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
-                    resizeVolumePayload.newMinIops, resizeVolumePayload.newMaxIops, volume.getPoolId());
-            if (qosPolicy != null) {
-                if (previousPolicyUuid == null || !previousPolicyUuid.equals(qosPolicy.getUuid())) {
-                    try {
-                        attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
-                        persistQosPolicyDetails(volume.getId(), qosPolicy);
-                        deleteQosPolicyIfUnused(storageStrategy, previousPolicyUuid, volume.getId());
-                    } catch (RuntimeException e) {
-                        deleteQosPolicyIfUnused(storageStrategy, qosPolicy.getUuid(), volume.getId());
-                        throw e;
-                    }
-                }
-            } else if (previousPolicyUuid != null) {
-                detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
-                persistQosPolicyDetails(volume.getId(), null);
-                deleteQosPolicyIfUnused(storageStrategy, previousPolicyUuid, volume.getId());
-            }
+            applyVolumeQos(volumeInfo);
         } catch (Exception e) {
             errMsg = e.getMessage();
             logger.error("Failed to update IOPS for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
@@ -796,6 +753,50 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         CreateCmdResult result = new CreateCmdResult(path, new Answer(null, errMsg == null, errMsg));
         result.setResult(errMsg);
         callback.complete(result);
+    }
+
+    private void applyVolumeQos(VolumeInfo volumeInfo) {
+        ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
+        if (payload == null) {
+            throw new CloudRuntimeException("Missing resize payload for volume " + volumeInfo.getId());
+        }
+        VolumeVO volume = volumeDao.findById(volumeInfo.getId());
+        if (volume == null || volume.getPoolId() == null) {
+            throw new CloudRuntimeException("Unable to resolve volume or storage pool for IOPS update");
+        }
+        StoragePoolVO storagePool = storagePoolDao.findById(volume.getPoolId());
+        if (storagePool == null) {
+            throw new CloudRuntimeException("Storage pool not found for volume " + volume.getId());
+        }
+
+        verifySufficientIopsForStoragePool(storagePool, payload.newMinIops, volume.getId());
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        VolumeDetailVO qosDetail = volumeDetailsDao.findDetail(volume.getId(), OntapStorageConstants.QOS_POLICY_UUID);
+        String previousUuid = qosDetail != null ? qosDetail.getValue() : null;
+        VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                payload.newMinIops, payload.newMaxIops, volume.getPoolId());
+
+        if (qosPolicy != null && Objects.equals(previousUuid, qosPolicy.getUuid())) {
+            return;
+        }
+        if (qosPolicy != null) {
+            try {
+                attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
+                persistQosPolicyDetails(volume.getId(), qosPolicy);
+                deleteQosPolicyIfUnused(storageStrategy, previousUuid, volume.getId());
+            } catch (RuntimeException e) {
+                deleteQosPolicyIfUnused(storageStrategy, qosPolicy.getUuid(), volume.getId());
+                throw e;
+            }
+            return;
+        }
+        if (previousUuid != null) {
+            detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
+            persistQosPolicyDetails(volume.getId(), null);
+            deleteQosPolicyIfUnused(storageStrategy, previousUuid, volume.getId());
+        }
     }
 
     private void attachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
