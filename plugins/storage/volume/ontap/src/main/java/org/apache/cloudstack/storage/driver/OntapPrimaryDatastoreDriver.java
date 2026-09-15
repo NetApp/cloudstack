@@ -245,7 +245,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return created;
         } catch (RuntimeException e) {
             if (qosPolicy != null) {
-                deleteQosPolicyIfUnused(storageStrategy, qosPolicy.getUuid(), volumeObject.getId());
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
             }
             throw e;
         }
@@ -303,40 +303,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     private void persistQosPolicyDetails(long volumeId, VolumeQosPolicy qosPolicy) {
-        volumeDetailsDao.removeDetail(volumeId, OntapStorageConstants.QOS_POLICY_NAME);
         volumeDetailsDao.removeDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID);
         if (qosPolicy == null) {
             return;
         }
         volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID, qosPolicy.getUuid(), false);
-    }
-
-    private boolean isQosPolicyUsedByOtherVolumes(String policyUuid, Long excludeVolumeId) {
-        if (policyUuid == null || policyUuid.isEmpty()) {
-            return false;
-        }
-        List<VolumeDetailVO> references = volumeDetailsDao.findDetails(
-                OntapStorageConstants.QOS_POLICY_UUID, policyUuid, null);
-        if (references == null) {
-            return false;
-        }
-        for (VolumeDetailVO reference : references) {
-            if (excludeVolumeId == null || reference.getResourceId() != excludeVolumeId) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void deleteQosPolicyIfUnused(StorageStrategy storageStrategy, String policyUuid, Long excludeVolumeId) {
-        if (policyUuid == null || policyUuid.isEmpty()) {
-            return;
-        }
-        if (isQosPolicyUsedByOtherVolumes(policyUuid, excludeVolumeId)) {
-            logger.info("QoS policy [{}] is still assigned to other volumes; skipping delete", policyUuid);
-            return;
-        }
-        storageStrategy.deleteVolumeQosPolicy(policyUuid);
     }
 
     /**
@@ -607,8 +578,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 if (qosPolicyDetail != null) {
                     volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-                    volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_NAME);
-                    deleteQosPolicyIfUnused(storageStrategy, qosPolicyDetail.getValue(), volumeInfo.getId());
+                    storageStrategy.deleteVolumeQosPolicy(qosPolicyDetail.getValue());
                 }
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
                 commandResult.setResult(null);
@@ -785,9 +755,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             try {
                 attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
                 persistQosPolicyDetails(volume.getId(), qosPolicy);
-                deleteQosPolicyIfUnused(storageStrategy, previousUuid, volume.getId());
+                storageStrategy.deleteVolumeQosPolicy(previousUuid);
             } catch (RuntimeException e) {
-                deleteQosPolicyIfUnused(storageStrategy, qosPolicy.getUuid(), volume.getId());
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
                 throw e;
             }
             return;
@@ -795,7 +765,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (previousUuid != null) {
             detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
             persistQosPolicyDetails(volume.getId(), null);
-            deleteQosPolicyIfUnused(storageStrategy, previousUuid, volume.getId());
+            storageStrategy.deleteVolumeQosPolicy(previousUuid);
         }
     }
 
@@ -820,7 +790,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     private void detachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
                                  Map<String, String> details, VolumeInfo volumeInfo) {
         VolumeQosPolicy noPolicy = new VolumeQosPolicy();
-        noPolicy.setName("");
+        noPolicy.setName(OntapStorageConstants.QOS_POLICY_NONE);
         attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, noPolicy);
     }
 
