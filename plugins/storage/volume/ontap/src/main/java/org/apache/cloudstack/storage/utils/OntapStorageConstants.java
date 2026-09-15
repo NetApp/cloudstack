@@ -104,6 +104,7 @@ public class OntapStorageConstants {
     public static final String LUN_DOT_UUID = "lun.uuid";
     public static final String QOS_POLICY_NAME = "qosPolicyName";
     public static final String QOS_POLICY_UUID = "qosPolicyUuid";
+    public static final String IS_AFF = "isAFF";
     public static final String QOS_POLICY_NAME_PREFIX = "cs_";
     public static final String QOS_POLICY_NAME_TO = "to_";
     public static final String QOS_POLICY_NAME_IOPS = "iops_";

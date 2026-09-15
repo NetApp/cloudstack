@@ -136,6 +136,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         when(_clusterDao.findById(1L)).thenReturn(clusterVO);
 
         when(storageStrategy.connect()).thenReturn(true);
+        when(storageStrategy.isAff()).thenReturn(true);
         when(storageStrategy.getNetworkInterface()).thenReturn(new Pair<>("testNetworkInterface", null));
 
         Volume volume = new Volume();
@@ -269,6 +270,33 @@ public class OntapPrimaryDatastoreLifecycleTest {
         dsInfos.put("capacityIops", 5000L);
 
         assertEquals(Long.valueOf(5000L), initializeAndCaptureCapacityIops(dsInfos));
+    }
+
+    @Test
+    public void testInitialize_persistsAffPlatformDetail() {
+        Map<String, String> details = initializeAndCaptureDetails(buildDsInfosForProtocol("NFS3"));
+
+        assertEquals("true", details.get(OntapStorageConstants.IS_AFF));
+        verify(storageStrategy).isAff();
+    }
+
+    @Test
+    public void testInitialize_persistsFasPlatformDetail() {
+        when(storageStrategy.isAff()).thenReturn(false);
+
+        Map<String, String> details = initializeAndCaptureDetails(buildDsInfosForProtocol("NFS3"));
+
+        assertEquals("false", details.get(OntapStorageConstants.IS_AFF));
+    }
+
+    private Map<String, String> initializeAndCaptureDetails(Map<String, Object> dsInfos) {
+        try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
+            storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
+            ontapPrimaryDatastoreLifecycle.initialize(dsInfos);
+        }
+        ArgumentCaptor<PrimaryDataStoreParameters> captor = ArgumentCaptor.forClass(PrimaryDataStoreParameters.class);
+        verify(_dataStoreHelper).createPrimaryDataStore(captor.capture());
+        return captor.getValue().getDetails();
     }
 
     @Test
