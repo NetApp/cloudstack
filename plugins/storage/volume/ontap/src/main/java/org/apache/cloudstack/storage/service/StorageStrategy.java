@@ -234,6 +234,26 @@ public abstract class StorageStrategy {
     }
 
     /**
+     * True when every cluster node reports {@code is_all_flash_optimized} (AFF, including C-series).
+     * Any FAS node makes this false. Used for min-throughput QoS support.
+     */
+    public boolean isAff() {
+        Map<String, Object> query = new HashMap<>();
+        query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_ASUP_FIELDS);
+        OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(getAuthHeader(), query);
+        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+            throw new CloudRuntimeException(
+                    "Unable to determine whether the ONTAP cluster is AFF or FAS");
+        }
+        for (ClusterNode node : response.getRecords()) {
+            if (node == null || !Boolean.TRUE.equals(node.getAllFlashOptimized())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Pushes a single ASUP (AutoSupport) EMS application-log message to the ONTAP cluster.
      *
      * <p>This is strictly best-effort telemetry: any failure is logged and swallowed so that
