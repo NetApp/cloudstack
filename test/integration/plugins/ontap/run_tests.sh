@@ -30,6 +30,8 @@ ONTAP_DIR=test/integration/plugins/ontap
 CFG=${ONTAP_DIR}/ontap.cfg
 RESULTS_BASE=${ONTAP_DIR}/results
 AGGREGATE=${ONTAP_DIR}/aggregate_results.py
+NOSE_RUNNER=${ONTAP_DIR}/nose_compat.py
+ONTAP_PREREQS=${ONTAP_DIR}/check_ontap_prereqs.py
 export PYTHONPATH=${ONTAP_DIR}:${PYTHONPATH:-}
 export PYTHONUNBUFFERED=1
 FILTER="${1:-all}"
@@ -254,7 +256,7 @@ run_group() {
     fi
 
     set +e
-    $PYTHON -m nose --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
+    $PYTHON "$NOSE_RUNNER" --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
     rc=${PIPESTATUS[0]}
     set -e
     out=$(cat "$tmpout")
@@ -312,10 +314,17 @@ run_nfs3_suites() {
     done
 }
 
+check_ontap_prereqs() {
+    local protocol="$1"
+    echo "==> Checking ONTAP ${protocol} prerequisites"
+    $PYTHON "$ONTAP_PREREQS" "$CFG" "$protocol"
+}
+
 run_protocol_batch() {
     local protocol="$1"
     local parent_dir="${2:-}"
 
+    check_ontap_prereqs "$protocol"
     init_batch "$protocol" "$parent_dir"
 
     case "$protocol" in
@@ -336,6 +345,11 @@ run_single_suite_by_tag() {
     for entry in "${ISCSI_SUITES[@]}" "${NFS3_SUITES[@]}"; do
         IFS='|' read -r label tag file <<< "$entry"
         if [[ "$tag" == "$want_tag" ]]; then
+            if [[ "$want_tag" == iscsi_* ]]; then
+                check_ontap_prereqs iscsi
+            else
+                check_ontap_prereqs nfs3
+            fi
             run_group "$label" "$tag" "$file"
             return 0
         fi
