@@ -40,11 +40,6 @@ public interface QosFeignClient {
     OntapResponse<VolumeQosPolicy> getPolicies(@Param("authHeader") String authHeader,
                                                @QueryMap Map<String, Object> queryParams);
 
-    @RequestLine("PATCH /api/storage/qos/policies/{uuid}?return_timeout=0")
-    @Headers({"Authorization: {authHeader}"})
-    JobResponse updatePolicy(@Param("authHeader") String authHeader, @Param("uuid") String uuid,
-                             VolumeQosPolicy policy);
-
     @RequestLine("DELETE /api/storage/qos/policies/{uuid}?return_timeout=0")
     @Headers({"Authorization: {authHeader}"})
     JobResponse deletePolicy(@Param("authHeader") String authHeader, @Param("uuid") String uuid);

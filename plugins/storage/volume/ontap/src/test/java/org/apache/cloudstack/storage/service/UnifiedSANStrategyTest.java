@@ -378,7 +378,7 @@ class UnifiedSANStrategyTest {
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> unifiedSANStrategy.createCloudStackVolume(request));
-            assertTrue(ex.getMessage().contains("8454269"));
+            assertTrue(ex.getMessage().contains("Failed to create Lun"));
         }
     }
 

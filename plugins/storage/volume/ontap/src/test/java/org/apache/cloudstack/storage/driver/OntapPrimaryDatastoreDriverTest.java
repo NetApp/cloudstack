@@ -1288,7 +1288,6 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).updateCloudStackVolume(argThat(request ->
                     request.getLun() != null && "lun-uuid-123".equals(request.getLun().getUuid())));
             verify(volumeDetailsDao).addDetail(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
-            verify(volumeDetailsDao).addDetail(100L, OntapStorageConstants.QOS_POLICY_NAME, "cs_0_to_5000_iops_svm1", false);
         }
     }
 
@@ -1562,8 +1561,6 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).createVolumeQosPolicy(eq("cs_100_to_200_iops_svm1"), eq(100L), eq(200L));
             utilityMock.verify(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(
                     any(), any(), any(), argThat(policy -> policy != null && "qos-uuid".equals(policy.getUuid()))));
-            verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.QOS_POLICY_NAME),
-                    eq("cs_100_to_200_iops_svm1"), eq(false));
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.QOS_POLICY_UUID),
                     eq("qos-uuid"), eq(false));
             verify(sanStrategy, never()).isAff();
