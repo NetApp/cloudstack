@@ -369,28 +369,46 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
         boolean iscsi = isIscsi(details);
 
+        verifySufficientIopsForStoragePool(storagePool, volumeInfo.getMinIops(), volumeInfo.getId());
+        VolumeQosPolicy qosPolicy = null;
+        Volume.Type volumeType = volumeInfo.getVolumeType();
+        if (volumeType == Volume.Type.DATADISK || volumeType == Volume.Type.ROOT) {
+            qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                    volumeInfo.getMinIops(), volumeInfo.getMaxIops(), storagePool.getId());
+        }
+
         CloudStackVolume request = iscsi
-                ? createCloneLunRequest(storagePool, details, volumeInfo, templatePoolRef, templateId)
+                ? createCloneLunRequest(storagePool, details, volumeInfo, templatePoolRef, templateId, qosPolicy)
                 : createCloneFileRequest(storagePool, volumeInfo, templatePoolRef, templateId);
 
-        CloudStackVolume cloned = storageStrategy.cloneCloudStackVolume(request);
-        // SAN cloneCloudStackVolume validates the Feign response (LUN name + uuid) before returning
-        if (cloned == null) {
-            throw new CloudRuntimeException("ONTAP returned nothing when cloning template [" + templateId
-                    + "] for volume [" + volumeInfo.getId() + "]");
+        try {
+            CloudStackVolume cloned = storageStrategy.cloneCloudStackVolume(request);
+            if (cloned == null) {
+                throw new CloudRuntimeException("ONTAP returned nothing when cloning template [" + templateId
+                        + "] for volume [" + volumeInfo.getId() + "]");
+            }
+
+            logger.info("cloneCloudStackVolumeFromTemplate: Cloned template [{}] for volume [{}] on pool [{}]",
+                    templateId, volumeInfo.getId(), storagePool.getId());
+
+            long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
+            if (requestedSize > templatePoolRef.getTemplateSize()) {
+                logger.info("cloneCloudStackVolumeFromTemplate: Growing clone of template [{}] from {} to {} bytes for volume [{}]",
+                        templateId, templatePoolRef.getTemplateSize(), requestedSize, volumeInfo.getId());
+                storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+            }
+
+            if (!iscsi && qosPolicy != null) {
+                attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
+            }
+            persistQosPolicyDetails(volumeInfo.getId(), qosPolicy);
+            return cloned;
+        } catch (Exception e) {
+            if (qosPolicy != null) {
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
+            }
+            throw e;
         }
-
-        logger.info("cloneCloudStackVolumeFromTemplate: Cloned template [{}] for volume [{}] on pool [{}]",
-                templateId, volumeInfo.getId(), storagePool.getId());
-
-        long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
-        if (requestedSize > templatePoolRef.getTemplateSize()) {
-            logger.info("cloneCloudStackVolumeFromTemplate: Growing clone of template [{}] from {} to {} bytes for volume [{}]",
-                    templateId, templatePoolRef.getTemplateSize(), requestedSize, volumeInfo.getId());
-            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
-        }
-
-        return cloned;
     }
 
     /**
@@ -774,7 +792,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                                  VolumeQosPolicy qosPolicy) {
         CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
                 storagePool, details, volumeInfo, qosPolicy);
-        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+        if (isIscsi(details)) {
             VolumeDetailVO lunUuid = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
             if (lunUuid == null || lunUuid.getValue() == null) {
                 throw new CloudRuntimeException("LUN UUID is missing for volume " + volumeInfo.getId());
@@ -1657,7 +1675,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      */
     private CloudStackVolume createCloneLunRequest(StoragePoolVO storagePool, Map<String, String> details,
                                                    VolumeInfo volumeObject, VMTemplateStoragePoolVO templatePoolRef,
-                                                   long templateId) {
+                                                   long templateId, VolumeQosPolicy qosPolicy) {
         String sourceLunUuid = templatePoolRef.getLocalDownloadPath();
         if (sourceLunUuid == null || sourceLunUuid.isEmpty()) {
             throw new CloudRuntimeException("Template [" + templateId + "] has no cached LUN on pool ["
@@ -1683,6 +1701,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         lunRequest.setSvm(svm);
         lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
         lunRequest.setClone(clone);
+        if (qosPolicy != null) {
+            VolumeQosPolicy qosPolicyReference = new VolumeQosPolicy();
+            qosPolicyReference.setName(qosPolicy.getName());
+            qosPolicyReference.setUuid(qosPolicy.getUuid());
+            lunRequest.setQosPolicy(qosPolicyReference);
+        }
 
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lunRequest);
