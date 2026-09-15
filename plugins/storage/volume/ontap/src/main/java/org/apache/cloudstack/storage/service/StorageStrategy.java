@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import com.cloud.utils.StringUtils;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
@@ -1009,9 +1010,6 @@ public abstract class StorageStrategy {
             return;
         }
         VolumeQosPolicy policy = getVolumeQosPolicyByUuid(policyUuid);
-        if (policy == null) {
-            return;
-        }
         if (policy.getObjectCount() != null && policy.getObjectCount() > 0) {
             logger.info("QoS policy [{}] still has object_count={}; skipping delete",
                     policyUuid, policy.getObjectCount());
@@ -1034,14 +1032,13 @@ public abstract class StorageStrategy {
 
     private VolumeQosPolicy getVolumeQosPolicyByUuid(String policyUuid) {
         Map<String, Object> queryParams = new HashMap<>();
-        queryParams.put(OntapStorageConstants.UUID, policyUuid);
         queryParams.put(OntapStorageConstants.FIELDS, OntapStorageConstants.QOS_POLICY_OBJECT_COUNT_FIELDS);
         try {
-            OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
-            if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+            VolumeQosPolicy policy = qosFeignClient.getPolicy(getAuthHeader(), policyUuid, queryParams);
+            if (policy == null || StringUtils.isEmpty(policy.getUuid())) {
                 return null;
             }
-            return response.getRecords().get(0);
+            return policy;
         } catch (FeignException e) {
             if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                 return null;

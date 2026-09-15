@@ -31,7 +31,7 @@ import feign.RequestLine;
 
 public interface QosFeignClient {
 
-    @RequestLine("POST /api/storage/qos/policies?return_timeout=0")
+    @RequestLine("POST /api/storage/qos/policies")
     @Headers({"Authorization: {authHeader}"})
     JobResponse createPolicy(@Param("authHeader") String authHeader, VolumeQosPolicy policy);
 
@@ -40,7 +40,12 @@ public interface QosFeignClient {
     OntapResponse<VolumeQosPolicy> getPolicies(@Param("authHeader") String authHeader,
                                                @QueryMap Map<String, Object> queryParams);
 
-    @RequestLine("DELETE /api/storage/qos/policies/{uuid}?return_timeout=0")
+    @RequestLine("GET /api/storage/qos/policies/{uuid}")
+    @Headers({"Authorization: {authHeader}"})
+    VolumeQosPolicy getPolicy(@Param("authHeader") String authHeader, @Param("uuid") String uuid,
+                              @QueryMap Map<String, Object> queryParams);
+
+    @RequestLine("DELETE /api/storage/qos/policies/{uuid}")
     @Headers({"Authorization: {authHeader}"})
     JobResponse deletePolicy(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 }

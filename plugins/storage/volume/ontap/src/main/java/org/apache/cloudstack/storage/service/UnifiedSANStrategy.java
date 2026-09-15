@@ -215,7 +215,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             Map<String, Object> queryParams = Map.of("allow_delete_while_mapped", "true");
             try {
-                sanFeignClient.deleteLun(authHeader, cloudstackVolume.getLun().getUuid(), queryParams);
+                JobResponse response = sanFeignClient.deleteLun(authHeader, cloudstackVolume.getLun().getUuid(), queryParams);
+                pollJobIfPresent(response, "delete Lun [" + cloudstackVolume.getLun().getName() + "]");
             } catch (FeignException feignEx) {
                 if (feignEx.status() == 404) {
                     logger.warn("deleteCloudStackVolume: Lun {} does not exist (status 404), skipping deletion", cloudstackVolume.getLun().getName());
