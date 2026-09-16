@@ -144,10 +144,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (dataStore == null) {
             throw new InvalidParameterValueException("dataStore should not be null");
         }
-        if (callback == null) {
-            throw new InvalidParameterValueException("callback should not be null");
-        }
-
         try {
             logger.info("Started for data store name [{}] and data object name [{}] of type [{}]",
                     dataStore.getName(), dataObject.getName(), dataObject.getType());
@@ -208,11 +204,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
             createCmdResult.setResult(e.toString());
+            if (callback == null) {
+                throw new CloudRuntimeException("Failed to create ONTAP volume: " + errMsg, e);
+            }
         } finally {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
                 logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
             }
-            callback.complete(createCmdResult);
+            if (callback != null) {
+                callback.complete(createCmdResult);
+            }
         }
     }
 

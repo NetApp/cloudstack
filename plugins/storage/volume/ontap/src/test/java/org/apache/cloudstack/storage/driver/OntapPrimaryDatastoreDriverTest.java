@@ -156,9 +156,29 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testCreateAsync_NullCallback_ThrowsException() {
-        assertThrows(InvalidParameterValueException.class,
-            () -> driver.createAsync(dataStore, volumeInfo, null));
+    void testCreateAsync_NullCallback_IsSupportedForStorageMigration() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+
+        CloudStackVolume mockCloudStackVolume = new CloudStackVolume();
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+            utilityMock.when(() -> OntapStorageUtils.createCloudStackVolumeRequestByProtocol(any(), any(), any()))
+                    .thenReturn(mockCloudStackVolume);
+            when(nasStrategy.createCloudStackVolume(any())).thenReturn(mockCloudStackVolume);
+
+            driver.createAsync(dataStore, volumeInfo, null);
+        }
     }
 
     @Test

@@ -57,6 +57,7 @@ import com.cloud.storage.Storage;
 import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.VolumeDao;
 import java.util.AbstractMap;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -80,6 +81,8 @@ public class StorageSystemDataMotionStrategyTest {
     private ImageStore destinationStore;
     @Mock
     private PrimaryDataStoreDao primaryDataStoreDao;
+    @Mock
+    private VolumeDao volumeDao;
 
     @Mock
     StoragePoolVO sourceStoragePoolVoMock, destinationStoragePoolVoMock;
@@ -157,6 +160,62 @@ public class StorageSystemDataMotionStrategyTest {
     }
 
     @Test
+    public void supportedOntapLiveStorageMigrationRequiresSameSvmAndProtocol() {
+        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
+        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
+        Mockito.doReturn(1L).when(srcPool).getId();
+        Mockito.doReturn(2L).when(destPool).getId();
+        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(srcPool).getPoolType();
+        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(destPool).getPoolType();
+        Mockito.doReturn(org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider.ONTAP_PLUGIN_NAME)
+                .when(srcPool).getStorageProviderName();
+        Mockito.doReturn(org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider.ONTAP_PLUGIN_NAME)
+                .when(destPool).getStorageProviderName();
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(1L);
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
+
+        Assert.assertTrue(strategy.isSupportedOntapLiveStorageMigration(srcPool, destPool));
+
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm2", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
+        Assert.assertFalse(strategy.isSupportedOntapLiveStorageMigration(srcPool, destPool));
+
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.2", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
+        Assert.assertFalse(strategy.isSupportedOntapLiveStorageMigration(srcPool, destPool));
+
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmUUID", "svm-uuid", "svmName", "old-name", "protocol", "NFS3"))
+                .when(primaryDataStoreDao).getDetails(1L);
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmUUID", "svm-uuid", "svmName", "new-name", "protocol", "NFS3"))
+                .when(primaryDataStoreDao).getDetails(2L);
+        Assert.assertTrue(strategy.isSupportedOntapLiveStorageMigration(srcPool, destPool));
+    }
+
+    @Test
+    public void verifyLiveMigrationAllowsOntapPoolsOnSameSvmAndProtocol() {
+        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
+        DataStore destStore = Mockito.mock(DataStore.class);
+        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
+        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
+        Mockito.doReturn(1L).when(srcVolume).getPoolId();
+        Mockito.doReturn(2L).when(destStore).getId();
+        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
+        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
+        Mockito.doReturn(1L).when(srcPool).getId();
+        Mockito.doReturn(2L).when(destPool).getId();
+        Mockito.doReturn(StoragePoolType.OntapiSCSI).when(srcPool).getPoolType();
+        Mockito.doReturn(StoragePoolType.OntapiSCSI).when(destPool).getPoolType();
+        Mockito.doReturn(true).when(srcPool).isManaged();
+        Mockito.doReturn(true).when(destPool).isManaged();
+        Mockito.doReturn(org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider.ONTAP_PLUGIN_NAME)
+                .when(srcPool).getStorageProviderName();
+        Mockito.doReturn(org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider.ONTAP_PLUGIN_NAME)
+                .when(destPool).getStorageProviderName();
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(1L);
+        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(2L);
+
+        strategy.verifyLiveMigrationForKVM(Map.of(srcVolume, destStore));
+    }
+
+    @Test
     public void isStoragePoolTypeOfFileTest() {
         StoragePoolVO sourceStoragePool = Mockito.spy(new StoragePoolVO());
         StoragePoolType[] storagePoolTypeArray = StoragePoolType.values();
@@ -183,6 +242,22 @@ public class StorageSystemDataMotionStrategyTest {
 
         Assert.assertEquals(expected, "expected");
         Mockito.verify(strategy).connectHostToVolume(destHost, 0l, "iScsiName");
+    }
+
+    @Test
+    public void generateDestPathForNfsUsesVolumeUuid() {
+        VolumeObject destVolumeInfo = Mockito.spy(new VolumeObject());
+        StoragePoolVO destStoragePool = Mockito.mock(StoragePoolVO.class);
+        HostVO destHost = new HostVO("guid");
+        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(destStoragePool).getPoolType();
+        Mockito.doReturn("volume-uuid").when(destVolumeInfo).getUuid();
+        Mockito.doReturn(0L).when(destVolumeInfo).getPoolId();
+        Mockito.doReturn("expected").when(strategy).connectHostToVolume(destHost, 0L, "volume-uuid");
+
+        String result = strategy.generateDestPath(destHost, destStoragePool, destVolumeInfo);
+
+        Assert.assertEquals("expected", result);
+        Mockito.verify(strategy).connectHostToVolume(destHost, 0L, "volume-uuid");
     }
 
     @Test
@@ -219,6 +294,16 @@ public class StorageSystemDataMotionStrategyTest {
         strategy.setVolumePath(volume);
 
         Assert.assertEquals(volumePath, volume.getPath());
+    }
+
+    @Test
+    public void setVolumePathPreservesNfsPathWithoutIscsiName() {
+        VolumeVO volume = new VolumeVO("name", 0L, 0L, 0L, 0L, 0L, "folder", "volume-uuid",
+                Storage.ProvisioningType.THIN, 0L, Volume.Type.ROOT);
+
+        strategy.setVolumePath(volume);
+
+        Assert.assertEquals("volume-uuid", volume.getPath());
     }
 
     @Test
