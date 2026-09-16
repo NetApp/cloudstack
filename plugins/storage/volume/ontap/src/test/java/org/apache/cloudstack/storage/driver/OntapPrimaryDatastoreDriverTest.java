@@ -978,6 +978,7 @@ class OntapPrimaryDatastoreDriverTest {
         lenient().when(storagePool.getName()).thenReturn("vol1");
         lenient().when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
         lenient().when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        lenient().when(storagePool.getCapacityIops()).thenReturn(null);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
