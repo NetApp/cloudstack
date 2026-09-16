@@ -61,6 +61,7 @@ import com.cloud.utils.component.ComponentContext;
 import com.cloud.vm.NicProfile;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachineManager;
+import com.cloud.vm.VmDetailConstants;
 import com.cloud.vm.VmDiskInfo;
 import com.cloud.vm.dao.UserVmDao;
 import com.cloud.vm.dao.VMInstanceDetailsDao;
@@ -202,8 +203,8 @@ public class CloudOrchestrator implements OrchestrationService {
             Map<String, String> userVmDetails = _vmInstanceDetailsDao.listDetailsKeyPairs(vm.getId());
 
             if (userVmDetails != null) {
-                String minIops = userVmDetails.get("minIops");
-                String maxIops = userVmDetails.get("maxIops");
+                String minIops = userVmDetails.get(VmDetailConstants.MIN_IOPS);
+                String maxIops = userVmDetails.get(VmDetailConstants.MAX_IOPS);
 
                 rootDiskOfferingInfo.setMinIops(minIops != null && minIops.trim().length() > 0 ? Long.parseLong(minIops) : null);
                 rootDiskOfferingInfo.setMaxIops(maxIops != null && maxIops.trim().length() > 0 ? Long.parseLong(maxIops) : null);
