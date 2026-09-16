@@ -999,9 +999,6 @@ public abstract class StorageStrategy {
         }
 
         VolumeQosPolicy createdPolicy = getVolumeQosPolicy(policyName);
-        if (createdPolicy == null || createdPolicy.getUuid() == null) {
-            throw new CloudRuntimeException("Unable to resolve ONTAP QoS policy [" + policyName + "] after creation");
-        }
         return createdPolicy;
     }
 
@@ -1036,7 +1033,8 @@ public abstract class StorageStrategy {
         try {
             VolumeQosPolicy policy = qosFeignClient.getPolicy(getAuthHeader(), policyUuid, queryParams);
             if (policy == null || StringUtils.isEmpty(policy.getUuid())) {
-                return null;
+                throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyUuid
+                        + "]: empty response");
             }
             return policy;
         } catch (FeignException e) {
@@ -1052,11 +1050,21 @@ public abstract class StorageStrategy {
         Map<String, Object> queryParams = new HashMap<>();
         queryParams.put(OntapStorageConstants.NAME, policyName);
         queryParams.put(OntapStorageConstants.SVM_DOT_NAME, storage.getSvmName());
-        OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
-        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
-            return null;
+        try {
+            OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
+            if (response == null || response.getRecords() == null || response.getRecords().size() <= 0) {
+                throw new CloudRuntimeException("Unable to get ONTAP QoS policy [" + policyName + "] after creation");
+            }
+            VolumeQosPolicy policy = response.getRecords().get(0);
+            if (policy == null || StringUtils.isEmpty(policy.getUuid())) {
+                throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyName
+                        + "]: empty response");
+            }
+            return policy;
+        } catch (FeignException e) {
+            throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyName + "]: "
+                    + e.getMessage(), e);
         }
-        return response.getRecords().get(0);
     }
 
     private VolumeQosPolicy buildVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
