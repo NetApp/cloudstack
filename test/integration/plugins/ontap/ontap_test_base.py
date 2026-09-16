@@ -26,12 +26,13 @@ Provides:
 """
 
 import logging
+import os
 import random
 import requests
 import sys
 import time
 import urllib3
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from marvin.cloudstackAPI import (
     cancelStorageMaintenance,
@@ -42,11 +43,14 @@ from marvin.cloudstackAPI import (
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
+from marvin.cloudstackException import CloudstackAPIException
 from marvin.cloudstackTestCase import cloudstackTestCase
 from marvin.jsonHelper import jsonDump
 from marvin.lib.base import Account, DiskOffering
 from marvin.sshClient import SshClient
-from marvin.lib.common import get_domain, get_zone, list_clusters, list_storage_pools
+from marvin.lib.common import (
+    get_domain, get_zone, list_clusters, list_storage_pools,
+)
 from marvin.lib.utils import cleanup_resources
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -144,7 +148,44 @@ class OntapRestClient:
         url = self._base + path
         resp = requests.delete(url, auth=self._auth, params=params,
                                verify=False, timeout=30)
-        resp.raise_for_status()
+        self._raise_http(resp)
+
+    def _raise_http(self, resp):
+        if resp.ok:
+            return
+        body = ""
+        try:
+            body = resp.text
+        except Exception:
+            body = ""
+        raise requests.HTTPError(
+            "%s Client Error: %s for url: %s body: %s"
+            % (resp.status_code, resp.reason, resp.url, body),
+            response=resp,
+        )
+
+    def _post(self, path, params=None, data=None, json_body=None, timeout=60,
+              headers=None, files=None):
+        url = self._base + path
+        resp = requests.post(
+            url, auth=self._auth, params=params, data=data, json=json_body,
+            headers=headers, files=files, verify=False, timeout=timeout,
+        )
+        self._raise_http(resp)
+        if not resp.content:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
+
+    def _volume_uuid(self, vol_name):
+        vol = self.get_volume(vol_name)
+        return (vol or {}).get("uuid")
+
+    def _files_path(self, vol_uuid, filename):
+        encoded = quote("/" + filename.lstrip("/"), safe="")
+        return "/storage/volumes/%s/files/%s" % (vol_uuid, encoded)
 
     def delete_volume(self, name):
         """Delete the ONTAP FlexVol with the given name. No-op if not found."""
@@ -262,7 +303,6 @@ class OntapRestClient:
         if not vol_uuid:
             return []
         # URL-encode the path component (/ → %2F) and embed it in the URL.
-        from urllib.parse import quote
         encoded_path = quote(path, safe="")
         try:
             resp = self._get(
@@ -274,6 +314,47 @@ class OntapRestClient:
         return [r.get("name", "") for r in resp.get("records", [])
                 if r.get("name") not in (".", "..")]
 
+    def write_file_in_volume(self, vol_name, filename, size_bytes,
+                             chunk_bytes=512 * 1024):
+        """Write *size_bytes* of incompressible data into a FlexVol file.
+
+        Zeros compress to almost nothing on ONTAP, so the payload is random.
+        The files API requires ``multipart/form-data`` and rejects writes
+        larger than 1 MiB, so data is sent in chunks.  No VM, NFS mount, or
+        CloudStack volume is required.
+        """
+        vol_uuid = self._volume_uuid(vol_name)
+        if not vol_uuid:
+            raise RuntimeError("ONTAP FlexVol '%s' not found" % vol_name)
+        url_path = self._files_path(vol_uuid, filename)
+        written = 0
+        size_bytes = int(size_bytes)
+        while written < size_bytes:
+            chunk = min(int(chunk_bytes), size_bytes - written)
+            files = {
+                "file": (filename, os.urandom(chunk),
+                         "application/octet-stream"),
+            }
+            self._post(
+                url_path,
+                params={"byte_offset": written, "overwrite": "true"},
+                files=files,
+                timeout=120,
+            )
+            written += chunk
+
+    def delete_file_in_volume(self, vol_name, filename):
+        """Delete a file from the FlexVol. No-op if the volume or file is gone."""
+        vol_uuid = self._volume_uuid(vol_name)
+        if not vol_uuid:
+            return
+        try:
+            self._delete(self._files_path(vol_uuid, filename))
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status not in (404, 409):
+                raise
+
 
 # ---------------------------------------------------------------------------
 # Base test class
@@ -281,9 +362,21 @@ class OntapRestClient:
 
 class OntapTestBase(cloudstackTestCase):
 
+    # ONTAP refuses to shrink a FlexVol below this; distinct from the
+    # plugin's 1.56 GiB create-time floor (ONTAP_MIN_VOLUME_SIZE).
+    ONTAP_MIN_FLEXVOL_SIZE = 20 * 1024 * 1024
+    FILLER_FILENAME = "ontap-filler.bin"
+    FILLER_SIZE = 32 * 1024 * 1024
+
     # ---- shared state (set/cleared by individual tests) ----------------
     pool = None
     volume = None
+    # Volumes a single test allocates on top of ``volume`` and deletes before
+    # it returns; tracked here only so a failed run still cleans them up.
+    extra_volumes = []
+    # File written into the FlexVol by tests that must raise ONTAP used space.
+    filler_filename = None
+    filler_flexvol = None
     pool2 = None
     volume2 = None
     disk_offering_id = None
@@ -442,8 +535,35 @@ class OntapTestBase(cloudstackTestCase):
     # ---- shared teardown -----------------------------------------------
 
     @classmethod
+    def _all_tracked_volumes(cls):
+        """Every volume the suite created, most recent first, without repeats."""
+        seen = set()
+        ordered = []
+        for vol in list(cls.extra_volumes or []) + [cls.volume2, cls.volume]:
+            vol_id = getattr(vol, "id", None)
+            if vol is None or vol_id in seen:
+                continue
+            seen.add(vol_id)
+            ordered.append(vol)
+        return ordered
+
+    @classmethod
     def tearDownClass(cls):
         """Best-effort cleanup of any resources left behind by a failed run."""
+        if (getattr(cls, "ontap", None) is not None
+                and getattr(cls, "filler_filename", None)
+                and getattr(cls, "filler_flexvol", None)):
+            try:
+                cls.ontap.delete_file_in_volume(
+                    cls.filler_flexvol, cls.filler_filename
+                )
+            except Exception as fe:
+                logger.warning(
+                    "tearDownClass: could not delete filler file %s in %s: %s"
+                    % (cls.filler_filename, cls.filler_flexvol, fe)
+                )
+            cls.filler_filename = None
+            cls.filler_flexvol = None
         for pool in [p for p in (cls.pool2, cls.pool) if p is not None]:
             try:
                 # Step 1: Check current pool state
@@ -477,7 +597,7 @@ class OntapTestBase(cloudstackTestCase):
                 # state. For iSCSI this works even in Maintenance; for NFS3/KVM
                 # it may fail with NPE ("storagePoolInformation is null") when
                 # pool is in Maintenance — that exception is caught below.
-                for vol in [v for v in (cls.volume2, cls.volume) if v is not None]:
+                for vol in cls._all_tracked_volumes():
                     try:
                         cmd = deleteVolumeAPI.deleteVolumeCmd()
                         cmd.id = vol.id
@@ -539,7 +659,7 @@ class OntapTestBase(cloudstackTestCase):
                         pass
 
         # Clean up volumes that may not have been handled with pool teardown
-        for vol in [v for v in (cls.volume2, cls.volume) if v is not None]:
+        for vol in cls._all_tracked_volumes():
             try:
                 cmd = deleteVolumeAPI.deleteVolumeCmd()
                 cmd.id = vol.id
@@ -599,6 +719,327 @@ class OntapTestBase(cloudstackTestCase):
         self.fail(
             "Pool %s did not reach state '%s' within %ds (last: '%s')"
             % (pool_id, target_state, timeout, current_state)
+        )
+
+    def _poll_pool_capacity(self, pool_id, expected_bytes, timeout=120,
+                            interval=5):
+        """Poll listStoragePools until capacitybytes equals expected_bytes."""
+        start = time.time()
+        deadline = start + timeout
+        attempt = 0
+        current = 0
+        log_progress(
+            logger, "info",
+            "Waiting for pool %s to report capacitybytes=%d "
+            "(timeout=%ds, poll every %ds).",
+            pool_id, expected_bytes, timeout, interval,
+        )
+        while time.time() < deadline:
+            attempt += 1
+            elapsed = int(time.time() - start)
+            remaining = max(0, int(deadline - time.time()))
+            pools = list_storage_pools(self.apiClient, id=pool_id)
+            if pools:
+                current = int(getattr(pools[0], "capacitybytes", 0) or 0)
+                if current == expected_bytes:
+                    log_progress(
+                        logger, "info",
+                        "Pool %s reported capacitybytes=%d after %ds (%d polls).",
+                        pool_id, expected_bytes, elapsed, attempt,
+                    )
+                    return pools[0]
+            log_progress(
+                logger, "info",
+                "Capacity poll #%d: pool %s capacitybytes=%d (want %d) "
+                "[elapsed %ds, ~%ds left]",
+                attempt, pool_id, current, expected_bytes,
+                elapsed, remaining,
+            )
+            time.sleep(interval)
+        log_progress(
+            logger, "error",
+            "Pool %s did not report capacitybytes=%d within %ds (last: %d).",
+            pool_id, expected_bytes, timeout, current,
+        )
+        self.fail(
+            "Pool %s did not report capacitybytes=%d within %ds (last: %d)"
+            % (pool_id, expected_bytes, timeout, current)
+        )
+
+    def _poll_ontap_volume_size(self, volume_name, expected_bytes,
+                                timeout=120, interval=5):
+        """Poll ONTAP until the FlexVol space.size equals expected_bytes."""
+        start = time.time()
+        deadline = start + timeout
+        attempt = 0
+        current = 0
+        log_progress(
+            logger, "info",
+            "Waiting for ONTAP FlexVol '%s' to report space.size=%d "
+            "(timeout=%ds, poll every %ds).",
+            volume_name, expected_bytes, timeout, interval,
+        )
+        while time.time() < deadline:
+            attempt += 1
+            elapsed = int(time.time() - start)
+            remaining = max(0, int(deadline - time.time()))
+            volume = self.ontap.get_volume(volume_name)
+            if volume:
+                current = int(volume.get("space", {}).get("size", 0) or 0)
+                if current == expected_bytes:
+                    log_progress(
+                        logger, "info",
+                        "ONTAP FlexVol '%s' reported space.size=%d after "
+                        "%ds (%d polls).",
+                        volume_name, expected_bytes, elapsed, attempt,
+                    )
+                    return volume
+            log_progress(
+                logger, "info",
+                "ONTAP capacity poll #%d: FlexVol '%s' space.size=%d "
+                "(want %d) [elapsed %ds, ~%ds left]",
+                attempt, volume_name, current, expected_bytes,
+                elapsed, remaining,
+            )
+            time.sleep(interval)
+        log_progress(
+            logger, "error",
+            "ONTAP FlexVol '%s' did not report space.size=%d within %ds "
+            "(last: %d).",
+            volume_name, expected_bytes, timeout, current,
+        )
+        self.fail(
+            "ONTAP FlexVol '%s' did not report space.size=%d within %ds "
+            "(last: %d)"
+            % (volume_name, expected_bytes, timeout, current)
+        )
+
+    def _get_cs_volume(self, vol_id):
+        """Return the CloudStack volume object, or None if it is gone."""
+        from marvin.cloudstackAPI import listVolumes as listVolumesAPI
+        cmd = listVolumesAPI.listVolumesCmd()
+        cmd.id = vol_id
+        cmd.listall = True
+        vols = self.apiClient.listVolumes(cmd) or []
+        return vols[0] if vols else None
+
+    def _volume_exists_in_cs(self, vol_id):
+        """Return True if the volume is still listed by CloudStack."""
+        return self._get_cs_volume(vol_id) is not None
+
+    def _cs_volume_snapshot(self, vol_id):
+        """Capture id, state, size, and pool so a later check can detect mutation."""
+        vol = self._get_cs_volume(vol_id)
+        self.assertIsNotNone(
+            vol, "CloudStack volume %s is not listed in listVolumes" % vol_id
+        )
+        pool_id = (
+            getattr(vol, "storageid", None)
+            or getattr(vol, "poolid", None)
+        )
+        return {
+            "id": getattr(vol, "id", None),
+            "state": getattr(vol, "state", None),
+            "size": int(getattr(vol, "size", 0) or 0),
+            "poolid": pool_id,
+        }
+
+    def _assert_cs_volume_untouched(self, before, label):
+        """Assert listVolumes still returns the same id, state, size, and pool."""
+        after = self._cs_volume_snapshot(before["id"])
+        self.assertEqual(
+            after["id"], before["id"],
+            "[%s] CloudStack volume id changed (%s -> %s)"
+            % (label, before["id"], after["id"]),
+        )
+        self.assertEqual(
+            after["state"], before["state"],
+            "[%s] CloudStack volume state changed (%s -> %s)"
+            % (label, before["state"], after["state"]),
+        )
+        self.assertEqual(
+            after["size"], before["size"],
+            "[%s] CloudStack volume size changed (%s -> %s)"
+            % (label, before["size"], after["size"]),
+        )
+        self.assertEqual(
+            after["poolid"], before["poolid"],
+            "[%s] CloudStack volume poolid changed (%s -> %s)"
+            % (label, before["poolid"], after["poolid"]),
+        )
+
+    def _align_flexvol_bytes(self, value):
+        """Round *value* down to the 4 KiB boundary ONTAP uses for FlexVol size."""
+        return (int(value) // 4096) * 4096
+
+    def _flexvol_used_bytes(self, vol_name):
+        """ONTAP physical used bytes on the FlexVol (used + reserved)."""
+        ontap_vol = self.ontap.get_volume(vol_name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol '%s' not found" % vol_name
+        )
+        space = ontap_vol.get("space") or {}
+        return int(space.get("used") or 0)
+
+    def _fill_flexvol_above_minimum(self, vol_name, timeout=90):
+        """Write a FlexVol file until ONTAP used space exceeds the minimum.
+
+        Returns ``(filler_filename_or_None, used_bytes)``.  The caller must
+        delete any returned filename.  No CloudStack volume or VM is created.
+        """
+        used = self._flexvol_used_bytes(vol_name)
+        if used > self.ONTAP_MIN_FLEXVOL_SIZE:
+            log_progress(
+                logger, "info",
+                "FlexVol '%s' already has %d B used (ONTAP FlexVol minimum "
+                "%d B); no filler file needed",
+                vol_name, used, self.ONTAP_MIN_FLEXVOL_SIZE,
+            )
+            return None, used
+        log_progress(
+            logger, "info",
+            "FlexVol '%s' has %d B used; writing %d B filler file '%s'",
+            vol_name, used, self.FILLER_SIZE, self.FILLER_FILENAME,
+        )
+        self.ontap.write_file_in_volume(
+            vol_name, self.FILLER_FILENAME, self.FILLER_SIZE
+        )
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            used = self._flexvol_used_bytes(vol_name)
+            if used > self.ONTAP_MIN_FLEXVOL_SIZE:
+                break
+            time.sleep(2)
+        self.assertGreater(
+            used, self.ONTAP_MIN_FLEXVOL_SIZE,
+            "FlexVol '%s' still has only %d B used after writing a %d B "
+            "filler file; cannot exceed the ONTAP FlexVol minimum of %d B"
+            % (vol_name, used, self.FILLER_SIZE, self.ONTAP_MIN_FLEXVOL_SIZE),
+        )
+        log_progress(
+            logger, "info",
+            "FlexVol '%s' has %d B used after filler file '%s'",
+            vol_name, used, self.FILLER_FILENAME,
+        )
+        return self.FILLER_FILENAME, used
+
+    def _delete_filler_file(self, vol_name, filename):
+        if not filename or not vol_name:
+            return
+        try:
+            self.ontap.delete_file_in_volume(vol_name, filename)
+        except Exception as exc:
+            logger.warning(
+                "could not delete filler file '%s' in FlexVol '%s': %s",
+                filename, vol_name, exc,
+            )
+        if self.__class__.filler_filename == filename:
+            self.__class__.filler_filename = None
+            self.__class__.filler_flexvol = None
+
+    def _shrink_target_below_used(self, used_bytes):
+        """4 KiB-aligned size below used_bytes but above the FlexVol min."""
+        used_bytes = int(used_bytes)
+        self.assertGreater(
+            used_bytes, self.ONTAP_MIN_FLEXVOL_SIZE,
+            "Used capacity %d B is not above the ONTAP FlexVol "
+            "minimum %d B; cannot distinguish a used-capacity reject "
+            "from a minimum-size reject"
+            % (used_bytes, self.ONTAP_MIN_FLEXVOL_SIZE),
+        )
+        target = self._align_flexvol_bytes(used_bytes - 4096)
+        if target <= self.ONTAP_MIN_FLEXVOL_SIZE:
+            target = self._align_flexvol_bytes(
+                (used_bytes + self.ONTAP_MIN_FLEXVOL_SIZE) // 2
+            )
+        self.assertGreater(
+            target, self.ONTAP_MIN_FLEXVOL_SIZE,
+            "Shrink target %d B is not above the ONTAP FlexVol minimum %d B"
+            % (target, self.ONTAP_MIN_FLEXVOL_SIZE),
+        )
+        self.assertLess(
+            target, used_bytes,
+            "Shrink target %d B must be below used capacity %d B"
+            % (target, used_bytes),
+        )
+        return target
+
+    def _assert_capacity_update_rejected(
+            self, cmd_pool_id, capacitybytes, label, verify_pool_id,
+            volume_name, expected_error=None):
+        """Assert updateStoragePool(capacitybytes) fails and sizes stay put.
+
+        CloudStack and ONTAP are compared against their own pre-request values
+        because the two do not have to agree: a FlexVol created with a snapshot
+        reserve reports a larger space.size than the usable capacity
+        CloudStack records.
+        """
+        listed = list_storage_pools(self.apiClient, id=verify_pool_id)
+        self.assertTrue(
+            listed,
+            "[%s] listStoragePools returned no result for pool %s"
+            % (label, verify_pool_id),
+        )
+        ontap_vol = self.ontap.get_volume(volume_name)
+        self.assertIsNotNone(
+            ontap_vol,
+            "[%s] ONTAP FlexVol '%s' not found" % (label, volume_name),
+        )
+        before_cs = int(getattr(listed[0], "capacitybytes", 0) or 0)
+        before_ontap = int(ontap_vol.get("space", {}).get("size", 0) or 0)
+        log_progress(
+            logger, "info",
+            "Negative resize %s: pool_id=%s capacitybytes=%s "
+            "(expect reject; CS=%d B ONTAP=%d B)",
+            label, cmd_pool_id, capacitybytes, before_cs, before_ontap,
+        )
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = cmd_pool_id
+        cmd.capacitybytes = capacitybytes
+        with self.assertRaises(CloudstackAPIException) as caught:
+            self.apiClient.updateStoragePool(cmd)
+        error_text = str(caught.exception)
+        log_progress(
+            logger, "info", "Rejected resize %s: %s", label, error_text,
+        )
+        if expected_error:
+            needles = (
+                expected_error
+                if isinstance(expected_error, (list, tuple))
+                else (expected_error,)
+            )
+            self.assertTrue(
+                any(needle in error_text for needle in needles),
+                "[%s] expected the rejection to report one of %r, got: %s"
+                % (label, needles, error_text),
+            )
+
+        listed = list_storage_pools(self.apiClient, id=verify_pool_id)
+        self.assertTrue(
+            listed,
+            "[%s] pool disappeared after rejected resize" % label,
+        )
+        after_cs = int(getattr(listed[0], "capacitybytes", 0) or 0)
+        self.assertEqual(
+            after_cs, before_cs,
+            "[%s] CloudStack capacity changed after rejected resize "
+            "(got %d, want %d)" % (label, after_cs, before_cs),
+        )
+        self.assertEqual(
+            listed[0].state, "Up",
+            "[%s] pool should remain Up after rejected resize, got '%s'"
+            % (label, listed[0].state),
+        )
+        ontap_vol = self.ontap.get_volume(volume_name)
+        self.assertIsNotNone(
+            ontap_vol,
+            "[%s] ONTAP FlexVol disappeared after rejected resize" % label,
+        )
+        after_ontap = int(ontap_vol.get("space", {}).get("size", 0) or 0)
+        self.assertEqual(
+            after_ontap, before_ontap,
+            "[%s] ONTAP FlexVol size changed after rejected resize "
+            "(got %d, want %d)" % (label, after_ontap, before_ontap),
         )
 
     def _create_volume(self, pool_id):
