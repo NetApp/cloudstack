@@ -233,14 +233,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | Suite | Protocol | Scope | Tests | Status |
 |-------|---------|-------|-------|--------|
-| NFS3 Pool Lifecycle | NFS3 | Cluster | 11 | ⚠️ restructured resize flow not run |
+| NFS3 Pool Lifecycle | NFS3 | Cluster | 11 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 7 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 11 | ⚠️ restructured resize flow not run |
+| iSCSI Pool Lifecycle | iSCSI | Cluster | 11 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
-| **Total** | | | **68** | **Restructured resize flows not run; 1 known environment failure** |
+| **Total** | | | **68** | **Resize flows passed; 1 known environment failure** |
