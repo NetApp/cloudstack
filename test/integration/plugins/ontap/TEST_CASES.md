@@ -19,11 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-<<<<<<< HEAD
-Complete reference for all 72 test cases across 12 test suites.
-=======
-Complete reference for all 68 test cases across 10 test suites.
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
+Complete reference for all 80 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -133,13 +129,8 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 04 | `test_04_attach_volume_to_vm` | Attach the ONTAP data volume to the running VM (hot-plug) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id`; `attachVolume` job succeeds | FlexVol `online`; after attach, a data file matching volume UUID present in FlexVol (`list_files_in_volume`) | positive |
 | 05 | `test_05_stop_vm_export_retained` | Stop the running VM with volume attached | test_04 | `vm.state == "Stopped"` | FlexVol still `online`; NFS export policy still present | positive |
 | 06 | `test_06_start_vm_volume_accessible` | Start the stopped VM | test_05 | `vm.state == "Running"` | FlexVol still `online` | positive |
-<<<<<<< HEAD
 | 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
 | 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_07 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
-=======
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM no longer listed; volume no longer listed; pool no longer listed | FlexVol deleted; export policy deleted | cleanup |
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
 
 ---
 
@@ -229,7 +220,6 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 |---|-------------|------|------------|-----------------------------|------------------------|------|
 | 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
-<<<<<<< HEAD
 | 03 | `test_03_deploy_vm` | Deploy VM with the tagged SO — ROOT on ONTAP; seeds `cs_tmpl_*`; verify 0 data-volume LUN-maps before attach | test_02 (`volume`) | `vm.state == "Running"`; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | Exactly one `/vol/<flex>/cs_tmpl_<id>` LUN; 0 data-volume LUN-maps | positive |
 | 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuse cache | test_03 | VM-2 Running; ROOT on pool; still one spool_ref | Still one `cs_tmpl_*`; non-cache LUN count +1 | positive |
 | 03b | `test_03b_expunge_second_vm_template_cache_survives` | Expunge VM-2 — cache LUN remains | test_03a | spool_ref still Ready | VM-2 ROOT LUN gone (non-cache count back to baseline); `cs_tmpl_*` still present | positive |
@@ -238,14 +228,6 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
 | 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
 | 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
-=======
-| 03 | `test_03_deploy_vm` | Deploy VM using first ready KVM template; verify 0 LUN-maps exist before attach | test_02 (`volume`) | `vm.state == "Running"`; 0 LUN-maps on ONTAP | 0 LUN-maps (`list_lun_maps_for_volume` returns empty) | positive |
-| 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
-| 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
-| 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; volume gone; pool gone | FlexVol deleted; all LUNs and igroups deleted | cleanup |
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
 
 > ⚠️ **test_07 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
 
@@ -285,26 +267,16 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | Suite | Protocol | Scope | Tests | Status |
 |-------|---------|-------|-------|--------|
-| NFS3 Pool Lifecycle | NFS3 | Cluster | 11 | ⚠️ restructured resize flow not run |
+| NFS3 Pool Lifecycle | NFS3 | Cluster | 11 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 7 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
-<<<<<<< HEAD
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 10 | 🆕 +2 template cache |
 | NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 8 | ✅ |
+| iSCSI Pool Lifecycle | iSCSI | Cluster | 11 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 10 | ⚠️ 7/8 + 🆕 2 template cache |
 | iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
-| **Total** | | | **72** | |
-=======
-| NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 11 | ⚠️ restructured resize flow not run |
-| iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
-| iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
-| iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
-| iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
-| **Total** | | | **68** | **Restructured resize flows not run; 1 known environment failure** |
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
+| **Total** | | | **80** | **Resize flows passed; 1 known environment failure** |
