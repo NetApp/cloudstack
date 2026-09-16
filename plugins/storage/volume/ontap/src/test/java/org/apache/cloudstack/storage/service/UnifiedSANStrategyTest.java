@@ -372,9 +372,6 @@ class UnifiedSANStrategyTest {
         request.setLun(lun);
 
         FeignException feignException = mock(FeignException.class);
-        when(feignException.status()).thenReturn(400);
-        when(feignException.contentUTF8()).thenReturn(
-                "{\"error\":{\"code\":\"8454269\",\"message\":\"Invalid QoS policy group specified\"}}");
         when(feignException.getMessage()).thenReturn("Bad Request");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
@@ -1118,7 +1115,6 @@ class UnifiedSANStrategyTest {
         request.setLun(lun);
 
         FeignException feignException = mock(FeignException.class);
-        when(feignException.status()).thenReturn(500);
         when(feignException.getMessage()).thenReturn("resize failed");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {

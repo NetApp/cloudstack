@@ -228,7 +228,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             errMsg = e.getMessage();
             logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
-            createCmdResult.setResult(e.toString());
+            createCmdResult.setResult(errMsg);
         } finally {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
                 logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
@@ -319,7 +319,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return false;
         }
         if (min > 0 && max > 0 && min > max) {
-            throw new InvalidParameterValueException("Minimum IOPS cannot be greater than maximum IOPS");
+            throw new CloudRuntimeException("Minimum IOPS cannot be greater than maximum IOPS");
         }
         if (min > 0) {
             String isAff = details.get(OntapStorageConstants.IS_AFF);
@@ -329,7 +329,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 storagePoolDetailsDao.addDetail(poolId, OntapStorageConstants.IS_AFF, isAff, false);
             }
             if (!Boolean.parseBoolean(isAff)) {
-                throw new InvalidParameterValueException(
+                throw new CloudRuntimeException(
                         "Minimum IOPS is not supported on FAS/non-AFF ONTAP platforms; only maximum IOPS is supported");
             }
         }
