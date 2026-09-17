@@ -83,8 +83,6 @@ export default {
   },
   data () {
     return {
-      offerings: [],
-      customDiskOffering: false,
       loading: false,
       customDiskOfferingIops: false
     }
@@ -106,15 +104,17 @@ export default {
     fetchData () {
       this.loading = true
       if (this.resource.size != null) {
-        this.form.size = this.resource.size / (1024 * 1024 * 1024)
+        this.form.size = Math.round(this.resource.size / (1024 * 1024 * 1024))
+      }
+      if (!this.resource.diskofferingid) {
+        this.loading = false
+        return
       }
       getAPI('listDiskOfferings', {
-        zoneid: this.resource.zoneid,
-        listall: true
+        id: this.resource.diskofferingid,
+        state: 'all'
       }).then(json => {
-        this.offerings = json.listdiskofferingsresponse.diskoffering || []
-        const currentOffering = this.offerings.find(offering => offering.id === this.resource.diskofferingid)
-        this.customDiskOffering = currentOffering?.iscustomized || false
+        const currentOffering = (json.listdiskofferingsresponse.diskoffering || [])[0]
         this.customDiskOfferingIops = currentOffering?.iscustomizediops || false
         if (this.customDiskOfferingIops) {
           this.form.miniops = this.resource.miniops
