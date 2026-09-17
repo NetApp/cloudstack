@@ -27,6 +27,7 @@ import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
@@ -68,6 +69,7 @@ import org.apache.cloudstack.storage.feign.model.FlexVolSnapshot;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.SANStrategy;
@@ -89,6 +91,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Primary datastore driver for NetApp ONTAP storage systems.
@@ -213,7 +216,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             errMsg = e.getMessage();
             logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
-            createCmdResult.setResult(e.toString());
+            createCmdResult.setResult(errMsg);
         } finally {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
                 logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
@@ -226,8 +229,85 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * Creates a volume on the ONTAP backend.
      */
     private CloudStackVolume createCloudStackVolume(StoragePoolVO storagePool, VolumeInfo volumeObject, Map<String, String> details) {
+        verifySufficientIopsForStoragePool(storagePool, volumeObject.getMinIops(), volumeObject.getId());
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-        return storageStrategy.createCloudStackVolume(createVolumeRequest(storagePool, details, volumeObject));
+        VolumeQosPolicy qosPolicy = null;
+        Volume.Type volumeType = volumeObject.getVolumeType();
+        if (volumeType == Volume.Type.DATADISK || volumeType == Volume.Type.ROOT) {
+            qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                    volumeObject.getMinIops(), volumeObject.getMaxIops(), storagePool.getId());
+        }
+        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
+                storagePool, details, volumeObject, qosPolicy);
+        try {
+            CloudStackVolume created = storageStrategy.createCloudStackVolume(request);
+            persistQosPolicyDetails(volumeObject.getId(), qosPolicy);
+            return created;
+        } catch (RuntimeException e) {
+            if (qosPolicy != null) {
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
+            }
+            throw e;
+        }
+    }
+
+    private VolumeQosPolicy createQosPolicyIfNeeded(StorageStrategy storageStrategy, Map<String, String> details,
+                                                    Long minIops, Long maxIops, Long poolId) {
+        if (!validateIops(storageStrategy, details, poolId, minIops, maxIops)) {
+            return null;
+        }
+        String policyName = getQosPolicyName(details.get(OntapStorageConstants.SVM_NAME), minIops, maxIops);
+        return storageStrategy.createVolumeQosPolicy(policyName, minIops, maxIops);
+    }
+
+    /**
+     * Empty/zero IOPS means no policy. Min greater than max is rejected.
+     * Min IOPS is AFF-only; older pools without {@code isAFF} are probed once and persisted.
+     */
+    private boolean validateIops(StorageStrategy storageStrategy, Map<String, String> details,
+                                 Long poolId, Long minIops, Long maxIops) {
+        long min = minIops == null ? 0 : minIops;
+        long max = maxIops == null ? 0 : maxIops;
+        if (min <= 0 && max <= 0) {
+            return false;
+        }
+        if (min > 0 && max > 0 && min > max) {
+            throw new CloudRuntimeException("Minimum IOPS cannot be greater than maximum IOPS");
+        }
+        if (min > 0) {
+            String isAff = details.get(OntapStorageConstants.IS_AFF);
+            if (StringUtils.isBlank(isAff)) {
+                isAff = Boolean.toString(storageStrategy.isAff());
+                details.put(OntapStorageConstants.IS_AFF, isAff);
+                storagePoolDetailsDao.addDetail(poolId, OntapStorageConstants.IS_AFF, isAff, false);
+            }
+            if (!Boolean.parseBoolean(isAff)) {
+                throw new CloudRuntimeException(
+                        "Minimum IOPS is not supported on FAS/non-AFF ONTAP platforms; only maximum IOPS is supported");
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Builds a reusable SVM-scoped QoS policy name: cs_{min}_to_{max}_iops_{svmName}.
+     * Dots in the SVM name are replaced with underscores (ONTAP QoS names cannot contain '.').
+     */
+    private String getQosPolicyName(String svmName, Long minIops, Long maxIops) {
+        String sanitizedSvmName = svmName == null ? "" : svmName.replace(".", OntapStorageConstants.UNDERSCORE);
+        long min = minIops != null && minIops > 0 ? minIops : 0;
+        long max = maxIops != null && maxIops > 0 ? maxIops : 0;
+        return OntapStorageConstants.QOS_POLICY_NAME_PREFIX + min + OntapStorageConstants.UNDERSCORE
+                + OntapStorageConstants.QOS_POLICY_NAME_TO + max + OntapStorageConstants.UNDERSCORE
+                + OntapStorageConstants.QOS_POLICY_NAME_IOPS + sanitizedSvmName;
+    }
+
+    private void persistQosPolicyDetails(long volumeId, VolumeQosPolicy qosPolicy) {
+        volumeDetailsDao.removeDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID);
+        if (qosPolicy == null) {
+            return;
+        }
+        volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID, qosPolicy.getUuid(), false);
     }
 
     /**
@@ -289,28 +369,46 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
         boolean iscsi = isIscsi(details);
 
+        verifySufficientIopsForStoragePool(storagePool, volumeInfo.getMinIops(), volumeInfo.getId());
+        VolumeQosPolicy qosPolicy = null;
+        Volume.Type volumeType = volumeInfo.getVolumeType();
+        if (volumeType == Volume.Type.DATADISK || volumeType == Volume.Type.ROOT) {
+            qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                    volumeInfo.getMinIops(), volumeInfo.getMaxIops(), storagePool.getId());
+        }
+
         CloudStackVolume request = iscsi
-                ? createCloneLunRequest(storagePool, details, volumeInfo, templatePoolRef, templateId)
+                ? createCloneLunRequest(storagePool, details, volumeInfo, templatePoolRef, templateId, qosPolicy)
                 : createCloneFileRequest(storagePool, volumeInfo, templatePoolRef, templateId);
 
-        CloudStackVolume cloned = storageStrategy.cloneCloudStackVolume(request);
-        // SAN cloneCloudStackVolume validates the Feign response (LUN name + uuid) before returning
-        if (cloned == null) {
-            throw new CloudRuntimeException("ONTAP returned nothing when cloning template [" + templateId
-                    + "] for volume [" + volumeInfo.getId() + "]");
+        try {
+            CloudStackVolume cloned = storageStrategy.cloneCloudStackVolume(request);
+            if (cloned == null) {
+                throw new CloudRuntimeException("ONTAP returned nothing when cloning template [" + templateId
+                        + "] for volume [" + volumeInfo.getId() + "]");
+            }
+
+            logger.info("cloneCloudStackVolumeFromTemplate: Cloned template [{}] for volume [{}] on pool [{}]",
+                    templateId, volumeInfo.getId(), storagePool.getId());
+
+            long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
+            if (requestedSize > templatePoolRef.getTemplateSize()) {
+                logger.info("cloneCloudStackVolumeFromTemplate: Growing clone of template [{}] from {} to {} bytes for volume [{}]",
+                        templateId, templatePoolRef.getTemplateSize(), requestedSize, volumeInfo.getId());
+                storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+            }
+
+            if (!iscsi && qosPolicy != null) {
+                attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
+            }
+            persistQosPolicyDetails(volumeInfo.getId(), qosPolicy);
+            return cloned;
+        } catch (Exception e) {
+            if (qosPolicy != null) {
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
+            }
+            throw e;
         }
-
-        logger.info("cloneCloudStackVolumeFromTemplate: Cloned template [{}] for volume [{}] on pool [{}]",
-                templateId, volumeInfo.getId(), storagePool.getId());
-
-        long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
-        if (requestedSize > templatePoolRef.getTemplateSize()) {
-            logger.info("cloneCloudStackVolumeFromTemplate: Growing clone of template [{}] from {} to {} bytes for volume [{}]",
-                    templateId, templatePoolRef.getTemplateSize(), requestedSize, volumeInfo.getId());
-            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
-        }
-
-        return cloned;
     }
 
     /**
@@ -441,6 +539,28 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
+     * Rejects the request when the minimum IOPS being asked for would push the pool past its
+     * configured IOPS capacity. Pools without an IOPS capacity enforce no ceiling.
+     *
+     * Used IOPS include volumes still in {@link Volume.State#Creating} so a second overlapping
+     * create sees the first reservation. The volume being checked is omitted so its own min IOPS
+     * are not counted twice (CloudStack has already moved it to Creating before this runs).
+     */
+    private void verifySufficientIopsForStoragePool(StoragePoolVO storagePool, Long requestedMinIops, long excludeVolumeId) {
+        Long capacityIops = storagePool.getCapacityIops();
+        if (capacityIops == null || requestedMinIops == null || requestedMinIops <= 0) {
+            return;
+        }
+
+        long requestedTotalIops = getAllocatedMinIops(storagePool, excludeVolumeId) + requestedMinIops;
+        if (requestedTotalIops > capacityIops) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient IOPS capacity on storage pool %s: requested total of %d IOPS exceeds the pool IOPS capacity of %d",
+                    storagePool.getName(), requestedTotalIops, capacityIops));
+        }
+    }
+
+    /**
      * Deletes a volume or snapshot from the ONTAP storage system.
      *
      * <p>For volumes, deletes the backend storage object (LUN for iSCSI, file for NFS) via
@@ -470,8 +590,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
                 logger.info("createCloudStackVolumeForTypeVolume: Connection to Ontap SVM [{}] successful, preparing CloudStackVolumeRequest", details.get(OntapStorageConstants.SVM_NAME));
                 VolumeInfo volumeInfo = (VolumeInfo) data;
+                VolumeDetailVO qosPolicyDetail = volumeDetailsDao.findDetail(
+                        volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
+                if (qosPolicyDetail != null) {
+                    volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
+                    storageStrategy.deleteVolumeQosPolicy(qosPolicyDetail.getValue());
+                }
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
                 commandResult.setResult(null);
                 commandResult.setSuccess(true);
@@ -596,7 +722,95 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+        String errMsg = null;
+        String path = null;
+        try {
+            if (!(data instanceof VolumeInfo)) {
+                throw new CloudRuntimeException("Invalid DataObjectType ("
+                        + (data != null ? data.getType() : null) + ") passed to resize");
+            }
+            VolumeInfo volumeInfo = (VolumeInfo) data;
+            path = volumeInfo.getPath();
+            applyVolumeQos(volumeInfo);
+        } catch (Exception e) {
+            errMsg = e.getMessage();
+            logger.error("Failed to update IOPS for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
+        }
+
+        CreateCmdResult result = new CreateCmdResult(path, new Answer(null, errMsg == null, errMsg));
+        result.setResult(errMsg);
+        callback.complete(result);
+    }
+
+    private void applyVolumeQos(VolumeInfo volumeInfo) {
+        ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
+        if (payload == null) {
+            throw new CloudRuntimeException("Missing resize payload for volume " + volumeInfo.getId());
+        }
+        VolumeVO volume = volumeDao.findById(volumeInfo.getId());
+        if (volume == null || volume.getPoolId() == null) {
+            throw new CloudRuntimeException("Unable to resolve volume or storage pool for IOPS update");
+        }
+        StoragePoolVO storagePool = storagePoolDao.findById(volume.getPoolId());
+        if (storagePool == null) {
+            throw new CloudRuntimeException("Storage pool not found for volume " + volume.getId());
+        }
+
+        verifySufficientIopsForStoragePool(storagePool, payload.newMinIops, volume.getId());
+
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        VolumeDetailVO qosDetail = volumeDetailsDao.findDetail(volume.getId(), OntapStorageConstants.QOS_POLICY_UUID);
+        String previousUuid = qosDetail != null ? qosDetail.getValue() : null;
+        VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                payload.newMinIops, payload.newMaxIops, volume.getPoolId());
+
+        if (qosPolicy != null && Objects.equals(previousUuid, qosPolicy.getUuid())) {
+            return;
+        }
+        if (qosPolicy != null) {
+            try {
+                attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
+                persistQosPolicyDetails(volume.getId(), qosPolicy);
+                storageStrategy.deleteVolumeQosPolicy(previousUuid);
+            } catch (RuntimeException e) {
+                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
+                throw e;
+            }
+            return;
+        }
+        if (previousUuid != null) {
+            detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
+            persistQosPolicyDetails(volume.getId(), null);
+            storageStrategy.deleteVolumeQosPolicy(previousUuid);
+        }
+    }
+
+    private void attachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
+                                 Map<String, String> details, VolumeInfo volumeInfo,
+                                 VolumeQosPolicy qosPolicy) {
+        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
+                storagePool, details, volumeInfo, qosPolicy);
+        if (isIscsi(details)) {
+            VolumeDetailVO lunUuid = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
+            if (lunUuid == null || lunUuid.getValue() == null) {
+                throw new CloudRuntimeException("LUN UUID is missing for volume " + volumeInfo.getId());
+            }
+            if (request.getLun() == null) {
+                throw new CloudRuntimeException("Missing LUN on QoS update request for volume " + volumeInfo.getId());
+            }
+            request.getLun().setUuid(lunUuid.getValue());
+        }
+        storageStrategy.updateCloudStackVolume(request);
+    }
+
+    private void detachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
+                                 Map<String, String> details, VolumeInfo volumeInfo) {
+        VolumeQosPolicy noPolicy = new VolumeQosPolicy();
+        noPolicy.setName(OntapStorageConstants.QOS_POLICY_NONE);
+        attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, noPolicy);
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -1023,9 +1237,31 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return 0;
     }
 
+    /**
+     * Returns min IOPS reserved on the pool, including volumes still being created.
+     * Destroyed and expunged volumes are omitted by the DAO query.
+     */
     @Override
     public long getUsedIops(StoragePool storagePool) {
-        return 0;
+        return getAllocatedMinIops(storagePool, null);
+    }
+
+    private long getAllocatedMinIops(StoragePool storagePool, Long excludeVolumeId) {
+        long usedIops = 0;
+
+        List<VolumeVO> volumes = volumeDao.findNonDestroyedVolumesByPoolId(storagePool.getId(), null);
+        if (volumes != null) {
+            for (VolumeVO volume : volumes) {
+                if (excludeVolumeId != null && excludeVolumeId.equals(volume.getId())) {
+                    continue;
+                }
+                if (volume.getMinIops() != null) {
+                    usedIops += volume.getMinIops();
+                }
+            }
+        }
+
+        return usedIops;
     }
 
     /**
@@ -1367,34 +1603,56 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Builds the request that creates a blank volume (LUN for iSCSI, qcow2 file for NFS).
+     * Builds the request that creates or updates a volume (LUN for iSCSI, qcow2 file for NFS),
+     * attaching a QoS policy reference when one is provided.
      */
-    private CloudStackVolume createVolumeRequest(StoragePoolVO storagePool, Map<String, String> details, DataObject volumeObject) {
-        CloudStackVolume request = new CloudStackVolume();
-        String protocol = details.get(OntapStorageConstants.PROTOCOL);
-        if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
-            request.setDatastoreId(String.valueOf(storagePool.getId()));
-            request.setVolumeInfo(volumeObject);
-        } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
-            Lun lunRequest = new Lun();
-            Svm svm = new Svm();
-            svm.setName(details.get(OntapStorageConstants.SVM_NAME));
-            String lunName = volumeObject.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
-            if (!OntapStorageUtils.isValidName(lunName)) {
-                throw new InvalidParameterValueException("Invalid dataObject name [" + lunName
-                        + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.");
-            }
-            lunRequest.setSvm(svm);
-            lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
-            lunRequest.setOsType(Lun.OsTypeEnum.valueOf(OntapStorageUtils.getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
-            LunSpace lunSpace = new LunSpace();
-            lunSpace.setSize(volumeObject.getSize());
-            lunRequest.setSpace(lunSpace);
-            request.setLun(lunRequest);
-        } else {
-            throw new CloudRuntimeException("Unsupported protocol " + protocol);
+    private CloudStackVolume createCloudStackVolumeRequestByProtocol(StoragePoolVO storagePool, Map<String, String> details,
+                                                                     DataObject volumeObject, VolumeQosPolicy qosPolicy) {
+        VolumeQosPolicy qosPolicyReference = null;
+        if (qosPolicy != null) {
+            qosPolicyReference = new VolumeQosPolicy();
+            qosPolicyReference.setName(qosPolicy.getName());
+            qosPolicyReference.setUuid(qosPolicy.getUuid());
         }
-        return request;
+
+        String protocol = details.get(OntapStorageConstants.PROTOCOL);
+        ProtocolType protocolType = ProtocolType.valueOf(protocol);
+        switch (protocolType) {
+            case NFS3:
+                CloudStackVolume nfsRequest = new CloudStackVolume();
+                nfsRequest.setDatastoreId(String.valueOf(storagePool.getId()));
+                nfsRequest.setFlexVolumeUuid(details.get(OntapStorageConstants.VOLUME_UUID));
+                nfsRequest.setVolumeInfo(volumeObject);
+                if (qosPolicyReference != null) {
+                    FileInfo fileInfo = new FileInfo();
+                    fileInfo.setQosPolicy(qosPolicyReference);
+                    nfsRequest.setFile(fileInfo);
+                }
+                return nfsRequest;
+            case ISCSI:
+                Svm svm = new Svm();
+                svm.setName(details.get(OntapStorageConstants.SVM_NAME));
+                CloudStackVolume iscsiRequest = new CloudStackVolume();
+                Lun lunRequest = new Lun();
+                lunRequest.setSvm(svm);
+
+                LunSpace lunSpace = new LunSpace();
+                lunSpace.setSize(volumeObject.getSize());
+                lunRequest.setSpace(lunSpace);
+                String lunName = volumeObject.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
+                if (!OntapStorageUtils.isValidName(lunName)) {
+                    throw new InvalidParameterValueException("Invalid dataObject name [" + lunName
+                            + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.");
+                }
+                lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
+                lunRequest.setOsType(Lun.OsTypeEnum.valueOf(
+                        OntapStorageUtils.getOSTypeFromHypervisor(storagePool.getHypervisor().name())));
+                lunRequest.setQosPolicy(qosPolicyReference);
+                iscsiRequest.setLun(lunRequest);
+                return iscsiRequest;
+            default:
+                throw new CloudRuntimeException("Unsupported protocol " + protocol);
+        }
     }
 
     /**
@@ -1417,7 +1675,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      */
     private CloudStackVolume createCloneLunRequest(StoragePoolVO storagePool, Map<String, String> details,
                                                    VolumeInfo volumeObject, VMTemplateStoragePoolVO templatePoolRef,
-                                                   long templateId) {
+                                                   long templateId, VolumeQosPolicy qosPolicy) {
         String sourceLunUuid = templatePoolRef.getLocalDownloadPath();
         if (sourceLunUuid == null || sourceLunUuid.isEmpty()) {
             throw new CloudRuntimeException("Template [" + templateId + "] has no cached LUN on pool ["
@@ -1443,6 +1701,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         lunRequest.setSvm(svm);
         lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
         lunRequest.setClone(clone);
+        if (qosPolicy != null) {
+            VolumeQosPolicy qosPolicyReference = new VolumeQosPolicy();
+            qosPolicyReference.setName(qosPolicy.getName());
+            qosPolicyReference.setUuid(qosPolicy.getUuid());
+            lunRequest.setQosPolicy(qosPolicyReference);
+        }
 
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lunRequest);

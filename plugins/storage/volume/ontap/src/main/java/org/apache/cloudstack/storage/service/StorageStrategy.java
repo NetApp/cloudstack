@@ -25,12 +25,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import com.cloud.utils.StringUtils;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
+import org.apache.cloudstack.storage.feign.client.QosFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.EmsFeignClient;
@@ -48,6 +50,7 @@ import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Version;
 import org.apache.cloudstack.storage.feign.model.Volume;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -81,6 +84,7 @@ public abstract class StorageStrategy {
     protected SvmFeignClient svmFeignClient;
     protected JobFeignClient jobFeignClient;
     protected NetworkFeignClient networkFeignClient;
+    protected QosFeignClient qosFeignClient;
     protected SANFeignClient sanFeignClient;
     protected NASFeignClient nasFeignClient;
     protected SnapshotFeignClient snapshotFeignClient;
@@ -114,6 +118,7 @@ public abstract class StorageStrategy {
         this.svmFeignClient = feignClientFactory.createClient(SvmFeignClient.class, baseURL);
         this.jobFeignClient = feignClientFactory.createClient(JobFeignClient.class, baseURL);
         this.networkFeignClient = feignClientFactory.createClient(NetworkFeignClient.class, baseURL);
+        this.qosFeignClient = feignClientFactory.createClient(QosFeignClient.class, baseURL);
         this.sanFeignClient = feignClientFactory.createClient(SANFeignClient.class, baseURL);
         this.nasFeignClient = feignClientFactory.createClient(NASFeignClient.class, baseURL);
         this.snapshotFeignClient = feignClientFactory.createClient(SnapshotFeignClient.class, baseURL);
@@ -227,6 +232,26 @@ public abstract class StorageStrategy {
             return platformTypes.iterator().next();
         }
         return OntapStorageConstants.ASUP_PLATFORM_TYPE_COMPOSITE;
+    }
+
+    /**
+     * True when every cluster node reports {@code is_all_flash_optimized} (AFF, including C-series).
+     * Any FAS node makes this false. Used for min-throughput QoS support.
+     */
+    public boolean isAff() {
+        Map<String, Object> query = new HashMap<>();
+        query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_ASUP_FIELDS);
+        OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(getAuthHeader(), query);
+        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+            throw new CloudRuntimeException(
+                    "Unable to determine whether the ONTAP cluster is AFF or FAS");
+        }
+        for (ClusterNode node : response.getRecords()) {
+            if (node == null || Boolean.FALSE.equals(node.getAllFlashOptimized())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -800,7 +825,7 @@ public abstract class StorageStrategy {
      * @param cloudstackVolume the CloudStack volume to update
      * @return the updated CloudStackVolume object
      */
-    abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
+    public abstract CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses.
@@ -955,6 +980,108 @@ public abstract class StorageStrategy {
      */
     public String getAuthHeader() {
         return OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+    }
+
+    public VolumeQosPolicy createVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
+        VolumeQosPolicy policy = buildVolumeQosPolicy(policyName, minIops, maxIops);
+        Svm svm = new Svm();
+        svm.setName(storage.getSvmName());
+        policy.setSvm(svm);
+        try {
+            JobResponse response = qosFeignClient.createPolicy(getAuthHeader(), policy);
+            pollJobIfPresent(response, "create QoS policy [" + policyName + "]");
+        } catch (FeignException e) {
+            if (e.status() != 409) {
+                throw new CloudRuntimeException("Failed to create ONTAP QoS policy [" + policyName + "]: "
+                        + e.getMessage(), e);
+            }
+            logger.info("QoS policy [{}] already exists; using the existing policy", policyName);
+        }
+
+        VolumeQosPolicy createdPolicy = getVolumeQosPolicy(policyName);
+        return createdPolicy;
+    }
+
+    public void deleteVolumeQosPolicy(String policyUuid) {
+        if (policyUuid == null || policyUuid.isEmpty()) {
+            return;
+        }
+        VolumeQosPolicy policy = getVolumeQosPolicyByUuid(policyUuid);
+        if (policy.getObjectCount() != null && policy.getObjectCount() > 0) {
+            logger.info("QoS policy [{}] still has object_count={}; skipping delete",
+                    policyUuid, policy.getObjectCount());
+            return;
+        }
+        try {
+            JobResponse response = qosFeignClient.deletePolicy(getAuthHeader(), policyUuid);
+            pollJobIfPresent(response, "delete QoS policy [" + policyUuid + "]");
+        } catch (Exception e) {
+            if ((e instanceof FeignException && ((FeignException) e).status() == 409)
+                    || OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                logger.info("QoS policy [{}] was not deleted on ONTAP (already absent or conflict): {}",
+                        policyUuid, e.getMessage());
+                return;
+            }
+            throw new CloudRuntimeException("Failed to delete ONTAP QoS policy [" + policyUuid + "]: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private VolumeQosPolicy getVolumeQosPolicyByUuid(String policyUuid) {
+        Map<String, Object> queryParams = new HashMap<>();
+        queryParams.put(OntapStorageConstants.FIELDS, OntapStorageConstants.QOS_POLICY_OBJECT_COUNT_FIELDS);
+        try {
+            VolumeQosPolicy policy = qosFeignClient.getPolicy(getAuthHeader(), policyUuid, queryParams);
+            if (policy == null || StringUtils.isEmpty(policy.getUuid())) {
+                throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyUuid
+                        + "]: empty response");
+            }
+            return policy;
+        } catch (FeignException e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                return null;
+            }
+            throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyUuid + "]: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private VolumeQosPolicy getVolumeQosPolicy(String policyName) {
+        Map<String, Object> queryParams = new HashMap<>();
+        queryParams.put(OntapStorageConstants.NAME, policyName);
+        queryParams.put(OntapStorageConstants.SVM_DOT_NAME, storage.getSvmName());
+        try {
+            OntapResponse<VolumeQosPolicy> response = qosFeignClient.getPolicies(getAuthHeader(), queryParams);
+            if (response == null || response.getRecords() == null || response.getRecords().size() <= 0) {
+                throw new CloudRuntimeException("Unable to get ONTAP QoS policy [" + policyName + "] after creation");
+            }
+            VolumeQosPolicy policy = response.getRecords().get(0);
+            if (policy == null || StringUtils.isEmpty(policy.getUuid())) {
+                throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyName
+                        + "]: empty response");
+            }
+            return policy;
+        } catch (FeignException e) {
+            throw new CloudRuntimeException("Failed to fetch ONTAP QoS policy [" + policyName + "]: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private VolumeQosPolicy buildVolumeQosPolicy(String policyName, Long minIops, Long maxIops) {
+        VolumeQosPolicy.Fixed fixed = new VolumeQosPolicy.Fixed();
+        fixed.setCapacityShared(false);
+        // ONTAP rejects a policy whose throughput limit is zero, so only unlimited-side values are omitted.
+        if (minIops != null && minIops > 0) {
+            fixed.setMinThroughputIops(minIops);
+        }
+        if (maxIops != null && maxIops > 0) {
+            fixed.setMaxThroughputIops(maxIops);
+        }
+
+        VolumeQosPolicy policy = new VolumeQosPolicy();
+        policy.setName(policyName);
+        policy.setFixed(fixed);
+        return policy;
     }
 
     /**
