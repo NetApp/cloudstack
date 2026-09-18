@@ -170,12 +170,39 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 // Update CloudStack volume record with storage pool association and protocol-specific details
                 VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
                 if (volumeVO != null) {
-                    // Create the backend storage object: a clone of the cached template when the
-                    // orchestrator asked for one, otherwise a blank LUN (iSCSI) or qcow2 file (NFS).
-                    Long cloneOfTemplateId = getTemplateIdForCloning(volInfo.getId());
-                    CloudStackVolume clonedCloudStackVolume = cloneOfTemplateId != null
-                            ? cloneCloudStackVolumeFromTemplate(storagePool, volInfo, details, cloneOfTemplateId)
-                            : createCloudStackVolume(storagePool, volInfo, details);
+                    /*
+                     * Create-volume combinations on ONTAP primary (v1):
+                     *
+                     * 1) cloneOfSnapshot — StorageSystemDataMotionStrategy sets volume_details.cloneOfSnapshot
+                     *    when createVolume(snapshotid) targets a managed backend snapshot.
+                     *    - Same primary pool / FlexVol only (PRIMARY_POOL_ID must match dataStore).
+                     *    - DATA or ROOT snapshot → new attachable data volume (ROOT is never bootable
+                     *      via this path; bootable recovery is createTemplate(snapshotid) → deploy).
+                     *    - Backend: iSCSI → POST /api/storage/luns (clone.source in .snapshot/);
+                     *      NFS → POST /api/storage/file/clone with snapshot.name.
+                     *    - IOPS: MIN_IOPS/MAX_IOPS may be on snapshot_details; apply is TODO below.
+                     *
+                     * 2) cloneOfTemplate — deploy / create from cached template on this pool.
+                     *
+                     * 3) else — blank LUN (iSCSI) or qcow2 (NFS).
+                     *
+                     * Mutually exclusive from the motion/orchestrator layer; snapshot is checked first
+                     * (SolidFire-style) so a restore never accidentally falls through to blank create.
+                     */
+                    Long cloneOfSnapshotId = getSnapshotIdForCloning(volInfo.getId());
+                    CloudStackVolume clonedCloudStackVolume;
+                    if (cloneOfSnapshotId != null) {
+                        clonedCloudStackVolume = cloneCloudStackVolumeFromSnapshot(
+                                storagePool, volInfo, details, cloneOfSnapshotId);
+                        // TODO(CSTACKEX-306): apply persisted MIN_IOPS / MAX_IOPS from snapshot_details
+                        // onto this CloudStack volume (and ONTAP QoS if applicable) after successful clone.
+                    } else {
+                        Long cloneOfTemplateId = getTemplateIdForCloning(volInfo.getId());
+                        clonedCloudStackVolume = cloneOfTemplateId != null
+                                ? cloneCloudStackVolumeFromTemplate(
+                                        storagePool, volInfo, details, cloneOfTemplateId)
+                                : createCloudStackVolume(storagePool, volInfo, details);
+                    }
 
                     volumeVO.setPoolType(storagePool.getPoolType());
                     volumeVO.setPoolId(storagePool.getId());
@@ -325,6 +352,102 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return null;
         }
         return Long.valueOf(detail.getValue());
+    }
+
+    /**
+     * Returns the CloudStack snapshot id to clone from when {@code volume_details.cloneOfSnapshot}
+     * is set, or null when this create is not a restore-from-snapshot.
+     *
+     * <p>Set by {@code StorageSystemDataMotionStrategy.handleCreateManagedVolumeFromManagedSnapshot}
+     * for the duration of {@code createAsync} only (same pattern as {@link #getTemplateIdForCloning}).</p>
+     */
+    private Long getSnapshotIdForCloning(long volumeId) {
+        VolumeDetailVO detail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.CLONE_OF_SNAPSHOT);
+        if (detail == null || detail.getValue() == null || detail.getValue().isEmpty()) {
+            return null;
+        }
+        return Long.valueOf(detail.getValue());
+    }
+
+    /**
+     * Creates a new volume on this pool by cloning a file/LUN from a CloudStack volume snapshot
+     * that already lives on the same FlexVolume.
+     *
+     * <p><b>Combinations (product + plugin v1):</b></p>
+     * <ul>
+     *   <li><b>Same pool only</b> — {@code snapshot_details.PRIMARY_POOL_ID} must equal this
+     *       {@code storagePool}. Cross-pool restore is descoped; use migrate later if needed.</li>
+     *   <li><b>DATA snapshot</b> → attachable data disk (disk offering usually inherited).</li>
+     *   <li><b>ROOT snapshot</b> → still a data disk here (not bootable). Bootable path remains
+     *       {@code createTemplate(snapshotid)} then deploy.</li>
+     *   <li><b>iSCSI</b> — {@code POST /api/storage/luns} with
+     *       {@code clone.source.name=/vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
+     *   <li><b>NFS3</b> — {@code POST /api/storage/file/clone} with {@code snapshot.name}</li>
+     *   <li><b>Not this path</b> — in-place revert ({@code revertSnapshot}); VM/instance snapshots;
+     *       secondary-storage archive restore.</li>
+     * </ul>
+     *
+     * <p>Optional grow when the disk offering is larger than the snapshot size (same pattern as
+     * clone-from-template).</p>
+     */
+    private CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, VolumeInfo volumeInfo,
+                                                               Map<String, String> details, long csSnapshotId) {
+        String snapshotName = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.ONTAP_SNAP_NAME);
+        String volumePath = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.VOLUME_PATH);
+        String primaryPoolId = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.PRIMARY_POOL_ID);
+        String snapProtocol = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.PROTOCOL);
+
+        // Same-pool / same-protocol gate (v1). Fail before any ONTAP call.
+        if (!String.valueOf(storagePool.getId()).equals(primaryPoolId)) {
+            throw new CloudRuntimeException("Create volume from snapshot [" + csSnapshotId
+                    + "] requires the snapshot's primary pool [" + primaryPoolId
+                    + "]; requested pool is [" + storagePool.getId() + "] (cross-pool restore is not supported in v1)");
+        }
+        String poolProtocol = details.get(OntapStorageConstants.PROTOCOL);
+        if (poolProtocol == null || !poolProtocol.equalsIgnoreCase(snapProtocol)) {
+            throw new CloudRuntimeException("Create volume from snapshot [" + csSnapshotId
+                    + "] protocol mismatch: snapshot=[" + snapProtocol + "], pool=[" + poolProtocol + "]");
+        }
+
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+
+        logger.info("cloneCloudStackVolumeFromSnapshot: Cloning from CS snapshot [{}] (ONTAP snap [{}], path [{}]) "
+                        + "for volume [{}] on pool [{}] protocol [{}]",
+                csSnapshotId, snapshotName, volumePath, volumeInfo.getId(), storagePool.getId(), poolProtocol);
+
+        CloudStackVolume cloned = storageStrategy.cloneCloudStackVolumeFromSnapshot(
+                storagePool, details, volumeInfo, volumePath, snapshotName);
+        if (cloned == null) {
+            throw new CloudRuntimeException("ONTAP returned nothing when cloning snapshot [" + csSnapshotId
+                    + "] for volume [" + volumeInfo.getId() + "]");
+        }
+
+        long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
+        long snapshotSize = resolveSnapshotSizeBytes(csSnapshotId);
+        if (snapshotSize > 0 && requestedSize > snapshotSize) {
+            logger.info("cloneCloudStackVolumeFromSnapshot: Growing clone of snapshot [{}] from {} to {} bytes for volume [{}]",
+                    csSnapshotId, snapshotSize, requestedSize, volumeInfo.getId());
+            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+        }
+
+        return cloned;
+    }
+
+    private String requireSnapshotDetail(long csSnapshotId, String key) {
+        String value = getSnapshotDetail(csSnapshotId, key);
+        if (value == null || value.isEmpty()) {
+            throw new CloudRuntimeException("Missing snapshot_details [" + key + "] for snapshot [" + csSnapshotId
+                    + "]; cannot create volume from snapshot");
+        }
+        return value;
+    }
+
+    private long resolveSnapshotSizeBytes(long csSnapshotId) {
+        SnapshotVO snapshotVO = snapshotDao.findById(csSnapshotId);
+        if (snapshotVO == null || snapshotVO.getSize() <= 0) {
+            return 0L;
+        }
+        return snapshotVO.getSize();
     }
 
     private VMTemplateStoragePoolVO findTemplatePoolRef(long poolId, long templateId) {
@@ -1122,9 +1245,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_SNAP_ID + "=" + ontapSnapshotUuid);
 
             // Persist snapshot_details so deleteAsync can resolve ONTAP FlexVol/snapshot UUIDs
-            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume)
+            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume).
+            // Also store source volume min/max IOPS when configured for later create-volume-from-snapshot.
             updateSnapshotDetails(snapshot.getId(), volumeInfo.getId(), flexVolUuid,
-                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid);
+                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid,
+                    volumeVO.getMinIops(), volumeVO.getMaxIops());
 
             CreateObjectAnswer createObjectAnswer = new CreateObjectAnswer(snapshotObjectTo);
             result = new CreateCmdResult(null, createObjectAnswer);
@@ -1514,12 +1639,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Persists snapshot metadata in snapshot_details table.
-     *
-     * Persists ONTAP snapshot metadata in {@code snapshot_details} for revert and delete.
+     * Persists ONTAP snapshot metadata in {@code snapshot_details} for revert, delete, and
+     * create-volume-from-snapshot.
      *
      * <p>Volume-snapshot delete reads {@code base_ontap_fv_id} and {@code ontap_snap_id} here
      * during {@link #deleteCloudStackVolumeSnapshot}; missing rows prevent ONTAP cleanup.</p>
+     *
+     * <p>All rows go through {@link #persistSnapshotDetail} so DAO writes stay consistent;
+     * optional fields (LUN uuid, IOPS) are skipped when unset.</p>
      *
      * @param csSnapshotId      CloudStack snapshot ID
      * @param csVolumeId        Source CloudStack volume ID
@@ -1530,45 +1657,48 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * @param storagePoolId     Primary storage pool ID
      * @param protocol          Storage protocol (NFS3 or ISCSI)
      * @param lunUuid           LUN UUID (only for iSCSI, null for NFS)
+     * @param minIops           Source volume min IOPS if configured; null/&lt;=0 skipped
+     * @param maxIops           Source volume max IOPS if configured; null/&lt;=0 skipped
      */
     private void updateSnapshotDetails(long csSnapshotId, long csVolumeId, String flexVolUuid,
                                         String ontapSnapshotUuid, String snapshotName,
                                         String volumePath, long storagePoolId, String protocol,
-                                        String lunUuid) {
-        SnapshotDetailsVO snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.SRC_CS_VOLUME_ID, String.valueOf(csVolumeId), false);
-        snapshotDetailsDao.persist(snapshotDetail);
+                                        String lunUuid, Long minIops, Long maxIops) {
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.SRC_CS_VOLUME_ID, String.valueOf(csVolumeId));
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.BASE_ONTAP_FV_ID, flexVolUuid);
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.ONTAP_SNAP_ID, ontapSnapshotUuid);
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.ONTAP_SNAP_NAME, snapshotName);
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.VOLUME_PATH, volumePath);
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.PRIMARY_POOL_ID, String.valueOf(storagePoolId));
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.PROTOCOL, protocol);
+        // iSCSI only — needed for LUN restore / identity; omitted for NFS.
+        persistSnapshotDetail(csSnapshotId, OntapStorageConstants.LUN_DOT_UUID, lunUuid);
+        // Optional: only when the source volume has IOPS configured (no-op otherwise).
+        // TODO(CSTACKEX-306): on create-volume-from-snapshot, read these and apply to the new volume.
+        persistSnapshotIopsDetail(csSnapshotId, OntapStorageConstants.MIN_IOPS, minIops);
+        persistSnapshotIopsDetail(csSnapshotId, OntapStorageConstants.MAX_IOPS, maxIops);
+    }
 
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.BASE_ONTAP_FV_ID, flexVolUuid, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.ONTAP_SNAP_ID, ontapSnapshotUuid, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.ONTAP_SNAP_NAME, snapshotName, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.VOLUME_PATH, volumePath, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.PRIMARY_POOL_ID, String.valueOf(storagePoolId), false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.PROTOCOL, protocol, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        // Store LUN UUID for iSCSI volumes (required for LUN restore API)
-        if (lunUuid != null && !lunUuid.isEmpty()) {
-            snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                    OntapStorageConstants.LUN_DOT_UUID, lunUuid, false);
-            snapshotDetailsDao.persist(snapshotDetail);
+    /**
+     * Persists one {@code snapshot_details} row. No-op when {@code value} is null or blank so
+     * optional keys (e.g. LUN uuid on NFS) share the same DAO path as required keys.
+     */
+    private void persistSnapshotDetail(long csSnapshotId, String detailName, String value) {
+        if (value == null || value.isEmpty()) {
+            return;
         }
+        snapshotDetailsDao.persist(new SnapshotDetailsVO(csSnapshotId, detailName, value, false));
+    }
+
+    /**
+     * Persists a snapshot IOPS detail when {@code iops} is non-null and positive; otherwise no-op.
+     */
+    private void persistSnapshotIopsDetail(long csSnapshotId, String detailName, Long iops) {
+        if (iops == null || iops <= 0) {
+            return;
+        }
+        persistSnapshotDetail(csSnapshotId, detailName, String.valueOf(iops));
+        logger.debug("updateSnapshotDetails: persisted {}={} for snapshot [{}]", detailName, iops, csSnapshotId);
     }
 
 }

@@ -23,6 +23,7 @@ import com.cloud.host.HostVO;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Igroup;
@@ -260,6 +261,102 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
+    /**
+     * Creates a new LUN by cloning from a FlexVolume snapshot via the LUN REST API
+     * ({@code POST /api/storage/luns} with {@code clone.source.name} pointing into
+     * {@code /vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/...}).
+     *
+     * <p>Builds the protocol-specific request and executes it (mirrors {@link #createTemplateCache}).
+     * NFS uses file-clone in {@link UnifiedNASStrategy} instead.</p>
+     *
+     * <p><b>Combinations covered here:</b></p>
+     * <ul>
+     *   <li>DATA or ROOT snapshot → new data volume on the same OntapiSCSI pool</li>
+     *   <li>Same pool / FlexVol only (v1); cross-pool is not implemented</li>
+     *   <li>In-place revert remains {@link #revertSnapshotForCloudStackVolume}; this method always
+     *       creates a <em>new</em> LUN</li>
+     *   <li>IOPS from snapshot_details are not applied here — see driver TODO</li>
+     * </ul>
+     */
+    @Override
+    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> details,
+                                                              VolumeInfo volumeInfo, String sourceVolumePath,
+                                                              String snapshotName) {
+        if (storagePool == null || details == null || volumeInfo == null) {
+            throw new CloudRuntimeException("Failed to clone Lun from snapshot, invalid request");
+        }
+        if (sourceVolumePath == null || sourceVolumePath.isEmpty()) {
+            throw new CloudRuntimeException("Failed to clone Lun from snapshot, source LUN path is required");
+        }
+        if (snapshotName == null || snapshotName.isEmpty()) {
+            throw new CloudRuntimeException("Failed to clone Lun from snapshot, snapshot name is required");
+        }
+
+        Lun lunRequest = buildCloneLunFromSnapshotRequest(storagePool, details, volumeInfo, sourceVolumePath, snapshotName);
+        logger.info("cloneCloudStackVolumeFromSnapshot [iSCSI]: Cloning LUN [{}] from snapshot source [{}]",
+                lunRequest.getName(), lunRequest.getClone().getSource().getName());
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            OntapResponse<Lun> clonedLun = sanFeignClient.createLun(authHeader, true, lunRequest);
+            if (clonedLun == null || CollectionUtils.isEmpty(clonedLun.getRecords())) {
+                logger.error("cloneCloudStackVolumeFromSnapshot: LUN clone returned no records for Lun {}",
+                        lunRequest.getName());
+                throw new CloudRuntimeException("Failed to clone Lun from snapshot: " + lunRequest.getName());
+            }
+            Lun lun = clonedLun.getRecords().get(0);
+            validateCreatedLun(lun, lunRequest.getName(), "cloneCloudStackVolumeFromSnapshot");
+            logger.debug("cloneCloudStackVolumeFromSnapshot: LUN cloned successfully. Lun: {}", lun);
+
+            CloudStackVolume clonedCloudStackVolume = new CloudStackVolume();
+            clonedCloudStackVolume.setLun(lun);
+            return clonedCloudStackVolume;
+        } catch (FeignException e) {
+            logger.error("FeignException while cloning LUN from snapshot, Status: {}, Exception: {}",
+                    e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to clone Lun from snapshot: " + e.getMessage());
+        } catch (CloudRuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("Exception while cloning LUN from snapshot: {}", e.getMessage());
+            throw new CloudRuntimeException("Failed to clone Lun from snapshot: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Builds {@code POST /api/storage/luns} clone request with snapshot-qualified source name
+     * {@code /vol/&lt;flexVol&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;} (name required; uuid cannot
+     * identify a snapshot-resident LUN).
+     */
+    private Lun buildCloneLunFromSnapshotRequest(StoragePoolVO storagePool, Map<String, String> details,
+                                                 VolumeInfo volumeInfo, String sourceVolumePath,
+                                                 String snapshotName) {
+        String lunName = volumeInfo.getName().replace(OntapStorageConstants.HYPHEN, OntapStorageConstants.UNDERSCORE);
+        if (!OntapStorageUtils.isValidName(lunName)) {
+            throw new CloudRuntimeException("Invalid dataObject name [" + lunName
+                    + "]. It must start with a letter and can only contain letters, digits, and underscores, and be up to 200 characters long.");
+        }
+
+        String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
+        if (flexVolName == null || flexVolName.isEmpty()) {
+            flexVolName = storagePool.getName();
+        }
+        String snapshotSourceName = OntapStorageUtils.toLunCloneSourcePathInSnapshot(
+                sourceVolumePath, flexVolName, snapshotName);
+
+        Svm svm = new Svm();
+        svm.setName(details.get(OntapStorageConstants.SVM_NAME));
+
+        Lun.Source source = new Lun.Source();
+        source.setName(snapshotSourceName);
+        Lun.Clone clone = new Lun.Clone();
+        clone.setSource(source);
+
+        Lun lunRequest = new Lun();
+        lunRequest.setSvm(svm);
+        lunRequest.setName(OntapStorageUtils.getLunName(storagePool.getName(), lunName));
+        lunRequest.setClone(clone);
+        return lunRequest;
+    }
 
     /**
      * Ensures ONTAP returned a usable LUN identity from create/clone. Callers in the datastore

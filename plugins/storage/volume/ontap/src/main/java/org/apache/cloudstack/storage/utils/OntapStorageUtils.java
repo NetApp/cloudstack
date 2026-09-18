@@ -139,6 +139,49 @@ public class OntapStorageUtils {
     }
 
     /**
+     * Converts a path stored in CloudStack (absolute LUN {@code /vol/&lt;flexVol&gt;/...} or already
+     * relative NFS file path) into the FlexVol-relative path expected by
+     * {@code POST /api/storage/file/clone}.
+     */
+    public static String toFlexVolRelativePath(String path, String flexVolName) {
+        if (path == null || path.isEmpty()) {
+            return path;
+        }
+        if (flexVolName != null && !flexVolName.isEmpty()) {
+            String prefix = OntapStorageConstants.VOLUME_PATH_PREFIX + flexVolName + OntapStorageConstants.SLASH;
+            if (path.startsWith(prefix)) {
+                return path.substring(prefix.length());
+            }
+        }
+        // Already relative (typical NFS uuid path) or unexpected absolute form — strip a leading slash.
+        return path.startsWith(OntapStorageConstants.SLASH) ? path.substring(1) : path;
+    }
+
+    /**
+     * Builds the ONTAP LUN clone source name that points at a LUN inside a FlexVol snapshot.
+     *
+     * <p>Format required by {@code POST /api/storage/luns} when cloning from a snapshot:
+     * {@code /vol/&lt;flexVol&gt;/.snapshot/&lt;snapshotName&gt;/&lt;relativeLunPath&gt;}.</p>
+     *
+     * <p>{@code clone.source.uuid} cannot identify a snapshot-resident LUN; name must be used.</p>
+     */
+    public static String toLunCloneSourcePathInSnapshot(String lunPath, String flexVolName, String snapshotName) {
+        if (flexVolName == null || flexVolName.isEmpty()) {
+            throw new InvalidParameterValueException("FlexVolume name is required to build a snapshot LUN path");
+        }
+        if (snapshotName == null || snapshotName.isEmpty()) {
+            throw new InvalidParameterValueException("Snapshot name is required to build a snapshot LUN path");
+        }
+        String relativeLunPath = toFlexVolRelativePath(lunPath, flexVolName);
+        if (relativeLunPath == null || relativeLunPath.isEmpty()) {
+            throw new InvalidParameterValueException("LUN path is required to build a snapshot LUN path");
+        }
+        return OntapStorageConstants.VOLUME_PATH_PREFIX + flexVolName
+                + OntapStorageConstants.SNAPSHOT_PATH_SEGMENT + snapshotName
+                + OntapStorageConstants.SLASH + relativeLunPath;
+    }
+
+    /**
      * Builds an ONTAP-safe name token from user-provided snapshot text.
      */
     public static String getOntapSnapshotName(String cloudStackSnapshotName) {

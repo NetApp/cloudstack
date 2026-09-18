@@ -76,6 +76,9 @@ class UnifiedSANStrategyTest {
     private SANFeignClient sanFeignClient;
 
     @Mock
+    private org.apache.cloudstack.storage.feign.client.NASFeignClient nasFeignClient;
+
+    @Mock
     private OntapStorage ontapStorage;
 
     @Mock
@@ -104,6 +107,10 @@ class UnifiedSANStrategyTest {
             java.lang.reflect.Field sanFeignClientField = StorageStrategy.class.getDeclaredField("sanFeignClient");
             sanFeignClientField.setAccessible(true);
             sanFeignClientField.set(unifiedSANStrategy, sanFeignClient);
+
+            java.lang.reflect.Field nasFeignClientField = StorageStrategy.class.getDeclaredField("nasFeignClient");
+            nasFeignClientField.setAccessible(true);
+            nasFeignClientField.set(unifiedSANStrategy, nasFeignClient);
 
             // Also inject the storage field from parent class to ensure proper mocking
             java.lang.reflect.Field storageField = StorageStrategy.class.getDeclaredField("storage");
@@ -1004,6 +1011,212 @@ class UnifiedSANStrategyTest {
 
         assertThrows(CloudRuntimeException.class,
             () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_Success() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("new_lun");
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        Lun createdLun = new Lun();
+        createdLun.setName("/vol/vol1/new_lun");
+        createdLun.setUuid("new-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(createdLun));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+
+            CloudStackVolume result = unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                    storagePool, details, volumeInfo, "/vol/vol1/source_lun", "snap_cs200");
+
+            assertNotNull(result);
+            assertEquals("new-lun-uuid", result.getLun().getUuid());
+            ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+            verify(sanFeignClient).createLun(eq(authHeader), eq(true), lunCaptor.capture());
+            assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun",
+                    lunCaptor.getValue().getClone().getSource().getName());
+            assertEquals("/vol/vol1/new_lun", lunCaptor.getValue().getName());
+            verify(nasFeignClient, never()).cloneFile(any(), any());
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_MissingSnapshotName_Throws() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                        storagePool, details, volumeInfo, "/vol/vol1/source_lun", null));
+        verify(sanFeignClient, never()).createLun(any(), anyBoolean(), any());
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_MissingSourcePath_Throws() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                        storagePool, details, volumeInfo, null, "snap_cs200"));
+        assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                        storagePool, details, volumeInfo, "", "snap_cs200"));
+        verify(sanFeignClient, never()).createLun(any(), anyBoolean(), any());
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_NullArgs_Throws() {
+        assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                        null, new HashMap<>(),
+                        mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class),
+                        "/vol/vol1/source_lun", "snap"));
+        verify(sanFeignClient, never()).createLun(any(), anyBoolean(), any());
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_RelativeSourcePath_BuildsSnapshotQualifiedName() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("dest-lun");
+
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        Lun createdLun = new Lun();
+        createdLun.setName("/vol/vol1/dest_lun");
+        createdLun.setUuid("new-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(createdLun));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock =
+                     mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+
+            unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                    storagePool, details, volumeInfo, "source_lun", "snap_cs200");
+
+            ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+            verify(sanFeignClient).createLun(eq(authHeader), eq(true), lunCaptor.capture());
+            assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun",
+                    lunCaptor.getValue().getClone().getSource().getName());
+            assertEquals("/vol/vol1/dest_lun", lunCaptor.getValue().getName());
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_EmptyRecords_Throws() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("new_lun");
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        OntapResponse<Lun> empty = new OntapResponse<>();
+        empty.setRecords(List.of());
+
+        try (MockedStatic<OntapStorageUtils> utilityMock =
+                     mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(empty);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                            storagePool, details, volumeInfo, "/vol/vol1/source_lun", "snap_cs200"));
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_IncompleteLun_Throws() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("new_lun");
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        Lun incomplete = new Lun();
+        incomplete.setName("/vol/vol1/new_lun");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(incomplete));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock =
+                     mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                            storagePool, details, volumeInfo, "/vol/vol1/source_lun", "snap_cs200"));
+        }
+    }
+
+    @Test
+    void testCloneCloudStackVolumeFromSnapshot_FeignException_Throws() {
+        org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
+                mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);
+        when(storagePool.getName()).thenReturn("vol1");
+        org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo volumeInfo =
+                mock(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo.class);
+        when(volumeInfo.getName()).thenReturn("new_lun");
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(500);
+        when(feignException.getMessage()).thenReturn("clone failed");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock =
+                     mockStatic(OntapStorageUtils.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(feignException);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.cloneCloudStackVolumeFromSnapshot(
+                            storagePool, details, volumeInfo, "/vol/vol1/source_lun", "snap_cs200"));
+        }
     }
 
     @Test
