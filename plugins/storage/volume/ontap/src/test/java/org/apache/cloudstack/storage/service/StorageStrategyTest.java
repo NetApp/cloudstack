@@ -26,6 +26,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
@@ -164,6 +166,15 @@ public class StorageStrategyTest {
 
         @Override
         public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
+            return null;
+        }
+
+        @Override
+        public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool,
+                                                                  Map<String, String> details,
+                                                                  VolumeInfo volumeInfo,
+                                                                  String sourceVolumePath,
+                                                                  String snapshotName) {
             return null;
         }
 
