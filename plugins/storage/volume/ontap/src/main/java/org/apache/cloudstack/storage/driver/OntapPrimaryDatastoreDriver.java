@@ -133,6 +133,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return true;
     }
 
+    @Override
+    public boolean requiresAccessForMigration(DataObject dataObject) {
+        logger.trace("requiresAccessForMigration invoked");
+        return true;
+    }
+
     /**
      * Creates a volume on the ONTAP storage system.
      */
