@@ -43,11 +43,7 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-<<<<<<< HEAD
-├── TEST_CASES.md                 # Full test case reference table (72 tests)
-=======
-├── TEST_CASES.md                 # Full test case reference table (68 tests)
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
+├── TEST_CASES.md                 # Full test case reference table (92 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -336,20 +332,15 @@ self.assertEqual(result.state, "Maintenance")
 
 | Suite | File | Tests | What it covers |
 |-------|------|-------|---------------|
-| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 11 | Create, grow, safe shrink, disable, enable, maintenance, delete, then re-create with a volume, reject shrink below used capacity, cleanup |
+| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 15 | Create, grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, enable, maintenance, resize in maintenance, delete, then re-create with a volume, reject shrink below used capacity, deploy a VM and attach the volume, cleanup |
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 6 | Zone scope — all hosts connected via `attachZone`; grow and safe shrink |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-<<<<<<< HEAD
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
-| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
-=======
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
-| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 11 | Create, grow, safe shrink, disable, enable, maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, cleanup |
->>>>>>> 8ee63f66c2 (CSTACKEX-286: automation changes for storagepool resize)
+| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 15 | Create, grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, enable, maintenance, resize in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 6 | Zone scope; grow and safe shrink |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
