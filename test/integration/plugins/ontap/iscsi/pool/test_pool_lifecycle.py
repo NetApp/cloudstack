@@ -1239,4 +1239,3 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                 igroup,
                 "ONTAP igroup '%s' still exists after pool deletion" % igroup_name
             )
-
