@@ -104,7 +104,7 @@ export default {
     fetchData () {
       this.loading = true
       if (this.resource.size != null) {
-        this.form.size = Math.round(this.resource.size / (1024 * 1024 * 1024))
+        this.form.size = this.resource.size / (1024 * 1024 * 1024)
       }
       if (!this.resource.diskofferingid) {
         this.loading = false
