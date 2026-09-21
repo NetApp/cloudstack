@@ -24,8 +24,8 @@ builds on the shared state established by the previous step.
 
 Workflow:
   01  Create primary storage pool
-  02  Increase storage pool capacity to the 300 TiB ONTAP maximum
-  03  Reject a grow beyond the 300 TiB maximum
+  02  Increase storage pool capacity to the maximum supported size
+  03  Reject a grow beyond the maximum supported size
   04  Safely shrink storage pool capacity
   05  Disable storage pool
   06  Enable storage pool
