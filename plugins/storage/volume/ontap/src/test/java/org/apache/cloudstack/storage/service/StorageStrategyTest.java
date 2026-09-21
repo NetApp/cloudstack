@@ -556,6 +556,20 @@ public class StorageStrategyTest {
                 "Expected the message to prompt verifying username/password but got: " + ex.getMessage());
     }
 
+    @Test
+    public void testConnect_forbidden() {
+        setupSuccessfulConnect();
+        Map<String, Collection<String>> emptyHeaders = Collections.emptyMap();
+        Request dummyReq = Request.create(Request.HttpMethod.GET, "http://test", emptyHeaders, (byte[]) null, (Charset) null);
+        FeignException.Forbidden forbidden = new FeignException.Forbidden("Forbidden", dummyReq, null);
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
+                .thenThrow(forbidden);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
+        assertEquals("Forbidden", ex.getMessage());
+        assertNull(ex.getCause());
+    }
+
     // ========== chooseAggregate() Tests ==========
 
     @Test
@@ -647,6 +661,23 @@ public class StorageStrategyTest {
         Exception ex = assertThrows(CloudRuntimeException.class,
                 () -> storageStrategy.chooseAggregate(5000000000L));
         assertTrue(ex.getMessage().contains("does not have a node name"));
+    }
+
+    @Test
+    public void testChooseAggregate_forbidden() {
+        setupSuccessfulConnect();
+        storageStrategy.connect();
+
+        Map<String, Collection<String>> emptyHeaders = Collections.emptyMap();
+        Request dummyReq = Request.create(Request.HttpMethod.GET, "http://test", emptyHeaders, (byte[]) null, (Charset) null);
+        FeignException.Forbidden forbidden = new FeignException.Forbidden("Forbidden", dummyReq, null);
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
+                .thenThrow(forbidden);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> storageStrategy.chooseAggregate(5000000000L));
+        assertEquals("Forbidden", ex.getMessage());
+        assertNull(ex.getCause());
     }
 
     // ========== createStorageVolume() Tests ==========
@@ -1127,6 +1158,22 @@ public class StorageStrategyTest {
         Exception ex = assertThrows(CloudRuntimeException.class,
                 () -> storageStrategy.getNetworkInterface(aggregate));
         assertTrue(ex.getMessage().contains("Failed to retrieve network interfaces"));
+    }
+
+    @Test
+    public void testGetNetworkInterface_forbidden() {
+        Aggregate aggregate = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a");
+
+        Map<String, Collection<String>> emptyHeaders = Collections.emptyMap();
+        Request dummyReq = Request.create(Request.HttpMethod.GET, "http://test", emptyHeaders, (byte[]) null, (Charset) null);
+        FeignException.Forbidden forbidden = new FeignException.Forbidden("Forbidden", dummyReq, null);
+        when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
+                .thenThrow(forbidden);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> storageStrategy.getNetworkInterface(aggregate));
+        assertEquals("Forbidden", ex.getMessage());
+        assertNull(ex.getCause());
     }
 
     // ========== getNetworkInterface() Node-Affinity Tests ==========

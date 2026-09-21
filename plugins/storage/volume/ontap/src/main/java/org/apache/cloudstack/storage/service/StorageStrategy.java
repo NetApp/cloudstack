@@ -309,6 +309,9 @@ public abstract class StorageStrategy {
             String msg = "Authentication failed: Invalid credentials. Please verify the username and password.";
             logger.error(msg, e);
             throw new CloudRuntimeException(msg, e);
+        } catch (FeignException.Forbidden e) {
+            logger.error(e.getMessage());
+            throw new CloudRuntimeException(e.getMessage());
         } catch (Exception e) {
             logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
@@ -382,10 +385,16 @@ public abstract class StorageStrategy {
         Aggregate aggrChosen = null;
         for (Aggregate aggr : aggregates) {
             logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
-            Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid(),
-                    Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATE_NODE
-                            + OntapStorageConstants.COMMA + OntapStorageConstants.AGGREGATE_SPACE
-                            + OntapStorageConstants.COMMA + OntapStorageConstants.STATE));
+            Aggregate aggrResp;
+            try {
+                aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid(),
+                        Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATE_NODE
+                                + OntapStorageConstants.COMMA + OntapStorageConstants.AGGREGATE_SPACE
+                                + OntapStorageConstants.COMMA + OntapStorageConstants.STATE));
+            } catch (FeignException.Forbidden e) {
+                logger.error(e.getMessage());
+                throw new CloudRuntimeException(e.getMessage());
+            }
 
             if (aggrResp == null) {
                 logger.warn("Aggregate details response is null for aggregate " + aggr.getName() + ". Skipping.");
@@ -766,6 +775,9 @@ public abstract class StorageStrategy {
             return networkInterfaceResult(ip, warning);
         } catch (CloudRuntimeException e) {
             throw e;
+        } catch (FeignException.Forbidden e) {
+            logger.error(e.getMessage());
+            throw new CloudRuntimeException(e.getMessage());
         } catch (Exception e) {
             logger.error("Exception while retrieving network interfaces: ", e);
             throw new CloudRuntimeException("Failed to retrieve network interfaces: " + e.getMessage());
