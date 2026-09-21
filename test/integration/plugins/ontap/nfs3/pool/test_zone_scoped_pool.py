@@ -26,9 +26,11 @@ IPs.
 Workflow:
   01  Create zone-scoped NFS3 pool — pool.state Up; ONTAP FlexVol online;
                                      export policy has all cluster host IPs
-  02  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
-  03  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
-  04  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
+  02  Grow zone-scoped pool — capacity increased; FlexVol resized; state Up
+  03  Shrink zone-scoped pool — capacity back to its pre-grow value; state Up
+  04  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
+  05  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
+  06  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -135,6 +137,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
     cluster_host_ips = None
 
     _vol_name_prefix = "OntapZoneVol"
+    resize_original_size = None
 
     @classmethod
     def setUpClass(cls):
@@ -288,11 +291,100 @@ class TestOntapZoneScopedPool(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 02 — Disable zone-scoped pool
+    # Step 02 - Grow the zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_02_disable_zone_scoped_pool(self):
+    def test_02_grow_zone_scoped_pool(self):
+        """
+        Increase the zone-scoped pool's capacity.
+        Verifies:
+          - CloudStack reports the requested capacity
+          - ONTAP: FlexVol reaches the requested size and stays online
+          - pool.state stays Up
+          - ONTAP: export policy still covers every cluster host IP
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_01 must pass first"
+        )
+        pool = self.__class__.pool
+
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before capacity increase")
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(ontap_vol, "ONTAP FlexVol missing before increase")
+
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        requested_size = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+        self.__class__.resize_original_size = original_size
+
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = requested_size
+        self.apiClient.updateStoragePool(cmd)
+
+        grown = self._poll_pool_capacity(pool.id, requested_size, timeout=120)
+        self.assertEqual(
+            grown.state, "Up",
+            "Pool should stay 'Up' after growing, got '%s'" % grown.state
+        )
+        grown_vol = self._poll_ontap_volume_size(
+            pool.name, requested_size, timeout=120
+        )
+        self.assertEqual(grown_vol.get("state"), "online")
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 03 - Safely shrink the zone-scoped pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_03_shrink_zone_scoped_pool(self):
+        """
+        Shrink the zone-scoped pool back to the size it had before test_02.
+        The pool holds no volumes, so this stays above ONTAP used space.
+        Verifies:
+          - CloudStack reports the original capacity again
+          - ONTAP: FlexVol shrinks back and stays online
+          - pool.state stays Up
+          - ONTAP: export policy still covers every cluster host IP
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_01 must pass first"
+        )
+        target_size = self.__class__.resize_original_size
+        self.assertIsNotNone(
+            target_size, "Original size absent - test_02 must pass first"
+        )
+        pool = self.__class__.pool
+
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = target_size
+        self.apiClient.updateStoragePool(cmd)
+
+        shrunk = self._poll_pool_capacity(pool.id, target_size, timeout=120)
+        self.assertEqual(
+            shrunk.state, "Up",
+            "Pool should stay 'Up' after shrinking, got '%s'" % shrunk.state
+        )
+        shrunk_vol = self._poll_ontap_volume_size(
+            pool.name, target_size, timeout=120
+        )
+        self.assertEqual(shrunk_vol.get("state"), "online")
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 04 — Disable zone-scoped pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_04_disable_zone_scoped_pool(self):
         """
         Disable the zone-scoped pool.
         Verifies:
@@ -325,11 +417,11 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 03 — Enable zone-scoped pool
+    # Step 05 — Enable zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_03_enable_zone_scoped_pool(self):
+    def test_05_enable_zone_scoped_pool(self):
         """
         Re-enable the zone-scoped pool.
         Verifies:
@@ -362,11 +454,11 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 04 — Delete zone-scoped pool
+    # Step 06 — Delete zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_04_delete_zone_scoped_pool(self):
+    def test_06_delete_zone_scoped_pool(self):
         """
         Enter maintenance then delete the zone-scoped pool.
         Verifies:
