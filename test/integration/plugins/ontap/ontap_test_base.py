@@ -36,10 +36,22 @@ from urllib.parse import quote, urlparse
 
 from marvin.cloudstackAPI import (
     cancelStorageMaintenance,
+    createNetwork as createNetworkAPI,
     createVolume as createVolumeAPI,
+    deleteNetwork as deleteNetworkAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    destroyVirtualMachine as destroyVirtualMachineAPI,
+    detachVolume as detachVolumeAPI,
+    enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
+    listNetworkOfferings as listNetworkOfferingsAPI,
+    listNetworks as listNetworksAPI,
+    listServiceOfferings as listServiceOfferingsAPI,
+    listTemplates as listTemplatesAPI,
+    listVirtualMachines as listVirtualMachinesAPI,
+    listVolumes as listVolumesAPI,
+    stopVirtualMachine as stopVirtualMachineAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
@@ -379,6 +391,14 @@ class OntapTestBase(cloudstackTestCase):
     filler_flexvol = None
     pool2 = None
     volume2 = None
+    # ---- VM state, for suites that deploy an instance ------------------
+    vm = None
+    template_id = None
+    service_offering_id = None
+    network_id = None
+    _created_network_id = None
+    # Prefix for a guest network this suite creates on Advanced zones.
+    _vm_network_name_prefix = "ontap-vm-net"
     disk_offering_id = None
     svm_name = None
     cluster_hosts = None
@@ -547,9 +567,187 @@ class OntapTestBase(cloudstackTestCase):
             ordered.append(vol)
         return ordered
 
+    # ---- VM deploy/attach helpers --------------------------------------
+
+    @classmethod
+    def _discover_vm_deploy_resources(cls):
+        """Resolve the template, service offering, and network for VM deploys.
+
+        A missing template is not fatal: ``template_id`` is left as None so
+        callers can skip the VM step while the rest of the suite still runs.
+        On Advanced zones an existing account network is reused when present,
+        otherwise an Isolated one is created and torn down in tearDownClass.
+        """
+        tpl_cmd = listTemplatesAPI.listTemplatesCmd()
+        tpl_cmd.templatefilter = "all"
+        tpl_cmd.listall = True
+        tpl_cmd.zoneid = cls.zone.id
+        templates = cls.apiClient.listTemplates(tpl_cmd) or []
+        kvm_ready = [
+            t for t in templates
+            if getattr(t, "hypervisor", "").lower() == "kvm"
+            and getattr(t, "isready", False)
+            and getattr(t, "templatetype", "").upper() != "SYSTEM"
+        ]
+        cls.template_id = kvm_ready[0].id if kvm_ready else None
+        if cls.template_id is None:
+            logger.warning(
+                "No ready user KVM template in zone '%s' — VM steps will skip."
+                % cls.zone.name
+            )
+
+        so_cmd = listServiceOfferingsAPI.listServiceOfferingsCmd()
+        offerings = cls.apiClient.listServiceOfferings(so_cmd) or []
+        if offerings:
+            offerings.sort(key=lambda s: getattr(s, "memory", 9999))
+            cls.service_offering_id = offerings[0].id
+
+        cls.network_id = None
+        if getattr(cls.zone, "networktype", "Basic").lower() != "advanced":
+            return
+
+        net_cmd = listNetworksAPI.listNetworksCmd()
+        net_cmd.zoneid = cls.zone.id
+        net_cmd.account = cls.account.name
+        net_cmd.domainid = cls.domain.id
+        nets = cls.apiClient.listNetworks(net_cmd) or []
+        if nets:
+            cls.network_id = nets[0].id
+            return
+
+        no_cmd = listNetworkOfferingsAPI.listNetworkOfferingsCmd()
+        no_cmd.state = "Enabled"
+        no_cmd.guestiptype = "Isolated"
+        no_cmd.specifyvlan = "false"
+        no_offerings = cls.apiClient.listNetworkOfferings(no_cmd) or []
+        snat_offering = next(
+            (o for o in no_offerings
+             if "SourceNat" in o.name and "Vpc" not in o.name
+             and "NSX" not in o.name and "Netris" not in o.name),
+            no_offerings[0] if no_offerings else None
+        )
+        if snat_offering is None:
+            return
+        cn_cmd = createNetworkAPI.createNetworkCmd()
+        cn_cmd.zoneid = cls.zone.id
+        cn_cmd.networkofferingid = snat_offering.id
+        cn_cmd.name = "%s-%d" % (cls._vm_network_name_prefix,
+                                 random.randint(0, 9999))
+        cn_cmd.displaytext = "ONTAP test VM network"
+        cn_cmd.account = cls.account.name
+        cn_cmd.domainid = cls.domain.id
+        net = cls.apiClient.createNetwork(cn_cmd)
+        cls.network_id = net.id
+        cls._created_network_id = net.id
+
+    @classmethod
+    def _destroy_vm_if_present(cls):
+        """Stop and expunge the suite's VM. Safe to call when none exists."""
+        if cls.vm is None:
+            return
+        vm_id = cls.vm.id
+        try:
+            vms = cls.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
+            state = vms[0].state.lower() if vms else "unknown"
+            if state not in ("stopped", "destroyed", "expunging", "error"):
+                stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
+                stop_cmd.id = vm_id
+                stop_cmd.forced = True
+                cls.apiClient.stopVirtualMachine(stop_cmd)
+                _wait_for_vm_state(cls.apiClient, vm_id, "Stopped", timeout=180)
+        except Exception as e:
+            logger.warning("Could not stop VM %s: %s" % (vm_id, e))
+        try:
+            dest_cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
+            dest_cmd.id = vm_id
+            dest_cmd.expunge = True
+            cls.apiClient.destroyVirtualMachine(dest_cmd)
+        except Exception as e:
+            logger.warning("Could not destroy VM %s: %s" % (vm_id, e))
+        cls.vm = None
+
+    @classmethod
+    def _delete_created_network(cls):
+        """Delete the guest network this suite created, if any."""
+        if cls._created_network_id is None:
+            return
+        try:
+            dn_cmd = deleteNetworkAPI.deleteNetworkCmd()
+            dn_cmd.id = cls._created_network_id
+            cls.apiClient.deleteNetwork(dn_cmd)
+        except Exception as e:
+            logger.warning(
+                "Could not delete network %s: %s" % (cls._created_network_id, e)
+            )
+        cls._created_network_id = None
+
+    def _poll_volume_attached(self, vol_id, timeout=180, interval=5):
+        """Poll listVolumes until virtualmachineid is set; return it or None.
+
+        ONTAP-backed volumes stay in state 'Ready' when attached, so the
+        virtualmachineid field is the reliable signal.
+        """
+        deadline = time.time() + timeout
+        vol_vmid = None
+        while time.time() < deadline:
+            vols = self.apiClient.listVolumes(_list_vols_cmd(vol_id)) or []
+            vol_vmid = getattr(vols[0], "virtualmachineid", None) if vols else None
+            if vol_vmid:
+                return vol_vmid
+            time.sleep(interval)
+        return vol_vmid
+
+    def _assert_vm_running_with_volume(self, vm_id, vol_id, label):
+        """Assert the VM is still up and still owns the volume."""
+        vm_obj = _wait_for_vm_state(self.apiClient, vm_id, "Running",
+                                    timeout=60)
+        self.assertIsNotNone(
+            vm_obj, "[%s] VM %s vanished from listVirtualMachines"
+            % (label, vm_id),
+        )
+        self.assertEqual(
+            vm_obj.state, "Running",
+            "[%s] VM should still be 'Running', got '%s'"
+            % (label, vm_obj.state),
+        )
+        vol = self._get_cs_volume(vol_id)
+        self.assertIsNotNone(
+            vol, "[%s] volume %s is no longer listed" % (label, vol_id),
+        )
+        self.assertEqual(
+            getattr(vol, "virtualmachineid", None), vm_id,
+            "[%s] volume %s should still be attached to VM %s, "
+            "virtualmachineid is %s"
+            % (label, vol_id, vm_id, getattr(vol, "virtualmachineid", None)),
+        )
+
+    def _detach_volume_if_attached(self, vol_id):
+        """Detach the volume when a VM holds it. No-op otherwise."""
+        vols = self.apiClient.listVolumes(_list_vols_cmd(vol_id)) or []
+        if not vols or not getattr(vols[0], "virtualmachineid", None):
+            return
+        try:
+            cmd = detachVolumeAPI.detachVolumeCmd()
+            cmd.id = vol_id
+            self.apiClient.detachVolume(cmd)
+        except Exception as e:
+            logger.warning("Could not detach volume %s: %s" % (vol_id, e))
+            return
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            vols = self.apiClient.listVolumes(_list_vols_cmd(vol_id)) or []
+            if not vols or not getattr(vols[0], "virtualmachineid", None):
+                return
+            time.sleep(5)
+        logger.warning(
+            "Volume %s still reports a virtualmachineid after detach" % vol_id
+        )
+
     @classmethod
     def tearDownClass(cls):
         """Best-effort cleanup of any resources left behind by a failed run."""
+        cls._destroy_vm_if_present()
+        cls._delete_created_network()
         if (getattr(cls, "ontap", None) is not None
                 and getattr(cls, "filler_filename", None)
                 and getattr(cls, "filler_flexvol", None)):
@@ -1060,3 +1258,40 @@ class OntapTestBase(cloudstackTestCase):
         if forced:
             cmd.forced = True
         self.apiClient.deleteStoragePool(cmd)
+
+
+# ---------------------------------------------------------------------------
+# Module-level VM helpers
+# ---------------------------------------------------------------------------
+
+def _list_vms_cmd(vm_id):
+    cmd = listVirtualMachinesAPI.listVirtualMachinesCmd()
+    cmd.id = vm_id
+    cmd.listall = True
+    return cmd
+
+
+def _list_vols_cmd(vol_id):
+    cmd = listVolumesAPI.listVolumesCmd()
+    cmd.id = vol_id
+    cmd.listall = True
+    return cmd
+
+
+def _wait_for_vm_state(api_client, vm_id, target_state, timeout=120,
+                       interval=5):
+    """Poll listVirtualMachines until the VM reaches target_state.
+
+    Returns the last VM object seen, which may not be in target_state if the
+    timeout expires — callers assert on the state themselves.
+    """
+    deadline = time.time() + timeout
+    vm_obj = None
+    while time.time() < deadline:
+        vms = api_client.listVirtualMachines(_list_vms_cmd(vm_id)) or []
+        if vms:
+            vm_obj = vms[0]
+            if vm_obj.state == target_state:
+                return vm_obj
+        time.sleep(interval)
+    return vm_obj
