@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 68 test cases across 10 test suites.
+Complete reference for all 84 test cases across 10 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -42,7 +42,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `nfs3/pool/test_pool_lifecycle.py`
 **Class:** `TestOntapNFS3PrimaryStorageWorkflow`
 **Tag:** `nfs3_workflow`
-**Total:** 15 tests | **Scope:** cluster-scoped NFS3 pool, no volumes for tests 01–10
+**Total:** 16 tests | **Scope:** cluster-scoped NFS3 pool, no volumes for tests 01–11
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
@@ -51,16 +51,17 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 03 | `test_03_reject_grow_above_max_size` | Reject a grow past the 300 TiB ONTAP FlexVol maximum (overshoots by 1 GiB; asserts ONTAP's autosize-maximum error, not a generic failure such as aggregate space) | test_02 | `CloudstackAPIException`; `capacitybytes` stays at 300 TiB; pool stays `Up` | FlexVol `space.size` unchanged; export policy unchanged | negative |
 | 04 | `test_04_shrink_storage_pool` | Safely shrink the original empty pool to its initial capacity | test_02 | `capacitybytes` reaches the safe target; pool stays `Up` | FlexVol `space.size` reaches the safe target; remains `online`; export policy unchanged | positive |
 | 05 | `test_05_disable_storage_pool` | Disable the pool (admin operation) | test_04 | `pool.state == "Disabled"` | FlexVol still `online`; export policy still present | positive |
-| 06 | `test_06_enable_storage_pool` | Re-enable the pool | test_05 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
-| 07 | `test_07_enter_maintenance_mode` | Put pool into maintenance (drains new volume allocations) | test_06 | `pool.state == "Maintenance"` | FlexVol still `online`; export policy still present (maintenance is CS-only state) | positive |
-| 08 | `test_08_resize_storage_pool_in_maintenance` | Grow the pool while it is in maintenance mode | test_07 | `updateStoragePool` accepted; `capacitybytes` reaches the requested size; `pool.state` stays `"Maintenance"` | FlexVol `space.size` reaches the requested size; remains `online`; export policy unchanged | positive |
-| 09 | `test_09_cancel_maintenance_mode` | Cancel maintenance, return pool to service | test_08 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
-| 10 | `test_10_delete_pool_from_maintenance` | Enter maintenance then permanently delete the original pool | test_09 | Pool no longer returned by `listStoragePools` (CS 431 error expected on ID lookup) | FlexVol and export policy deleted | positive |
-| 11 | `test_11_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack data volume | test_10 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; export policy present | positive |
-| 12 | `test_12_create_vm_and_attach_volume` | Deploy a VM and attach the ONTAP data volume to it | test_11 | VM reaches `Running`; volume reports `virtualmachineid` equal to the VM id; VM still `Running` after attach; pool capacity unchanged | FlexVol still `online`; volume data file materialised in the FlexVol (NFS3 creates it lazily at attach) | positive |
-| 13 | `test_13_reject_shrink_below_used_capacity` | Reject shrink below the used space of the VM-attached volume, with the target held above the ONTAP FlexVol minimum. Writes incompressible data through the ONTAP files API when the VM-attached thin volume leaves used space under the minimum, and removes it before returning | test_12 (`pool`, `volume`, `vm`) | `CloudstackAPIException`; volume remains listed with unchanged `id`/`state`/`size`/`poolid`; pool capacity unchanged | FlexVol size and export policy unchanged; used space stays above the FlexVol minimum | negative |
-| 14 | `test_14_resize_pool_with_vm_attached` | Grow then shrink the pool back while the volume is attached to the running VM | test_12 (`vm`, `volume`) | Both resizes reach the requested capacity; pool stays `Up`; VM stays `Running` and keeps `virtualmachineid` on the volume | FlexVol reaches each size and stays `online`; export policy still covers every host IP | positive |
-| 15 | `test_15_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_14 | VM destroyed; volume and pool no longer listed | FlexVol and export policy deleted | cleanup |
+| 06 | `test_06_resize_storage_pool_while_disabled` | Grow then shrink the pool back while it is Disabled | test_05 | Both `updateStoragePool` calls accepted; `capacitybytes` reaches each target; `pool.state` stays `"Disabled"` throughout | FlexVol `space.size` reaches each target and stays `online`; export policy still present and still covers every host IP | positive |
+| 07 | `test_07_enable_storage_pool` | Re-enable the pool | test_06 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
+| 08 | `test_08_enter_maintenance_mode` | Put pool into maintenance (drains new volume allocations) | test_07 | `pool.state == "Maintenance"` | FlexVol still `online`; export policy still present (maintenance is CS-only state) | positive |
+| 09 | `test_09_resize_storage_pool_in_maintenance` | Grow the pool while it is in maintenance mode | test_08 | `updateStoragePool` accepted; `capacitybytes` reaches the requested size; `pool.state` stays `"Maintenance"` | FlexVol `space.size` reaches the requested size; remains `online`; export policy unchanged | positive |
+| 10 | `test_10_cancel_maintenance_mode` | Cancel maintenance, return pool to service | test_09 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
+| 11 | `test_11_delete_pool_from_maintenance` | Enter maintenance then permanently delete the original pool | test_10 | Pool no longer returned by `listStoragePools` (CS 431 error expected on ID lookup) | FlexVol and export policy deleted | positive |
+| 12 | `test_12_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack data volume | test_11 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; export policy present | positive |
+| 13 | `test_13_create_vm_and_attach_volume` | Deploy a VM and attach the ONTAP data volume to it | test_12 | VM reaches `Running`; volume reports `virtualmachineid` equal to the VM id; VM still `Running` after attach; pool capacity unchanged | FlexVol still `online`; volume data file materialised in the FlexVol (NFS3 creates it lazily at attach) | positive |
+| 14 | `test_14_reject_shrink_below_used_capacity` | Reject shrink below the used space of the VM-attached volume, with the target held above the ONTAP FlexVol minimum. Writes incompressible data through the ONTAP files API when the VM-attached thin volume leaves used space under the minimum, and removes it before returning | test_13 (`pool`, `volume`, `vm`) | `CloudstackAPIException`; volume remains listed with unchanged `id`/`state`/`size`/`poolid`; pool capacity unchanged | FlexVol size and export policy unchanged; used space stays above the FlexVol minimum | negative |
+| 15 | `test_15_resize_pool_with_vm_attached` | Grow then shrink the pool back while the volume is attached to the running VM | test_13 (`vm`, `volume`) | Both resizes reach the requested capacity; pool stays `Up`; VM stays `Running` and keeps `virtualmachineid` on the volume | FlexVol reaches each size and stays `online`; export policy still covers every host IP | positive |
+| 16 | `test_16_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_15 | VM destroyed; volume and pool no longer listed | FlexVol and export policy deleted | cleanup |
 
 ---
 
@@ -143,7 +144,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/pool/test_pool_lifecycle.py`
 **Class:** `TestOntapISCSIPoolLifecycle`
 **Tag:** `iscsi_workflow`
-**Total:** 15 tests | **Scope:** cluster-scoped iSCSI pool, no volumes for tests 01–10
+**Total:** 16 tests | **Scope:** cluster-scoped iSCSI pool, no volumes for tests 01–11
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
@@ -152,16 +153,17 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 03 | `test_03_reject_grow_above_max_size` | Reject a grow past the 300 TiB ONTAP FlexVol maximum (overshoots by 1 GiB; asserts ONTAP's autosize-maximum error, not a generic failure such as aggregate space) | test_02 | `CloudstackAPIException`; `capacitybytes` stays at 300 TiB; pool stays `Up` | FlexVol `space.size` unchanged; igroups unchanged | negative |
 | 04 | `test_04_shrink_storage_pool` | Safely shrink the original empty pool to its initial capacity | test_02 | `capacitybytes` reaches the safe target; pool stays `Up` | FlexVol reaches the safe target and remains `online`; igroups remain present | positive |
 | 05 | `test_05_disable_storage_pool` | Disable the pool | test_04 | `pool.state == "Disabled"` | FlexVol still `online` | positive |
-| 06 | `test_06_enable_storage_pool` | Re-enable the pool | test_05 | `pool.state == "Up"` | FlexVol still `online` | positive |
-| 07 | `test_07_enter_maintenance_mode` | Put pool into maintenance | test_06 | `pool.state == "Maintenance"` | FlexVol still `online`; igroups unchanged | positive |
-| 08 | `test_08_resize_storage_pool_in_maintenance` | Grow the pool while it is in maintenance mode | test_07 | `updateStoragePool` accepted; `capacitybytes` reaches the requested size; `pool.state` stays `"Maintenance"` | FlexVol reaches the requested size and remains `online`; igroups unchanged | positive |
-| 09 | `test_09_cancel_maintenance_mode` | Cancel maintenance | test_08 | `pool.state == "Up"` | FlexVol still `online` | positive |
-| 10 | `test_10_enter_maintenance_and_delete_pool` | Enter maintenance then delete the original pool | test_09 | Pool no longer listed | FlexVol and all host igroups deleted | positive |
-| 11 | `test_11_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack volume | test_10 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; at least one LUN present | positive |
-| 12 | `test_12_create_vm_and_attach_volume` | Deploy a VM and attach the ONTAP data volume (LUN) to it | test_11 | VM reaches `Running`; volume reports `virtualmachineid` equal to the VM id; VM still `Running` after attach | FlexVol still `online`; LUN still present; per-host igroups unchanged | positive |
-| 13 | `test_13_reject_shrink_below_used_capacity` | Reject shrink below the used space of the VM-attached LUN, with the target held above the ONTAP FlexVol minimum. Writes incompressible data through the ONTAP files API when the VM-attached thin volume leaves used space under the minimum, and removes it before returning | test_12 (`pool`, `volume`, `vm`) | `CloudstackAPIException`; volume remains listed with unchanged `id`/`state`/`size`/`poolid`; pool capacity unchanged | FlexVol size and LUN uuid/name list unchanged; used space stays above the FlexVol minimum | negative |
-| 14 | `test_14_resize_pool_with_vm_attached` | Grow then shrink the pool back while the volume (LUN) is attached to the running VM | test_12 (`vm`, `volume`) | Both resizes reach the requested capacity; pool stays `Up`; VM stays `Running` and keeps `virtualmachineid` on the volume | FlexVol reaches each size and stays `online`; LUN still present | positive |
-| 15 | `test_15_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_14 | VM destroyed; volume and pool no longer listed | LUN, FlexVol, and igroups deleted | cleanup |
+| 06 | `test_06_resize_storage_pool_while_disabled` | Grow then shrink the pool back while it is Disabled | test_05 | Both `updateStoragePool` calls accepted; `capacitybytes` reaches each target; `pool.state` stays `"Disabled"` throughout | FlexVol `space.size` reaches each target and stays `online`; per-host igroups still present | positive |
+| 07 | `test_07_enable_storage_pool` | Re-enable the pool | test_06 | `pool.state == "Up"` | FlexVol still `online` | positive |
+| 08 | `test_08_enter_maintenance_mode` | Put pool into maintenance | test_07 | `pool.state == "Maintenance"` | FlexVol still `online`; igroups unchanged | positive |
+| 09 | `test_09_resize_storage_pool_in_maintenance` | Grow the pool while it is in maintenance mode | test_08 | `updateStoragePool` accepted; `capacitybytes` reaches the requested size; `pool.state` stays `"Maintenance"` | FlexVol reaches the requested size and remains `online`; igroups unchanged | positive |
+| 10 | `test_10_cancel_maintenance_mode` | Cancel maintenance | test_09 | `pool.state == "Up"` | FlexVol still `online` | positive |
+| 11 | `test_11_enter_maintenance_and_delete_pool` | Enter maintenance then delete the original pool | test_10 | Pool no longer listed | FlexVol and all host igroups deleted | positive |
+| 12 | `test_12_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack volume | test_11 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; at least one LUN present | positive |
+| 13 | `test_13_create_vm_and_attach_volume` | Deploy a VM and attach the ONTAP data volume (LUN) to it | test_12 | VM reaches `Running`; volume reports `virtualmachineid` equal to the VM id; VM still `Running` after attach | FlexVol still `online`; LUN still present; per-host igroups unchanged | positive |
+| 14 | `test_14_reject_shrink_below_used_capacity` | Reject shrink below the used space of the VM-attached LUN, with the target held above the ONTAP FlexVol minimum. Writes incompressible data through the ONTAP files API when the VM-attached thin volume leaves used space under the minimum, and removes it before returning | test_13 (`pool`, `volume`, `vm`) | `CloudstackAPIException`; volume remains listed with unchanged `id`/`state`/`size`/`poolid`; pool capacity unchanged | FlexVol size and LUN uuid/name list unchanged; used space stays above the FlexVol minimum | negative |
+| 15 | `test_15_resize_pool_with_vm_attached` | Grow then shrink the pool back while the volume (LUN) is attached to the running VM | test_13 (`vm`, `volume`) | Both resizes reach the requested capacity; pool stays `Up`; VM stays `Running` and keeps `virtualmachineid` on the volume | FlexVol reaches each size and stays `online`; LUN still present | positive |
+| 16 | `test_16_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_15 | VM destroyed; volume and pool no longer listed | LUN, FlexVol, and igroups deleted | cleanup |
 
 ---
 
@@ -245,14 +247,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | Suite | Protocol | Scope | Tests | Status |
 |-------|---------|-------|-------|--------|
-| NFS3 Pool Lifecycle | NFS3 | Cluster | 15 | ✅ |
+| NFS3 Pool Lifecycle | NFS3 | Cluster | 16 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 7 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 6 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 15 | ✅ |
+| iSCSI Pool Lifecycle | iSCSI | Cluster | 16 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 6 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
-| **Total** | | | **70** | **Resize flows passed; 1 known environment failure** |
+| **Total** | | | **84** | **Resize flows passed; 1 known environment failure** |
