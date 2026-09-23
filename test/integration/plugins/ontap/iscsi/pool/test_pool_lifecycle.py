@@ -19,7 +19,7 @@
 Sequential workflow integration tests for NetApp ONTAP iSCSI primary storage
 pool lifecycle (no volumes).
 
-Tests are numbered test_01 ... test_15 and must run in that order.  Each step
+Tests are numbered test_01 ... test_16 and must run in that order.  Each step
 builds on the shared state established by the previous step.
 
 Workflow:
@@ -28,22 +28,23 @@ Workflow:
   03  Reject a grow beyond the maximum supported size
   04  Safely shrink storage pool capacity
   05  Disable storage pool
-  06  Enable storage pool
-  07  Enter maintenance mode
-  08  Resize storage pool while in maintenance mode
-  09  Cancel maintenance mode
-  10  Enter maintenance mode and delete the storage pool
-  11  Create a new pool and allocate a CloudStack data volume (LUN created)
-  12  Deploy a VM and attach the ONTAP volume (LUN) to it
-  13  Reject shrink below the ONTAP used capacity of the attached LUN
-  14  Grow and shrink the pool while the VM holds the volume (LUN)
-  15  Detach/destroy the VM, delete the volume (LUN removed), enter
+  06  Grow and shrink the pool while it is disabled
+  07  Enable storage pool
+  08  Enter maintenance mode
+  09  Resize storage pool while in maintenance mode
+  10  Cancel maintenance mode
+  11  Enter maintenance mode and delete the storage pool
+  12  Create a new pool and allocate a CloudStack data volume (LUN created)
+  13  Deploy a VM and attach the ONTAP volume (LUN) to it
+  14  Reject shrink below the ONTAP used capacity of the attached LUN
+  15  Grow and shrink the pool while the VM holds the volume (LUN)
+  16  Detach/destroy the VM, delete the volume (LUN removed), enter
       maintenance, force-delete pool
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
   - KVM cluster where every host has iSCSI configured (storageUrl starts with iqn.)
-  - At least one ready user KVM template in the zone (test_12 skips without one)
+  - At least one ready user KVM template in the zone (test_13 skips without one)
   - ONTAP SVM with iSCSI service enabled and at least one iSCSI data LIF
   - ontap.cfg populated with real values
 
@@ -564,11 +565,82 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 06 - Enable storage pool
+    # Step 06 - Resize storage pool while disabled
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_06_enable_storage_pool(self):
+    def test_06_resize_storage_pool_while_disabled(self):
+        """
+        Grow and shrink the disabled pool and verify:
+          - Both capacity updates are accepted
+          - CloudStack and ONTAP reach each requested size
+          - The pool remains Disabled throughout
+          - The FlexVol remains online and per-host igroups are unchanged
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_01 must pass first"
+        )
+        pool = self.__class__.pool
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before disabled resize")
+        self.assertEqual(
+            listed[0].state, "Disabled",
+            "Pool must be Disabled - test_05 must pass first, got '%s'"
+            % listed[0].state,
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing before disabled resize"
+        )
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s disabled iSCSI pool '%s': target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
+
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Disabled",
+                "Pool should remain Disabled after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
+
+        for host in self.cluster_hosts:
+            iqn = (
+                getattr(host, "storageurl", None)
+                or getattr(host, "StorageUrl", None)
+            )
+            if iqn and iqn.startswith("iqn."):
+                igroup_name = _igroup_name(self.svm_name, host.name)
+                self.assertIsNotNone(
+                    self.ontap.get_igroup(self.svm_name, igroup_name),
+                    "ONTAP igroup '%s' disappeared during disabled resize"
+                    % igroup_name,
+                )
+
+    # ------------------------------------------------------------------
+    # Step 07 - Enable storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_workflow"], required_hardware=True)
+    def test_07_enable_storage_pool(self):
         """
         Re-enable the pool and verify:
           - CloudStack reports Up
@@ -594,11 +666,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 07 - Enter maintenance mode
+    # Step 08 - Enter maintenance mode
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_07_enter_maintenance_mode(self):
+    def test_08_enter_maintenance_mode(self):
         """
         Put the pool into maintenance mode and verify:
           - CloudStack reports Maintenance
@@ -623,11 +695,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 08 - Resize storage pool while in maintenance mode
+    # Step 09 - Resize storage pool while in maintenance mode
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_08_resize_storage_pool_in_maintenance(self):
+    def test_09_resize_storage_pool_in_maintenance(self):
         """
         Grow the pool while it is in maintenance mode and verify:
           - updateStoragePool is accepted while the pool is in Maintenance
@@ -646,7 +718,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self.assertTrue(listed, "Pool missing before maintenance resize")
         self.assertEqual(
             listed[0].state, "Maintenance",
-            "Pool must be in Maintenance - test_07 must pass first, got '%s'"
+            "Pool must be in Maintenance - test_08 must pass first, got '%s'"
             % listed[0].state
         )
 
@@ -700,11 +772,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                 )
 
     # ------------------------------------------------------------------
-    # Step 09 - Cancel maintenance mode
+    # Step 10 - Cancel maintenance mode
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_09_cancel_maintenance_mode(self):
+    def test_10_cancel_maintenance_mode(self):
         """
         Cancel maintenance and verify:
           - CloudStack reports Up
@@ -728,11 +800,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 10 - Enter maintenance mode and delete the storage pool
+    # Step 11 - Enter maintenance mode and delete the storage pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_10_enter_maintenance_and_delete_pool(self):
+    def test_11_enter_maintenance_and_delete_pool(self):
         """
         Enter maintenance mode then delete the pool.
         Verifies the pool is removed from CloudStack and the backing ONTAP
@@ -778,11 +850,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 11 - Create fresh pool and allocate a CloudStack volume (LUN)
+    # Step 12 - Create fresh pool and allocate a CloudStack volume (LUN)
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_11_create_volume_on_pool(self):
+    def test_12_create_volume_on_pool(self):
         """
         Create a new iSCSI pool and allocate a CloudStack data volume.
         For iSCSI, createAsync creates a LUN inside the pool's ONTAP FlexVol.
@@ -796,7 +868,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self.__class__.pool = pool
         log_progress(
             logger, "info",
-            "test_10: created storage pool name='%s' id=%s state=%s type=%s",
+            "test_12: created storage pool name='%s' id=%s state=%s type=%s",
             pool.name, pool.id, pool.state, pool.type,
         )
 
@@ -814,7 +886,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self.assertIsNotNone(vol, "createVolume returned None")
         log_progress(
             logger, "info",
-            "test_10: created CloudStack volume name='%s' id=%s state=%s "
+            "test_12: created CloudStack volume name='%s' id=%s state=%s "
             "on pool='%s' (id=%s) account='%s' domain='%s' — "
             "switch to this account in the UI to see the volume",
             getattr(vol, "name", "?"), getattr(vol, "id", "?"),
@@ -844,13 +916,13 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self._assert_pool_capacity(pool, "volume-allocated")
 
     # ------------------------------------------------------------------
-    # Step 12 - Deploy a VM and attach the ONTAP volume (LUN) to it
+    # Step 13 - Deploy a VM and attach the ONTAP volume (LUN) to it
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_12_create_vm_and_attach_volume(self):
+    def test_13_create_vm_and_attach_volume(self):
         """
-        Deploy a VM and attach the ONTAP data volume from test_11 to it.
+        Deploy a VM and attach the ONTAP data volume from test_12 to it.
         Verifies:
           - VM reaches 'Running'
           - attachVolume sets the volume's virtualmachineid (on ONTAP managed
@@ -861,10 +933,10 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - ONTAP: per-host igroups survive the attach
         """
         self.assertIsNotNone(
-            self.__class__.pool, "Pool absent - test_11 must pass first"
+            self.__class__.pool, "Pool absent - test_12 must pass first"
         )
         self.assertIsNotNone(
-            self.__class__.volume, "Volume absent - test_11 must pass first"
+            self.__class__.volume, "Volume absent - test_12 must pass first"
         )
         if self.__class__.template_id is None:
             self.skipTest(
@@ -964,26 +1036,26 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                 )
 
     # ------------------------------------------------------------------
-    # Step 13 - Reject shrink below ONTAP used capacity
+    # Step 14 - Reject shrink below ONTAP used capacity
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_13_reject_shrink_below_used_capacity(self):
+    def test_14_reject_shrink_below_used_capacity(self):
         """
         Attempt to shrink the pool below ONTAP used space and verify the
         request is rejected while the volume and ONTAP LUNs remain unchanged.
 
-        Runs after test_12, so the LUN is mapped to a running VM.  The LUN is
+        Runs after test_13, so the LUN is mapped to a running VM.  The LUN is
         thin-provisioned, though, and in practice leaves used space under the
         20 MiB FlexVol floor, so incompressible data is written through the
         ONTAP files API to get above it and removed before this test returns.
         The fill is skipped whenever used space is already high enough.
         """
         self.assertIsNotNone(
-            self.__class__.pool, "Pool absent - test_12 must pass first"
+            self.__class__.pool, "Pool absent - test_13 must pass first"
         )
         self.assertIsNotNone(
-            self.__class__.volume, "Volume absent - test_12 must pass first"
+            self.__class__.volume, "Volume absent - test_13 must pass first"
         )
         pool = self.__class__.pool
         self.assertIsNotNone(
@@ -1058,14 +1130,14 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             self._delete_filler_file(pool.name, filler_name)
 
     # ------------------------------------------------------------------
-    # Step 14 - Resize the pool while the VM holds the volume
+    # Step 15 - Resize the pool while the VM holds the volume
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_14_resize_pool_with_vm_attached(self):
+    def test_15_resize_pool_with_vm_attached(self):
         """
         Grow the pool and shrink it straight back while the volume is
-        attached to the running VM from test_12, so resize is exercised
+        attached to the running VM from test_13, so resize is exercised
         against a pool that is genuinely in use rather than an idle one.
         Verifies:
           - grow: CloudStack and ONTAP both reach the requested size
@@ -1075,14 +1147,14 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - ONTAP: the LUN backing the volume is still present
         """
         self.assertIsNotNone(
-            self.__class__.pool, "Pool absent - test_11 must pass first"
+            self.__class__.pool, "Pool absent - test_12 must pass first"
         )
         self.assertIsNotNone(
-            self.__class__.volume, "Volume absent - test_11 must pass first"
+            self.__class__.volume, "Volume absent - test_12 must pass first"
         )
         if self.__class__.vm is None:
             self.skipTest(
-                "No VM was deployed (test_12 skipped) - nothing to resize "
+                "No VM was deployed (test_13 skipped) - nothing to resize "
                 "a pool underneath"
             )
 
@@ -1150,13 +1222,13 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 15 - Detach/destroy the VM, delete volume (LUN), delete the pool
+    # Step 16 - Detach/destroy the VM, delete volume (LUN), delete the pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_15_delete_volume_and_pool(self):
+    def test_16_delete_volume_and_pool(self):
         """
-        Detach the volume and destroy the VM from test_12, then delete the
+        Detach the volume and destroy the VM from test_13, then delete the
         volume, enter maintenance, and force-delete the pool.
         Verifies:
           - deleteVolume removes the LUN from ONTAP
@@ -1165,11 +1237,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - ONTAP: FlexVol deleted
           - ONTAP: igroups for all cluster hosts deleted
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_11 must pass first")
-        self.assertIsNotNone(self.__class__.volume, "Volume absent - test_11 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_12 must pass first")
+        self.assertIsNotNone(self.__class__.volume, "Volume absent - test_12 must pass first")
 
-        # A volume still attached to a VM cannot be deleted, so unwind test_12
-        # first.  Both steps are no-ops when test_12 skipped.
+        # A volume still attached to a VM cannot be deleted, so unwind test_13
+        # first.  Both steps are no-ops when test_13 skipped.
         self._detach_volume_if_attached(self.__class__.volume.id)
         self.__class__._destroy_vm_if_present()
 
