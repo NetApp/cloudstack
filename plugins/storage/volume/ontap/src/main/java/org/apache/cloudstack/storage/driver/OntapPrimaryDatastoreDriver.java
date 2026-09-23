@@ -602,8 +602,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
         CreateCmdResult result = null;
         try {
+            if (!(data instanceof VolumeInfo)) {
+                throw new CloudRuntimeException("resize: Expected VolumeInfo but received " +
+                        (data != null ? data.getClass().getSimpleName() : "null"));
+            }
             VolumeInfo volumeInfo = (VolumeInfo) data;
-            ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
+            Object rawPayload = volumeInfo.getpayload();
+            ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
+                    ? (ResizeVolumePayload) rawPayload : null;
             if (payload == null || payload.newSize == null) {
                 throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
             }
@@ -626,19 +632,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             CloudStackVolume cloudStackVolume = new CloudStackVolume();
             cloudStackVolume.setVolumeInfo(volumeInfo);
-
-            if (ProtocolType.ISCSI.name().equals(details.get(OntapStorageConstants.PROTOCOL))) {
-                VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
-                if (lunUuidDetail == null || lunUuidDetail.getValue() == null) {
-                    throw new CloudRuntimeException("LUN UUID not found in volume details for volume " + volumeInfo.getId());
-                }
-                Lun lun = new Lun();
-                lun.setUuid(lunUuidDetail.getValue());
-                cloudStackVolume.setLun(lun);
-            }
+          
 
             // delegates to UnifiedSANStrategy (PATCH /api/storage/luns/{uuid}) for iSCSI
-            // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3
+            // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3;
+            // protocol-specific setup (e.g. LUN UUID lookup) is handled inside each strategy
             storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
 
             volumeVO.setSize(payload.newSize);

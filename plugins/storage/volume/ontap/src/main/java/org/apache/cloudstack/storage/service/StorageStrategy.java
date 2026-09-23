@@ -450,6 +450,9 @@ public abstract class StorageStrategy {
     }
 
     public Volume getStorageVolume(String uuid) {
+        if (uuid == null || uuid.isBlank()) {
+            throw new CloudRuntimeException("Cannot fetch ONTAP volume: UUID is null or empty");
+        }
         logger.info("getStorageVolume: Fetching ONTAP volume by UUID: {}", uuid);
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {

@@ -20,6 +20,8 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.host.HostVO;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
@@ -53,6 +55,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     private static final Logger logger = LogManager.getLogger(UnifiedSANStrategy.class);
     @Inject
     private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject
+    private VolumeDetailsDao volumeDetailsDao;
 
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
@@ -280,13 +284,26 @@ public class UnifiedSANStrategy extends SANStrategy {
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
-        if (cloudstackVolume == null || cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null) {
             logger.error("resizeCloudStackVolume: Lun resize failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("Failed to resize Lun, invalid request");
         }
         if (sizeInBytes <= 0) {
             throw new CloudRuntimeException("Failed to resize Lun, invalid size " + sizeInBytes);
         }
+
+        // Resolve LUN UUID from volume details when not pre-populated on the cloudstackVolume
+        if (cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+            long volumeId = cloudstackVolume.getVolumeInfo().getId();
+            VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
+            if (lunUuidDetail == null || lunUuidDetail.getValue() == null) {
+                throw new CloudRuntimeException("LUN UUID not found in volume details for volume " + volumeId);
+            }
+            Lun resolvedLun = new Lun();
+            resolvedLun.setUuid(lunUuidDetail.getValue());
+            cloudstackVolume.setLun(resolvedLun);
+        }
+
         String lunUuid = cloudstackVolume.getLun().getUuid();
         logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
         try {
