@@ -634,7 +634,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             CloudStackVolume cloudStackVolume = new CloudStackVolume();
             cloudStackVolume.setVolumeInfo(volumeInfo);
-          
+
             // delegates to UnifiedSANStrategy (PATCH /api/storage/luns/{uuid}) for iSCSI
             // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3;
             // protocol-specific setup (e.g. LUN UUID lookup) is handled inside each strategy
@@ -652,6 +652,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         } catch (Exception e) {
             String errMsg = e.getMessage();
             logger.error("resize: Failed for volume [{}]: {}", data.getId(), errMsg, e);
+            result = new CreateCmdResult(null, new Answer(null, false, errMsg));
             result.setResult(errMsg);
         } finally {
             callback.complete(result);
@@ -1082,8 +1083,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * Returns the bytes available on the FlexVolume backing this pool, read directly from ONTAP
      * ({@code space.available}).
      *
-     * <p>Returns {@code 0} if the FlexVolume UUID is not yet recorded in pool details, or if the
-     * ONTAP REST call fails for any reason (array unreachable, auth error, etc.).</p>
+     * <p>Returns {@code 0} if the ONTAP REST call fails for any reason (array unreachable, auth
+     * error, etc.). Throws if the FlexVolume UUID is not recorded in pool details, since that
+     * indicates the pool was never fully provisioned.</p>
+     *
+     * @throws CloudRuntimeException if the pool has no FlexVolume UUID in its details
      */
     @Override
     public long getUsedBytes(StoragePool storagePool) {
@@ -1091,16 +1095,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return 0;
         }
 
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        String flexVolUuid = poolDetails != null ? poolDetails.get(OntapStorageConstants.VOLUME_UUID) : null;
+
+        if (StringUtils.isBlank(flexVolUuid)) {
+            throw new CloudRuntimeException("FlexVolume UUID not found in pool details for pool " + storagePool.getId());
+        }
+
         try {
-            Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
-            String flexVolUuid = poolDetails != null ? poolDetails.get(OntapStorageConstants.VOLUME_UUID) : null;
-
-            if (StringUtils.isBlank(flexVolUuid)) {
-                logger.warn("getUsedBytes: No FlexVolume UUID recorded for pool [{}]; returning 0",
-                        storagePool.getId());
-                return 0;
-            }
-
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
             var flexVol = strategy.getStorageVolume(flexVolUuid);
 

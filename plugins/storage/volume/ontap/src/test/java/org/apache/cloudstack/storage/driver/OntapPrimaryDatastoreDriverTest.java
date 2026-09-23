@@ -78,9 +78,9 @@ import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
-import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.VMTemplateStoragePoolVO;
 import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.VolumeVO;
@@ -1438,6 +1438,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(volumeVO.getSize()).thenReturn(currentSize);
         // volumeVO.getId() is only needed in the success path (volumeDao.update call)
         lenient().when(volumeVO.getId()).thenReturn(100L);
+        lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
     }
 
     @Test
@@ -1445,9 +1446,6 @@ class OntapPrimaryDatastoreDriverTest {
         long currentSize = 10737418240L; // 10 GB
         long newSize = 21474836480L;     // 20 GB
         stubResizeCommon(currentSize, newSize);
-
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -1460,10 +1458,12 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
 
-            // verify LUN UUID was wired into the request and ONTAP was called
+            // Driver only wires VolumeInfo; LUN UUID lookup is inside UnifiedSANStrategy
             ArgumentCaptor<CloudStackVolume> volumeCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
             verify(sanStrategy).resizeCloudStackVolume(volumeCaptor.capture(), eq(newSize));
-            assertEquals("lun-uuid-123", volumeCaptor.getValue().getLun().getUuid());
+            assertEquals(volumeInfo, volumeCaptor.getValue().getVolumeInfo());
+            assertNull(volumeCaptor.getValue().getLun());
+            verify(volumeDetailsDao, never()).findDetail(anyLong(), eq(OntapStorageConstants.LUN_DOT_UUID));
 
             verify(volumeVO).setSize(newSize);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
@@ -1488,8 +1488,10 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
 
-            verify(nasStrategy).resizeCloudStackVolume(any(CloudStackVolume.class), eq(newSize));
-            // NFS has no LUN – volumeDetailsDao must never be queried for a LUN UUID
+            ArgumentCaptor<CloudStackVolume> volumeCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy).resizeCloudStackVolume(volumeCaptor.capture(), eq(newSize));
+            assertEquals(volumeInfo, volumeCaptor.getValue().getVolumeInfo());
+            // NFS has no LUN – driver must not look up a LUN UUID
             verify(volumeDetailsDao, never()).findDetail(anyLong(), eq(OntapStorageConstants.LUN_DOT_UUID));
             verify(volumeVO).setSize(newSize);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
@@ -1588,59 +1590,10 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testResize_iSCSI_LunUuidNotFound_Fails() {
-        long currentSize = 10737418240L;
-        long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
-
-        // LUN UUID detail is missing
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(null);
-
-        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
-                    .thenReturn(sanStrategy);
-
-            driver.resize(volumeInfo, createCallback);
-
-            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-            verify(createCallback).complete(resultCaptor.capture());
-            assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("LUN UUID not found"));
-            verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
-        }
-    }
-
-    @Test
-    void testResize_iSCSI_LunUuidValueNull_Fails() {
-        long currentSize = 10737418240L;
-        long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
-
-        // Detail exists but value is null
-        VolumeDetailVO blankDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, null, false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(blankDetail);
-
-        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
-                    .thenReturn(sanStrategy);
-
-            driver.resize(volumeInfo, createCallback);
-
-            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
-            verify(createCallback).complete(resultCaptor.capture());
-            assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("LUN UUID not found"));
-        }
-    }
-
-    @Test
     void testResize_StrategyThrows_Fails() {
         long currentSize = 10737418240L;
         long newSize = 21474836480L;
         stubResizeCommon(currentSize, newSize);
-
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -1664,27 +1617,40 @@ class OntapPrimaryDatastoreDriverTest {
     // =========================================================================
 
     @Test
-    void testGetUsedBytes_NullPool_ReturnsZero() {
-        assertEquals(0L, driver.getUsedBytes(null));
+    void testGetUsedBytes_NullPool_ThrowsException() {
+        InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                () -> driver.getUsedBytes(null));
+        assertTrue(ex.getMessage().contains("storagePool should not be null"));
     }
 
     @Test
-    void testGetUsedBytes_NoFlexVolUuid_ReturnsZero() {
+    void testGetUsedBytes_NoFlexVolUuid_ThrowsException() {
         // VOLUME_UUID key is absent from pool details
         storagePoolDetails.remove(OntapStorageConstants.VOLUME_UUID);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        assertEquals(0L, driver.getUsedBytes(storagePool));
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
     }
 
     @Test
-    void testGetUsedBytes_BlankFlexVolUuid_ReturnsZero() {
+    void testGetUsedBytes_BlankFlexVolUuid_ThrowsException() {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "   ");
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        assertEquals(0L, driver.getUsedBytes(storagePool));
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
+    }
+
+    @Test
+    void testGetUsedBytes_NullPoolDetails_ThrowsException() {
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
     }
 
     @Test
