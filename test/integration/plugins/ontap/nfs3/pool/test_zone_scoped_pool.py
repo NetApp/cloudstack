@@ -23,12 +23,18 @@ OntapPrimaryDatastoreLifecycle.attachZone(), which connects all eligible KVM
 hosts in the zone to the pool and creates an NFS export policy covering their
 IPs.
 
-Workflow:
-  01  Create zone-scoped NFS3 pool — pool.state Up; ONTAP FlexVol online;
-                                     export policy has all cluster host IPs
-  02  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
-  03  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
-  04  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
+Test order — 03-06 are a sequential workflow that must run in order; 01, 02,
+07 and 08 are isolated negative/recovery cases, each owning the pool it
+creates, so they can be run on their own:
+  01  Create rejected when a FlexVol of the same name already exists
+  02  Create rejected when no assigned online aggregate has enough free space
+  03  Create zone-scoped NFS3 pool — pool.state Up; ONTAP FlexVol online;
+      export policy has all cluster host IPs
+  04  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
+  05  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
+  06  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
+  07  Delete an empty pool whose FlexVol was removed behind CloudStack's back
+  08  Delete an empty pool whose NFS export policy was removed beforehand
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -41,7 +47,7 @@ Running:
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
     test/integration/plugins/ontap/nfs3/pool/test_zone_scoped_pool.py -v
 
-Note: Tests 01-04 share class-level state (sequential).  Running a single test
+Note: Tests 03-06 share class-level state (sequential).  Running a single test
 with -m "test_NN" will invoke setUpClass but the guard assertion will fail
 immediately if earlier steps have not yet run.  Always run the full suite.
 """
@@ -49,6 +55,7 @@ immediately if earlier steps have not yet run.  Always run the full suite.
 import base64
 import logging
 import random
+import time
 import unittest
 
 from nose.plugins.attrib import attr
@@ -58,10 +65,17 @@ from marvin.cloudstackAPI import (
     enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
+from marvin.cloudstackException import CloudstackAPIException
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
+from ontap_test_base import (
+    OntapRestClient,
+    OntapTestBase,
+    _parse_pool_details,
+    get_datacenter_config,
+    log_progress,
+)
 
 logger = logging.getLogger("TestOntapZoneScopedPool")
 
@@ -136,6 +150,11 @@ class TestOntapZoneScopedPool(OntapTestBase):
 
     _vol_name_prefix = "OntapZoneVol"
 
+    ONE_GIB = 1024 ** 3
+    # Above this much free aggregate space, asking for "max free + 1 GiB"
+    # stops being a meaningful request, so the no-space test skips instead.
+    MAX_AGGREGATE_FREE_FOR_NO_SPACE_TEST = 300 * 1024 ** 4
+
     @classmethod
     def setUpClass(cls):
         super(TestOntapZoneScopedPool, cls).setUpClass()
@@ -186,11 +205,17 @@ class TestOntapZoneScopedPool(OntapTestBase):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _create_zone_pool(self):
-        """Create a zone-scoped NFS3 pool (no clusterid / podid)."""
+    def _create_zone_pool(self, name=None, capacitybytes=None):
+        """Create a zone-scoped NFS3 pool (no clusterid / podid).
+
+        ``name`` and ``capacitybytes`` let the isolated negative tests drive
+        the pool name (to collide with a pre-created FlexVol) and the
+        requested size (to exceed every aggregate) without touching the
+        shared test data.
+        """
         ps = self.testdata[TestData.primaryStorage]
         storage_ip = self.testdata[TestData.ontap][TestData.DETAIL_STORAGE_IP]
-        pool_name = "OntapZoneNFS3_%d" % random.randint(0, 99999)
+        pool_name = name or "OntapZoneNFS3_%d" % random.randint(0, 99999)
 
         cmd = createStoragePoolAPI.createStoragePoolCmd()
         cmd.name = pool_name
@@ -200,7 +225,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
         cmd.scope = "ZONE"
         cmd.provider = ps[TestData.provider]
         cmd.tags = ps[TestData.tags]
-        cmd.capacitybytes = ps["capacitybytes"]
+        cmd.capacitybytes = capacitybytes or ps["capacitybytes"]
         cmd.hypervisor = "KVM"
         cmd.managed = True
 
@@ -240,12 +265,259 @@ class TestOntapZoneScopedPool(OntapTestBase):
                 % (ip, ep_name, all_clients)
             )
 
+    # ---- helpers for the isolated tests (01, 02, 09, 10) ---------------
+
+    def _require_ontap_client(self, *method_names):
+        """Skip when the shared OntapRestClient lacks a backend helper."""
+        missing = [n for n in method_names if not hasattr(self.ontap, n)]
+        if missing:
+            raise unittest.SkipTest(
+                "OntapRestClient does not provide %s; update "
+                "ontap_test_base.py before running this test"
+                % ", ".join(missing)
+            )
+
+    def _create_isolated_zone_pool(self, name):
+        """Create a throwaway zone pool and register it for class teardown."""
+        pool = self._create_zone_pool(name=name)
+        self.__class__.pool2 = pool
+        self.assertEqual(
+            pool.state, "Up",
+            "Throwaway pool '%s' should be 'Up', got '%s'"
+            % (name, pool.state)
+        )
+        return pool
+
+    def _wait_for_pool_state_quietly(self, pool_id, target_state,
+                                     timeout=120, interval=5):
+        """Poll for a pool state, returning False instead of failing the test.
+
+        Used on the recovery paths where the backend has deliberately been
+        broken, so entering Maintenance is allowed to fail.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pools = list_storage_pools(self.apiClient, id=pool_id)
+            if not pools or pools[0].state == target_state:
+                return True
+            time.sleep(interval)
+        return False
+
+    def _enter_maintenance_quietly(self, pool_id):
+        """Request Maintenance without failing when the backend is broken."""
+        try:
+            maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
+            maint_cmd.id = pool_id
+            self.apiClient.enableStorageMaintenance(maint_cmd)
+        except Exception as exc:
+            logger.warning(
+                "enableStorageMaintenance failed for pool %s: %s"
+                % (pool_id, exc)
+            )
+            return False
+        return self._wait_for_pool_state_quietly(pool_id, "Maintenance")
+
+    def _cs_pool_exists(self, pool_id):
+        try:
+            return bool(list_storage_pools(self.apiClient, id=pool_id))
+        except Exception:
+            return False
+
+    def _assert_no_cs_pool_named(self, pool_name):
+        """Assert CloudStack holds no storage pool with the given name."""
+        try:
+            listed = list_storage_pools(self.apiClient, name=pool_name)
+        except Exception:
+            listed = None
+        self.assertFalse(
+            listed,
+            "CloudStack should not have created pool '%s' after the "
+            "rejected request" % pool_name
+        )
+
+    def _force_cleanup_zone_pool(self, pool):
+        """Best-effort removal of a throwaway pool left behind by a failure.
+
+        Unmounts on the KVM hosts first so a stale NFS mount can never
+        outlive the ONTAP export and trip KVMHAMonitor.
+        """
+        if pool is None:
+            return True
+        if not self._cs_pool_exists(pool.id):
+            self.__class__.pool2 = None
+            return True
+        try:
+            self._enter_maintenance_quietly(pool.id)
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+            self._delete_pool(pool.id, forced=True)
+        except Exception as exc:
+            logger.warning(
+                "could not force-delete throwaway pool %s: %s"
+                % (pool.id, exc)
+            )
+            return False
+        if self._cs_pool_exists(pool.id):
+            logger.warning(
+                "throwaway pool %s still exists after force-delete", pool.id
+            )
+            return False
+        self.__class__.pool2 = None
+        return True
+
+    def _force_delete_flexvol(self, vol_name):
+        """Best-effort ONTAP FlexVol removal for a throwaway volume."""
+        try:
+            self.ontap.offline_and_delete_volume(vol_name)
+        except Exception as exc:
+            logger.warning(
+                "could not delete ONTAP FlexVol '%s': %s" % (vol_name, exc)
+            )
+
+    def _force_delete_export_policy(self, ep_name):
+        """Best-effort ONTAP export policy removal for a throwaway pool."""
+        if not ep_name:
+            return
+        try:
+            self.ontap.delete_export_policy(ep_name)
+        except Exception as exc:
+            logger.warning(
+                "could not delete export policy '%s': %s" % (ep_name, exc)
+            )
+
     # ------------------------------------------------------------------
-    # Step 01 — Create zone-scoped pool
+    # Step 01 — Create rejected when a FlexVol of the same name exists
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_01_create_zone_scoped_pool(self):
+    def test_01_create_zone_pool_rejected_when_flexvol_exists(self):
+        """
+        Pre-create a FlexVol on the SVM, then ask CloudStack for a
+        zone-scoped pool with that exact name.
+        Verifies:
+          - createStoragePool raises CloudstackAPIException
+          - CloudStack records no pool with that name
+          - ONTAP: the pre-existing FlexVol is left in place
+        This test owns everything it creates and leaves no pool behind.
+        """
+        self._require_ontap_client("create_flexvol", "offline_and_delete_volume")
+
+        pool_name = "OntapZoneNFS3Dup_%d" % random.randint(0, 99999)
+        size_bytes = self.testdata[TestData.primaryStorage]["capacitybytes"]
+        created_pool = None
+        try:
+            self.ontap.create_flexvol(self.svm_name, pool_name, size_bytes)
+            self.assertIsNotNone(
+                self.ontap.get_volume(pool_name),
+                "Pre-created ONTAP FlexVol '%s' not visible; cannot test the "
+                "name collision" % pool_name
+            )
+
+            try:
+                created_pool = self._create_zone_pool(name=pool_name)
+            except CloudstackAPIException as exc:
+                log_progress(
+                    logger, "info",
+                    "createStoragePool rejected for existing FlexVol '%s': %s",
+                    pool_name, exc,
+                )
+            else:
+                self.fail(
+                    "createStoragePool should have been rejected: ONTAP "
+                    "FlexVol '%s' already exists" % pool_name
+                )
+
+            self._assert_no_cs_pool_named(pool_name)
+            self.assertIsNotNone(
+                self.ontap.get_volume(pool_name),
+                "Pre-existing ONTAP FlexVol '%s' was removed by the rejected "
+                "create" % pool_name
+            )
+        finally:
+            if self._force_cleanup_zone_pool(created_pool):
+                self._force_delete_flexvol(pool_name)
+                self._force_delete_export_policy(
+                    "cs-%s-%s" % (self.svm_name, pool_name)
+                )
+
+    # ------------------------------------------------------------------
+    # Step 02 — Create rejected when no aggregate has enough free space
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_02_create_zone_pool_rejected_when_no_aggregate_space(self):
+        """
+        Ask for a pool 1 GiB larger than the free space of the roomiest
+        assigned online aggregate.
+        Verifies:
+          - createStoragePool raises CloudstackAPIException reporting
+            'No suitable aggregates'
+          - CloudStack records no pool with that name
+          - ONTAP: no FlexVol of that name was left behind
+        Skipped when the SVM has more than 300 TiB free on one aggregate,
+        where the oversized request stops being meaningful.
+        """
+        self._require_ontap_client(
+            "max_online_aggregate_available_bytes", "offline_and_delete_volume"
+        )
+
+        max_free = self.ontap.max_online_aggregate_available_bytes(self.svm_name)
+        if not max_free:
+            raise unittest.SkipTest(
+                "No assigned online aggregate with free space reported for "
+                "SVM '%s'; cannot build an over-capacity request"
+                % self.svm_name
+            )
+        requested = int(max_free) + self.ONE_GIB
+        if requested > self.MAX_AGGREGATE_FREE_FOR_NO_SPACE_TEST:
+            raise unittest.SkipTest(
+                "Largest assigned online aggregate on SVM '%s' has %d B free; "
+                "the over-capacity request would exceed the %d B FlexVol limit"
+                % (self.svm_name, max_free,
+                   self.MAX_AGGREGATE_FREE_FOR_NO_SPACE_TEST)
+            )
+
+        pool_name = "OntapZoneNFS3NoSpace_%d" % random.randint(0, 99999)
+        created_pool = None
+        try:
+            try:
+                created_pool = self._create_zone_pool(
+                    name=pool_name, capacitybytes=requested
+                )
+            except CloudstackAPIException as exc:
+                error_text = str(exc)
+                log_progress(
+                    logger, "info",
+                    "createStoragePool rejected for %d B (max aggregate free "
+                    "%d B): %s", requested, max_free, error_text,
+                )
+                self.assertIn(
+                    "No suitable aggregates", error_text,
+                    "Expected the rejection to report 'No suitable "
+                    "aggregates', got: %s" % error_text
+                )
+            else:
+                self.fail(
+                    "createStoragePool should have been rejected: requested "
+                    "%d B but the roomiest aggregate has only %d B free"
+                    % (requested, max_free)
+                )
+
+            self._assert_no_cs_pool_named(pool_name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' was left behind by the rejected create"
+                % pool_name
+            )
+        finally:
+            if self._force_cleanup_zone_pool(created_pool):
+                self._force_delete_flexvol(pool_name)
+
+    # ------------------------------------------------------------------
+    # Step 03 — Create zone-scoped pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_03_create_zone_scoped_pool(self):
         """
         Create a zone-scoped NFS3 primary storage pool (no clusterid/podid).
         CloudStack calls attachZone(), which connects all eligible KVM hosts
@@ -288,18 +560,18 @@ class TestOntapZoneScopedPool(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 02 — Disable zone-scoped pool
+    # Step 04 — Disable zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_02_disable_zone_scoped_pool(self):
+    def test_04_disable_zone_scoped_pool(self):
         """
         Disable the zone-scoped pool.
         Verifies:
           - pool.state is Disabled
           - ONTAP: FlexVol still online; export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -325,18 +597,18 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 03 — Enable zone-scoped pool
+    # Step 05 — Enable zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_03_enable_zone_scoped_pool(self):
+    def test_05_enable_zone_scoped_pool(self):
         """
         Re-enable the zone-scoped pool.
         Verifies:
           - pool.state is Up
           - ONTAP: FlexVol still online; export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -362,11 +634,11 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 04 — Delete zone-scoped pool
+    # Step 06 — Delete zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_04_delete_zone_scoped_pool(self):
+    def test_06_delete_zone_scoped_pool(self):
         """
         Enter maintenance then delete the zone-scoped pool.
         Verifies:
@@ -374,7 +646,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
           - ONTAP: FlexVol deleted
           - ONTAP: export policy deleted
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
 
         pool = self.__class__.pool
         pool_name = pool.name
@@ -416,6 +688,127 @@ class TestOntapZoneScopedPool(OntapTestBase):
                 policy,
                 "Export policy '%s' still exists after pool deletion" % ep_name
             )
+
+    # ------------------------------------------------------------------
+    # Step 07 — Delete a pool whose FlexVol was pre-deleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_07_delete_zone_pool_with_flexvol_predeleted(self):
+        """
+        Create an empty zone pool, remove its FlexVol directly on ONTAP, then
+        delete the pool through CloudStack.
+        Verifies:
+          - deleteStoragePool succeeds and the pool leaves CloudStack
+          - ONTAP: the FlexVol stays gone
+        The KVM hosts are unmounted before the FlexVol is removed so the pool
+        never becomes a stale NFS mount.
+        """
+        self._require_ontap_client("offline_and_delete_volume")
+
+        pool_name = "OntapZoneNFS3NoFv_%d" % random.randint(0, 99999)
+        pool = self._create_isolated_zone_pool(pool_name)
+        ep_name = self._get_export_policy_name(pool)
+        try:
+            self.assertIsNotNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' missing right after pool creation"
+                % pool_name
+            )
+
+            self.assertTrue(
+                self._enter_maintenance_quietly(pool.id),
+                "Pool '%s' did not enter Maintenance before backend mutation"
+                % pool_name
+            )
+
+            # Unmount while the export is still reachable, then delete the
+            # FlexVol behind CloudStack's back.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+            self.ontap.offline_and_delete_volume(pool_name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' still present after the manual delete"
+                % pool_name
+            )
+
+            self._delete_pool(pool.id, forced=True)
+            self.__class__.pool2 = None
+
+            self.assertFalse(
+                self._cs_pool_exists(pool.id),
+                "Pool '%s' still listed in CloudStack after deletion with a "
+                "pre-deleted FlexVol" % pool_name
+            )
+            self.assertIsNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' reappeared after pool deletion" % pool_name
+            )
+        finally:
+            if self._force_cleanup_zone_pool(pool):
+                self._force_delete_flexvol(pool_name)
+                self._force_delete_export_policy(ep_name)
+
+    # ------------------------------------------------------------------
+    # Step 08 — Delete a pool whose export policy was pre-deleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_08_delete_zone_pool_with_export_policy_predeleted(self):
+        """
+        Create an empty zone pool, remove its NFS export policy directly on
+        ONTAP, then delete the pool through CloudStack.
+        Verifies:
+          - deleteStoragePool succeeds and the pool leaves CloudStack
+          - ONTAP: the FlexVol is deleted and the export policy stays gone
+        The KVM hosts are unmounted before the export policy is removed so
+        the pool never becomes a stale NFS mount.
+        """
+        self._require_ontap_client("offline_and_delete_volume")
+
+        pool_name = "OntapZoneNFS3NoEp_%d" % random.randint(0, 99999)
+        pool = self._create_isolated_zone_pool(pool_name)
+        ep_name = self._get_export_policy_name(pool)
+        try:
+            self._assert_export_policy_has_host_ips(ep_name)
+            self.assertTrue(
+                self._enter_maintenance_quietly(pool.id),
+                "Pool '%s' did not enter Maintenance before backend mutation"
+                % pool_name
+            )
+
+            # Unmount before pulling the export policy out from under the
+            # hosts, otherwise the mount goes stale and KVMHAMonitor reboots.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+            self.ontap.reassign_volume_export_policy(pool.name)
+            self.ontap.delete_export_policy(ep_name)
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' still present after the manual delete"
+                % ep_name
+            )
+
+            self._delete_pool(pool.id, forced=True)
+            self.__class__.pool2 = None
+
+            self.assertFalse(
+                self._cs_pool_exists(pool.id),
+                "Pool '%s' still listed in CloudStack after deletion with a "
+                "pre-deleted export policy" % pool_name
+            )
+            self.assertIsNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' still exists after pool deletion"
+                % pool_name
+            )
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' reappeared after pool deletion" % ep_name
+            )
+        finally:
+            if self._force_cleanup_zone_pool(pool):
+                self._force_delete_flexvol(pool_name)
+                self._force_delete_export_policy(ep_name)
 
     # ------------------------------------------------------------------
     # Class-level teardown
