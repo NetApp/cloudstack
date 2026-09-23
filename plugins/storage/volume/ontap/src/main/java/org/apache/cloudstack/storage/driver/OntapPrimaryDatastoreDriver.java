@@ -68,9 +68,11 @@ import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import com.cloud.agent.api.to.StorageFilerTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
@@ -633,7 +635,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             CloudStackVolume cloudStackVolume = new CloudStackVolume();
             cloudStackVolume.setVolumeInfo(volumeInfo);
           
-
             // delegates to UnifiedSANStrategy (PATCH /api/storage/luns/{uuid}) for iSCSI
             // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3;
             // protocol-specific setup (e.g. LUN UUID lookup) is handled inside each strategy
@@ -641,13 +642,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
             volumeVO.setSize(payload.newSize);
             volumeDao.update(volumeVO.getId(), volumeVO);
+            String instanceName = payload.instanceName != null ? payload.instanceName : "none";
 
-            result = new CreateCmdResult(null, new Answer(null, true, null));
+            ResizeVolumeCommand resizeCmd = new ResizeVolumeCommand(volumeVO.getPath(),
+                    new StorageFilerTO(storagePool), volumeVO.getSize(), payload.newSize,
+                    false, instanceName);
+            result = new CreateCmdResult(volumeVO.getPath(), new Answer(resizeCmd, true, null));
             logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
         } catch (Exception e) {
             String errMsg = e.getMessage();
             logger.error("resize: Failed for volume [{}]: {}", data.getId(), errMsg, e);
-            result = new CreateCmdResult(null, new Answer(null, false, errMsg));
             result.setResult(errMsg);
         } finally {
             callback.complete(result);
