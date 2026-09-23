@@ -23,6 +23,7 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
+import com.cloud.agent.api.to.DiskTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
@@ -86,6 +87,7 @@ import org.jetbrains.annotations.Nullable;
 import javax.inject.Inject;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -678,11 +680,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         ensureAccessGroupForHost(sanStrategy, host, storagePool, svmName, accessGroupName);
 
-        // Create or retrieve existing LUN mapping
+        // Create or retrieve existing LUN mapping. The logical unit number it returns is specific to
+        // this host's igroup and so is only useful for diagnostics; the path is keyed on the WWID.
         String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
+        String lunWwid = resolveVolumeLunWwid(sanStrategy, svmName, cloudStackVolumeName, volumeVO.getId());
+        logger.debug("grantAccessIscsi: LUN [{}] mapped to igroup [{}] as logical unit number [{}], WWID [{}]",
+                cloudStackVolumeName, accessGroupName, lunNumber, lunWwid);
 
-        // Update volume path if changed (e.g., after migration or re-mapping)
-        String iscsiPath = buildIscsiPath(storagePool, lunNumber);
+        // Update volume path if changed (e.g. the WWID was not yet known for a pre-existing volume)
+        String iscsiPath = buildIscsiPath(storagePool, lunWwid);
         if (volumeVO.getPath() == null || !volumeVO.getPath().equals(iscsiPath)) {
             volumeVO.set_iScsiName(iscsiPath);
             volumeVO.setPath(iscsiPath);
@@ -718,7 +724,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         try {
             String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
             lunMapped = true;
-            String iscsiPath = buildIscsiPath(storagePool, lunNumber);
+            // The template cache LUN has no volume_details row to cache the WWID in, and this runs
+            // once per template per pool, so it is fetched from the array each time.
+            String lunWwid = fetchLunWwid(sanStrategy, svmName, lunName);
+            logger.debug("grantAccessTemplate: template cache LUN [{}] mapped as logical unit number [{}], WWID [{}]",
+                    lunName, lunNumber, lunWwid);
+            String iscsiPath = buildIscsiPath(storagePool, lunWwid);
 
             templatePoolRef.setInstallPath(iscsiPath);
             vmTemplatePoolDao.update(templatePoolRef.getId(), templatePoolRef);
@@ -774,10 +785,75 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Builds the volume path the KVM agent expects for managed iSCSI: {@code /<targetIQN>/<lunNumber>}.
+     * Builds the volume path the KVM agent expects for managed iSCSI: {@code /<targetIQN>/<lunWwid>}.
+     *
+     * <p>The second component is the LUN's SCSI WWID, not its logical unit number. ONTAP presents
+     * every LUN of an SVM through one target IQN and assigns the logical unit number per igroup, so
+     * the same LUN answers at a different number on each host. A plain host-to-host live migration
+     * ships the source domain XML verbatim, so anything host-specific in the device path would make
+     * the destination open whichever LUN happened to occupy that number there. The WWID comes from
+     * the LUN's own inquiry data and is identical on every host, so the path stays valid.</p>
+     *
+     * <p>The hex WWID is used rather than the raw serial deliberately: ONTAP serial numbers contain
+     * characters including {@code /}, which would break the {@code /targetIQN/LUN} parsing the
+     * hypervisor resources apply to this path.</p>
      */
-    private String buildIscsiPath(StoragePoolVO storagePool, String lunNumber) {
-        return OntapStorageConstants.SLASH + storagePool.getPath() + OntapStorageConstants.SLASH + lunNumber;
+    private String buildIscsiPath(StoragePoolVO storagePool, String lunWwid) {
+        return OntapStorageConstants.SLASH + storagePool.getPath() + OntapStorageConstants.SLASH + lunWwid;
+    }
+
+    /**
+     * Resolves a volume's LUN WWID, caching it as a volume detail after the first lookup.
+     *
+     * <p>Resolved at grant time rather than at create time so that volumes created before this
+     * became the path format pick the WWID up on their next start.</p>
+     */
+    private String resolveVolumeLunWwid(UnifiedSANStrategy sanStrategy, String svmName, String lunName, long volumeId) {
+        VolumeDetailVO cached = volumeDetailsDao.findDetail(volumeId, DiskTO.SCSI_NAA_DEVICE_ID);
+        if (cached != null && cached.getValue() != null && !cached.getValue().isEmpty()) {
+            return cached.getValue();
+        }
+
+        String serialNumber = fetchLunSerialNumber(sanStrategy, svmName, lunName);
+        String wwid = toNaaWwid(serialNumber);
+
+        // The serial is recorded as well as the WWID it encodes, because the serial is what 'lun show'
+        // reports on the array while the WWID is what 'ls /dev/disk/by-id' reports on the host. The
+        // path carries the WWID rather than the serial: ONTAP serials contain characters such as '/'
+        // and '?' that are unsafe in a value flowing through paths, globs and API responses.
+        volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.LUN_DOT_SERIAL_NUMBER, serialNumber, false);
+        volumeDetailsDao.addDetail(volumeId, DiskTO.SCSI_NAA_DEVICE_ID, wwid, false);
+        return wwid;
+    }
+
+    private String fetchLunWwid(UnifiedSANStrategy sanStrategy, String svmName, String lunName) {
+        return toNaaWwid(fetchLunSerialNumber(sanStrategy, svmName, lunName));
+    }
+
+    private String fetchLunSerialNumber(UnifiedSANStrategy sanStrategy, String svmName, String lunName) {
+        String serialNumber = sanStrategy.getLunSerialNumber(svmName, lunName);
+        if (serialNumber == null || serialNumber.isEmpty()) {
+            throw new CloudRuntimeException("ONTAP did not report a serial number for LUN " + lunName
+                    + " on SVM " + svmName + "; cannot build a host-independent device path");
+        }
+        return serialNumber;
+    }
+
+    /**
+     * Derives a LUN's SCSI WWID from its ONTAP serial number.
+     *
+     * <p>NetApp builds the NAA IEEE Registered Extended identifier as its OUI followed by the ASCII
+     * bytes of the serial number in hex. For serial {@code x0M-8?/kEsJT} this yields
+     * {@code 600a098078304d2d383f2f6b45734a54}, which the host shows as
+     * {@code /dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a54} and vSphere shows as
+     * {@code naa.600a098078304d2d383f2f6b45734a54}.</p>
+     */
+    private String toNaaWwid(String serialNumber) {
+        StringBuilder wwid = new StringBuilder(OntapStorageConstants.NETAPP_NAA_OUI);
+        for (byte b : serialNumber.getBytes(StandardCharsets.US_ASCII)) {
+            wwid.append(String.format("%02x", b));
+        }
+        return wwid.toString();
     }
 
     private void refreshManagedStoreTarget(DataStore dataStore, String iscsiPath) {

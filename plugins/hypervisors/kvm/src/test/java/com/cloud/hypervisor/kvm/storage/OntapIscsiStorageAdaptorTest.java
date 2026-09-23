@@ -19,6 +19,7 @@ package com.cloud.hypervisor.kvm.storage;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Modifier;
@@ -29,6 +30,7 @@ import org.junit.Test;
 import org.reflections.Reflections;
 
 import com.cloud.storage.Storage.StoragePoolType;
+import com.cloud.utils.exception.CloudRuntimeException;
 
 public class OntapIscsiStorageAdaptorTest {
 
@@ -72,7 +74,93 @@ public class OntapIscsiStorageAdaptorTest {
 
         StorageAdaptor adaptor = OntapIscsiStorageAdaptor.class.getDeclaredConstructor().newInstance();
         assertEquals(StoragePoolType.OntapiSCSI, adaptor.getStoragePoolType());
-        assertEquals("The superclass must keep serving the other iSCSI vendors",
+        assertEquals("IscsiAdmStorageAdaptor must keep serving the other iSCSI vendors",
                 StoragePoolType.Iscsi, new IscsiAdmStorageAdaptor().getStoragePoolType());
+    }
+
+    /**
+     * The two adaptors are deliberately unrelated: device naming runs through nearly every method
+     * that does real work, so inheriting IscsiAdmStorageAdaptor coupled them through behaviour
+     * neither could change safely. Registration only requires implementing StorageAdaptor, and
+     * KVMStoragePoolManager keys adaptors on getStoragePoolType(), so nothing depends on a shared
+     * superclass. Asserting it keeps a later "reuse" refactor from quietly restoring by-path
+     * naming through an un-overridden inherited method.
+     */
+    @Test
+    public void adaptorDoesNotInheritTheByPathBasedIscsiAdaptor() {
+        assertTrue("The adaptor must implement StorageAdaptor directly",
+                StorageAdaptor.class.isAssignableFrom(OntapIscsiStorageAdaptor.class));
+        assertFalse("The adaptor must not extend the by-path based iSCSI adaptor",
+                IscsiAdmStorageAdaptor.class.isAssignableFrom(OntapIscsiStorageAdaptor.class));
+        assertEquals("It should sit directly on StorageAdaptor, with no intermediate base class",
+                Object.class, OntapIscsiStorageAdaptor.class.getSuperclass());
+    }
+
+    /**
+     * The WWID occupies the component the superclass reads a logical unit number from, which is what
+     * keeps the path at the two components every hypervisor resource's '/targetIQN/LUN' parsing
+     * demands. ONTAP serial numbers contain '/' (byte 0x2f), so carrying the raw serial here instead
+     * of its hex WWID would split into four components and throw.
+     */
+    @Test
+    public void physicalDiskIsNamedByLunWwidRatherThanLogicalUnitNumber() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
+        KVMStoragePool pool = adaptor.createStoragePool("ontap-iscsi-pool-uuid", "10.196.37.157", 3260, null, null,
+                StoragePoolType.OntapiSCSI, null, true);
+
+        String targetIqn = "iqn.1992-08.com.netapp:sn.45048fd9b65111f1b106005056bd83cf:vs.3";
+        String lunWwid = "600a098078304d2d383f2f6b45734a54";
+
+        KVMPhysicalDisk disk = adaptor.getPhysicalDisk("/" + targetIqn + "/" + lunWwid, pool);
+
+        assertEquals("/dev/disk/by-id/scsi-3" + lunWwid, disk.getPath());
+        assertFalse("The reported path must carry nothing host-specific", disk.getPath().contains("lun-"));
+        assertFalse("The reported path must not be derived from by-path", disk.getPath().contains("by-path"));
+        assertEquals(PhysicalDiskFormat.RAW, disk.getFormat());
+    }
+
+    @Test
+    public void malformedVolumePathIsRejected() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
+        KVMStoragePool pool = adaptor.createStoragePool("ontap-iscsi-pool-uuid", "10.196.37.157", 3260, null, null,
+                StoragePoolType.OntapiSCSI, null, true);
+
+        // A raw ONTAP serial such as 'x0M-8?/kEsJT' would land here, splitting into four components.
+        assertThrows(CloudRuntimeException.class,
+                () -> adaptor.getPhysicalDisk("/iqn.1992-08.com.netapp:sn.abc:vs.3/x0M-8?/kEsJT", pool));
+        assertThrows(CloudRuntimeException.class,
+                () -> adaptor.getPhysicalDisk("/iqn.1992-08.com.netapp:sn.abc:vs.3", pool));
+    }
+
+    /**
+     * KVMStoragePoolManager.disconnectPhysicalDiskByPath walks every registered adaptor and stops at
+     * the first one returning true, so an adaptor that over-claims tears down another vendor's
+     * session. By-path devices still belong to the superclass, which serves the other iSCSI vendors.
+     */
+    @Test
+    public void disconnectByPathOnlyClaimsTheDevicesThisAdaptorHandsOut() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
+
+        assertFalse("A by-path device is the superclass's to disconnect", adaptor.disconnectPhysicalDiskByPath(
+                "/dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.1992-08.com.netapp:sn.abc:vs.3-lun-0"));
+        assertFalse("PowerFlex publishes its own by-id names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/emc-vol-1235dc1s0-4a2f6b45"));
+        assertFalse("A partition is not the LUN itself",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a51-part1"));
+        assertFalse("Only the scsi-3 form is handed out, never the wwn-0x alias",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600a098078304d2d383f2f6b45734a51"));
+        assertFalse("A bare kernel name carries no identity", adaptor.disconnectPhysicalDiskByPath("/dev/sdb"));
+        assertFalse(adaptor.disconnectPhysicalDiskByPath(null));
+    }
+
+    /**
+     * A claimed device that has already gone reports success: there is no session left to tear down,
+     * and returning false would send the manager on to adaptors that would mishandle the path.
+     */
+    @Test
+    public void disconnectByPathSucceedsWhenTheClaimedDeviceIsAlreadyGone() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
+
+        assertTrue(adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a51"));
     }
 }

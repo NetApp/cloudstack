@@ -89,6 +89,15 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class OntapPrimaryDatastoreDriverTest {
 
+    /**
+     * A real serial number taken from an ONTAP array, and the WWID NetApp derives from it as its
+     * OUI plus the serial's ASCII bytes in hex. The serial deliberately contains a '/', which is
+     * why volume paths carry the WWID: the raw serial would break the '/targetIQN/LUN' parsing that
+     * every hypervisor resource applies to the path.
+     */
+    private static final String LUN_SERIAL_NUMBER = "x0M-8?/kEsJT";
+    private static final String LUN_WWID = "600a098078304d2d383f2f6b45734a54";
+
     @Mock
     private StoragePoolDetailsDao storagePoolDetailsDao;
 
@@ -532,6 +541,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             // Execute
             boolean result = driver.grantAccess(volumeInfo, host, dataStore);
@@ -584,6 +594,7 @@ class OntapPrimaryDatastoreDriverTest {
             when(sanStrategy.getAccessGroup(any())).thenReturn(null);
             when(sanStrategy.createAccessGroup(any())).thenReturn(createdAccessGroup);
             when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             // Execute
             boolean result = driver.grantAccess(volumeInfo, hostVO, dataStore);
@@ -1010,10 +1021,11 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(templateInfo, host, primaryDataStore));
 
-            String expectedPath = "/iqn.1992-08.com.netapp:sn.123456/3";
+            String expectedPath = "/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID;
             verify(templatePoolRef).setInstallPath(expectedPath);
             verify(vmTemplatePoolDao).update(eq(7L), any(VMTemplateStoragePoolVO.class));
 
@@ -1065,6 +1077,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
             when(sanStrategy.getCloudStackVolume(argThat(map ->
                     map != null && "/vol/vol1/cs_tmpl_50".equals(map.get("name")))))
                     .thenReturn(cachedTemplate);
@@ -1380,11 +1393,12 @@ class OntapPrimaryDatastoreDriverTest {
             when(sanStrategy.getAccessGroup(any())).thenReturn(null);
             when(sanStrategy.createAccessGroup(any())).thenReturn(createdAccessGroup);
             when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(templateInfo, hostVo, primaryDataStore));
 
             verify(sanStrategy).createAccessGroup(any());
-            verify(templatePoolRef).setInstallPath("/iqn.1992-08.com.netapp:sn.123456/3");
+            verify(templatePoolRef).setInstallPath("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
         }
     }
 

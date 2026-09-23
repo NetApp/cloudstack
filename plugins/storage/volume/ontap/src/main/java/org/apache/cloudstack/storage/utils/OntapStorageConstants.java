@@ -63,6 +63,16 @@ public class OntapStorageConstants {
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
+    public static final String SERIAL_NUMBER = "serial_number";
+
+    /**
+     * NetApp's IEEE OUI, which prefixes the NAA identifier of every ONTAP LUN.
+     *
+     * <p>A LUN's WWID is this followed by the hex of its 12-character serial number, giving the
+     * 32-hex-character value udev publishes as {@code /dev/disk/by-id/wwn-0x<wwid>} and (with the
+     * NAA designator type prepended by {@code scsi_id}) as {@code /dev/disk/by-id/scsi-3<wwid>}.</p>
+     */
+    public static final String NETAPP_NAA_OUI = "600a0980";
     public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_capacity_optimized,is_perf_optimized";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
@@ -102,6 +112,7 @@ public class OntapStorageConstants {
     public static final String LUN_DOT_NAME = "lun.name";
     public static final String IQN = "iqn";
     public static final String LUN_DOT_UUID = "lun.uuid";
+    public static final String LUN_DOT_SERIAL_NUMBER = "lun.serial_number";
     public static final String LOGICAL_UNIT_NUMBER = "logical_unit_number";
     public static final String IGROUP_DOT_NAME = "igroup.name";
     public static final String IGROUP_DOT_UUID = "igroup.uuid";
