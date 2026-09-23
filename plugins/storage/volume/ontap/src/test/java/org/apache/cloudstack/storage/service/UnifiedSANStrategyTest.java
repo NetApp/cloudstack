@@ -25,6 +25,7 @@ import java.util.Map;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
@@ -66,6 +67,8 @@ import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.cloud.host.HostVO;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
@@ -87,6 +90,9 @@ class UnifiedSANStrategyTest {
 
     @Mock
     private StoragePoolDetailsDao storagePoolDetailsDao;
+
+    @Mock
+    private VolumeDetailsDao volumeDetailsDao;
 
     private UnifiedSANStrategy unifiedSANStrategy;
     private String authHeader;
@@ -115,6 +121,11 @@ class UnifiedSANStrategyTest {
             java.lang.reflect.Field storagePoolDetailsDaoField = UnifiedSANStrategy.class.getDeclaredField("storagePoolDetailsDao");
             storagePoolDetailsDaoField.setAccessible(true);
             storagePoolDetailsDaoField.set(unifiedSANStrategy, storagePoolDetailsDao);
+
+            // Inject volumeDetailsDao, used to resolve the LUN UUID during resize
+            java.lang.reflect.Field volumeDetailsDaoField = UnifiedSANStrategy.class.getDeclaredField("volumeDetailsDao");
+            volumeDetailsDaoField.setAccessible(true);
+            volumeDetailsDaoField.set(unifiedSANStrategy, volumeDetailsDao);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -1013,6 +1024,7 @@ class UnifiedSANStrategyTest {
         lun.setUuid("lun-uuid-123");
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
 
         unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L);
 
@@ -1023,11 +1035,45 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testResizeCloudStackVolume_NoUuid_Throws() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getId()).thenReturn(100L);
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(new Lun());
+        request.setVolumeInfo(volumeInfo);
+
+        // LUN UUID is absent on the request and cannot be resolved from volume details
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(null);
 
         assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 100L));
         verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
+    void testResizeCloudStackVolume_NoVolumeInfo_Throws() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 100L));
+        verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
+    void testResizeCloudStackVolume_UuidResolvedFromVolumeDetails() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getId()).thenReturn(100L);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false));
+
+        unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L);
+
+        ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+        verify(sanFeignClient).updateLun(any(), eq("lun-uuid-123"), lunCaptor.capture());
+        assertEquals(21474836480L, lunCaptor.getValue().getSpace().getSize());
     }
 
     @Test
@@ -1036,6 +1082,7 @@ class UnifiedSANStrategyTest {
         lun.setUuid("lun-uuid-123");
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
 
         assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 0L));
         assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(null, 100L));
@@ -1048,6 +1095,7 @@ class UnifiedSANStrategyTest {
         lun.setUuid("lun-uuid-123");
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
 
         FeignException feignException = mock(FeignException.class);
         when(feignException.status()).thenReturn(500);

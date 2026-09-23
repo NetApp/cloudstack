@@ -1087,12 +1087,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * error, etc.). Throws if the FlexVolume UUID is not recorded in pool details, since that
      * indicates the pool was never fully provisioned.</p>
      *
+     * @throws InvalidParameterValueException if {@code storagePool} is null
      * @throws CloudRuntimeException if the pool has no FlexVolume UUID in its details
      */
     @Override
     public long getUsedBytes(StoragePool storagePool) {
         if (storagePool == null) {
-            return 0;
+            throw new InvalidParameterValueException("storagePool is null, ensure the pool exists and is fully initialised before querying used bytes");
         }
 
         Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());

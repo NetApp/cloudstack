@@ -1620,7 +1620,7 @@ class OntapPrimaryDatastoreDriverTest {
     void testGetUsedBytes_NullPool_ThrowsException() {
         InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
                 () -> driver.getUsedBytes(null));
-        assertTrue(ex.getMessage().contains("storagePool should not be null"));
+        assertTrue(ex.getMessage().contains("storagePool is null, ensure the pool exists and is fully initialised before querying used bytes"));
     }
 
     @Test
