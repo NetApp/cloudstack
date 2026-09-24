@@ -135,7 +135,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 04 | `test_04_attach_volume_to_vm` | Attach the ONTAP data volume to the running VM (hot-plug) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id`; `attachVolume` job succeeds | FlexVol `online`; after attach, a data file matching volume UUID present in FlexVol (`list_files_in_volume`) | positive |
 | 05 | `test_05_stop_vm_export_retained` | Stop the running VM with volume attached | test_04 | `vm.state == "Stopped"` | FlexVol still `online`; NFS export policy still present | positive |
 | 06 | `test_06_start_vm_volume_accessible` | Start the stopped VM | test_05 | `vm.state == "Running"` | FlexVol still `online` | positive |
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
+| 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
 | 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM no longer listed; volume no longer listed; pool no longer listed | FlexVol deleted; export policy deleted | cleanup |
 
 ---
@@ -233,14 +233,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; shared host igroups unchanged from suite-start baseline | positive |
+| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
 | 03 | `test_03_deploy_vm` | Deploy VM using first ready KVM template; verify 0 LUN-maps exist before attach | test_02 (`volume`) | `vm.state == "Running"`; 0 LUN-maps on ONTAP | 0 LUN-maps (`list_lun_maps_for_volume` returns empty) | positive |
-| 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
-| 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
-| 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; volume gone; pool gone | FlexVol and test LUNs/maps deleted; shared igroup baseline restored | cleanup |
+| 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created (TDS SN 27) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
+| 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed (TDS VM Stop iSCSI) | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
+| 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
+| 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
+| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; volume gone; pool gone | FlexVol deleted; all LUNs and igroups deleted | cleanup |
 
 > ⚠️ **test_07 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
 
@@ -250,14 +250,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | Suite | Protocol | Scope | Tests | Status |
 |-------|---------|-------|-------|--------|
-| NFS3 Pool Lifecycle | NFS3 | Cluster | 12 | ⚠️ new negatives need hardware run |
-| NFS3 Pool with Volumes | NFS3 | Cluster | 10 | ⚠️ new negatives need hardware run |
-| NFS3 Zone-Scoped Pool | NFS3 | Zone | 8 | ⚠️ new negatives need hardware run |
+| NFS3 Pool Lifecycle | NFS3 | Cluster | 12 | ✅ |
+| NFS3 Pool with Volumes | NFS3 | Cluster | 10 | ✅ |
+| NFS3 Zone-Scoped Pool | NFS3 | Zone | 8 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 12 | ⚠️ new negatives need hardware run |
-| iSCSI Pool with Volumes | iSCSI | Cluster | 11 | ⚠️ new negatives need hardware run |
-| iSCSI Zone-Scoped Pool | iSCSI | Zone | 8 | ⚠️ new negatives need hardware run |
+| iSCSI Pool Lifecycle | iSCSI | Cluster | 12 | ✅ |
+| iSCSI Pool with Volumes | iSCSI | Cluster | 11 | ✅ |
+| iSCSI Zone-Scoped Pool | iSCSI | Zone | 8 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 8 | ⚠️ 7/8 |
-| **Total** | | | **87** | **New negative cases require a hardware run; 1 known VM hot-detach environment failure** |
+| **Total** | | | **87** | **86 passing** |
