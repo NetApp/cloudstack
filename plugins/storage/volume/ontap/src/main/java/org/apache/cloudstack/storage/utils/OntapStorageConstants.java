@@ -169,6 +169,18 @@ public class OntapStorageConstants {
      */
     public static final String CLONE_OF_SNAPSHOT = "cloneOfSnapshot";
 
+    /**
+     * Driver capability read by {@code StorageSystemDataMotionStrategy} when copying a snapshot to
+     * secondary storage. The literal must stay in sync with the string used by the orchestrator.
+     */
+    public static final String CAN_DIRECT_ATTACH_SNAPSHOT = "CAN_DIRECT_ATTACH_SNAPSHOT";
+
+    /**
+     * Name prefix of the temporary volume a snapshot is cloned into for createTemplate(snapshotid),
+     * suffixed with the CloudStack snapshot id and volume id.
+     */
+    public static final String TEMP_SNAPSHOT_COPY_NAME_PREFIX = "cs_tmp_snap_";
+
     // ASUP (AutoSupport) / EMS telemetry
     public static final String ADVANCED_CONFIG_KEY_CATEGORY = "Advanced";
     public static final String ASUP_CATEGORY = "provisioning";
