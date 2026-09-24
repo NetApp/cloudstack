@@ -18,8 +18,11 @@
 """
 Negative / boundary workflow for ONTAP primary template-cache Marvin suites.
 
-Kept separate from the sequential happy-path suite so failures here cannot
-cascade into seed/reuse/survive steps.
+The happy path (seed / reuse / cache survives VM delete) runs inside the VM
+instance suites (``*/instance/test_vm_volume_attach.py``). These cases need
+their own pool and / or offering (mismatched tags, undersized capacity, a
+deliberately broken cache), so they stay isolated and cannot cascade into the
+instance workflow.
 
 Cases:
   01  Tag mismatch — SO tags do not match ONTAP pool; no spool_ref on pool
@@ -44,20 +47,20 @@ from marvin.cloudstackAPI import (
 from marvin.lib.base import ServiceOffering, StoragePool
 
 from helpers import template_cache_util as tcu
-from helpers.template_cache_workflow import (
-    OntapTemplateCacheWorkflow,
+from helpers.template_cache_base import (
+    OntapTemplateCacheBase,
     TemplateCacheTestData,
 )
 
 logger = logging.getLogger("TemplateCacheNegativeWorkflow")
 
 
-class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheWorkflow):
+class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheBase):
     """
     Independent negative boundary tests.
 
-    Reuses setUpClass (zone / template / ONTAP client) from the positive
-    workflow but creates per-test pools and offerings so state stays isolated.
+    Reuses setUpClass (zone / template / ONTAP client) from the shared base
+    but creates per-test pools and offerings so state stays isolated.
     """
 
     NOSE_TAG = "template_cache_negative"

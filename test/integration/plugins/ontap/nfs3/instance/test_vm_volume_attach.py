@@ -19,18 +19,28 @@
 Sequential workflow integration tests for NetApp ONTAP data volume lifecycle
 with a running virtual machine.
 
-Tests are numbered test_01 ... test_08 and must run in that order.  Each step
-builds on the shared state established by the previous step.
+Tests must run in order (test_01, test_02, test_03, test_03a, test_03b,
+test_04 ... test_08).  Each step builds on the shared state established by the
+previous step.
+
+The VM is deployed with a compute offering whose storage tags match the pool,
+so its ROOT volume lands on the ONTAP pool and exercises the primary
+template cache (seed / reuse / survive VM delete) alongside the data-volume
+workflow.
 
 Workflow:
-  01  Create NFS3 primary storage pool on ONTAP
+  01  Create NFS3 primary storage pool on ONTAP (tagged with templateCacheTags)
   02  Create a CloudStack data volume on the ONTAP pool
-  03  Deploy a VM (template and service offering discovered at setup time)
+  03  Deploy a VM — ROOT on ONTAP; seeds template cache (template_spool_ref
+      Ready + cache file on the FlexVol)
+  03a Deploy a second VM — reuses the cache (still one template_spool_ref)
+  03b Expunge the second VM — cache and template_spool_ref survive
   04  Attach the ONTAP data volume to the running VM
   05  Stop the VM — export policy stays; volume remains attached in CS
   06  Start the VM — VM Running; volume still attached; FlexVol online
   07  Detach the ONTAP data volume from the VM
-  08  Destroy VM; delete ONTAP volume; enter maintenance; delete pool
+  08  Destroy VM (cache still survives); delete ONTAP volume; enter
+      maintenance; force-delete pool
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -66,18 +76,24 @@ from marvin.cloudstackAPI import (
     enableStorageMaintenance,
     listNetworkOfferings as listNetworkOfferingsAPI,
     listNetworks as listNetworksAPI,
-    listServiceOfferings as listServiceOfferingsAPI,
-    listTemplates as listTemplatesAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
     startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
-from marvin.lib.base import StoragePool
+from marvin.lib.base import ServiceOffering, StoragePool
 from marvin.lib.common import list_storage_pools
 
 from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
+from helpers import template_cache_util as tcu
+from helpers.template_cache_base import (
+    TemplateCacheAssertionsMixin,
+    find_ready_kvm_template,
+    tagged_compute_offering_data,
+    template_cache_capacity_bytes,
+    template_cache_tags,
+)
 
 logger = logging.getLogger("TestOntapVMVolumeAttach")
 
@@ -144,16 +160,22 @@ class TestData:
 # Sequential workflow test class
 # ---------------------------------------------------------------------------
 
-class TestOntapVMVolumeAttach(OntapTestBase):
+class TestOntapVMVolumeAttach(TemplateCacheAssertionsMixin, OntapTestBase):
     """
-    Tests ONTAP data volume lifecycle with a running CloudStack VM.
+    Tests ONTAP data volume lifecycle with a running CloudStack VM whose ROOT
+    volume is on the ONTAP pool (primary template cache).
 
     All tests are sequential — state is carried on class attributes.
     """
 
+    PROTOCOL = "NFS3"
+
     # ---- extra shared state beyond OntapTestBase -----------------------
     vm = None              # running VirtualMachine
+    vm2 = None             # second VM used only to verify template-cache reuse
     template_id = None     # KVM template ID discovered at setup
+    template_db_id = None  # numeric vm_template.id (template_spool_ref key)
+    pool_db_id = None      # numeric storage_pool.id (template_spool_ref key)
     service_offering_id = None
     network_id = None      # None for Basic zones
     _created_network_id = None  # network created by this suite for Advanced zones
@@ -188,8 +210,10 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         protocol = "NFS3"
         scope = pool_cfg.get("storagePoolScope", "CLUSTER")
         provider = pool_cfg.get("storagePoolProvider", "NetApp ONTAP")
-        tags = nfs3_cfg.get("storagePoolTags", "ontap-nfs3")
-        capacitybytes = pool_cfg.get("capacitybytes", None)
+        # Dedicated tag shared by the pool and the compute offering so the
+        # VM's ROOT volume is placed on this ONTAP pool (template cache path).
+        tags = template_cache_tags(nfs3_cfg, "nfs3")
+        capacitybytes = template_cache_capacity_bytes(pool_cfg)
 
         cls.testdata = TestData(
             storage_ip, svm_name, username, password,
@@ -204,19 +228,12 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         # Discover a suitable user KVM template in the zone (must be fully
         # downloaded; system-type templates are excluded as they cannot be
         # deployed as user VMs).
-        tpl_cmd = listTemplatesAPI.listTemplatesCmd()
-        tpl_cmd.templatefilter = "all"
-        tpl_cmd.listall = True
-        tpl_cmd.zoneid = cls.zone.id
-        templates = cls.apiClient.listTemplates(tpl_cmd) or []
-        kvm_ready = [
-            t for t in templates
-            if getattr(t, "hypervisor", "").lower() == "kvm"
-            and getattr(t, "isready", False)
-            and getattr(t, "templatetype", "").upper() != "SYSTEM"
-        ]
-        if kvm_ready:
-            cls.template_id = kvm_ready[0].id
+        template = find_ready_kvm_template(cls.apiClient, cls.zone.id)
+        if template is not None:
+            cls.template_id = template.id
+            cls.template_db_id = tcu.get_db_id(
+                cls.dbConnection, "vm_template", cls.template_id
+            )
         else:
             logger.warning(
                 "No ready user KVM template found in zone '%s'. "
@@ -225,12 +242,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             )
             cls.template_id = None
 
-        # Discover the smallest service offering
-        so_cmd = listServiceOfferingsAPI.listServiceOfferingsCmd()
-        offerings = cls.apiClient.listServiceOfferings(so_cmd) or []
-        assert offerings, "No service offerings available in CloudStack"
-        offerings.sort(key=lambda s: getattr(s, "memory", 9999))
-        cls.service_offering_id = offerings[0].id
+        service_offering = ServiceOffering.create(
+            cls.apiClient, tagged_compute_offering_data(tags, "OntapNFS3VMSO")
+        )
+        cls._cleanup.append(service_offering)
+        cls.service_offering_id = service_offering.id
 
         # Detect zone type; resolve network ID for Advanced zones
         cls.network_id = None
@@ -272,32 +288,25 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
     @classmethod
     def tearDownClass(cls):
-        """Destroy the VM first, then delegate pool/volume cleanup to super."""
-        if cls.vm is not None:
+        """Destroy the VMs first, then delegate pool/volume cleanup to super."""
+        for vm in (cls.vm2, cls.vm):
+            if vm is None:
+                continue
             try:
-                # Ensure VM is stopped before destroying
-                vms = cls.apiClient.listVirtualMachines(
-                    _list_vms_cmd(cls.vm.id))
-                current_state = vms[0].state if vms else "unknown"
-                if current_state.lower() not in ("stopped", "destroyed",
-                                                  "expunging", "error"):
-                    stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
-                    stop_cmd.id = cls.vm.id
-                    stop_cmd.forced = True
-                    cls.apiClient.stopVirtualMachine(stop_cmd)
-                    _wait_for_vm_state(cls.apiClient, cls.vm.id, "Stopped",
-                                       timeout=120)
+                cls._stop_and_expunge_vm(vm.id)
             except Exception as e:
-                logger.warning("tearDownClass: could not stop VM %s: %s"
-                               % (cls.vm.id, e))
-            try:
-                dest_cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
-                dest_cmd.id = cls.vm.id
-                dest_cmd.expunge = True
-                cls.apiClient.destroyVirtualMachine(dest_cmd)
-            except Exception as e:
-                logger.warning("tearDownClass: could not destroy VM %s: %s"
-                               % (cls.vm.id, e))
+                logger.warning("tearDownClass: could not stop/destroy VM %s: "
+                               "%s" % (vm.id, e))
+                try:
+                    dest_cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
+                    dest_cmd.id = vm.id
+                    dest_cmd.expunge = True
+                    cls.apiClient.destroyVirtualMachine(dest_cmd)
+                except Exception as de:
+                    logger.warning("tearDownClass: could not destroy VM %s: "
+                                   "%s" % (vm.id, de))
+        cls.vm2 = None
+        cls.vm = None
 
         # Delete the guest network created for this account in Advanced zones.
         if cls._created_network_id is not None:
@@ -312,6 +321,23 @@ class TestOntapVMVolumeAttach(OntapTestBase):
                     % (cls._created_network_id, e))
 
         super(TestOntapVMVolumeAttach, cls).tearDownClass()
+
+    @classmethod
+    def _stop_and_expunge_vm(cls, vm_id):
+        """Force-stop the VM if needed, then destroy it with expunge."""
+        vms = cls.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
+        current_state = vms[0].state if vms else "unknown"
+        if current_state.lower() not in ("stopped", "destroyed",
+                                          "expunging", "error"):
+            stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
+            stop_cmd.id = vm_id
+            stop_cmd.forced = True
+            cls.apiClient.stopVirtualMachine(stop_cmd)
+            _wait_for_vm_state(cls.apiClient, vm_id, "Stopped", timeout=120)
+        dest_cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
+        dest_cmd.id = vm_id
+        dest_cmd.expunge = True
+        cls.apiClient.destroyVirtualMachine(dest_cmd)
 
     # ---- pool creation helper -----------------------------------------
 
@@ -385,6 +411,9 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         """
         pool = self._create_pool()
         self.__class__.pool = pool
+        self.__class__.pool_db_id = tcu.get_db_id(
+            self.dbConnection, "storage_pool", pool.id
+        )
 
         self.assertEqual(
             pool.state, "Up",
@@ -445,10 +474,13 @@ class TestOntapVMVolumeAttach(OntapTestBase):
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
     def test_03_deploy_vm(self):
         """
-        Deploy a VM using the first available KVM template and smallest
-        service offering discovered at setup time.
+        Deploy a VM using the first available KVM template and the compute
+        offering tagged to match the ONTAP pool.
         Verifies:
           - VM reaches 'Running' state in CloudStack
+          - ROOT volume is placed on the ONTAP pool
+          - template_spool_ref for pool + template is Ready / DOWNLOADED
+          - ONTAP: template cache file exists at the spool install_path
         """
         self.assertIsNotNone(self.__class__.pool,
                              "Pool absent — test_01 must pass first")
@@ -473,11 +505,74 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.assertIsNotNone(vm, "deployVirtualMachine returned None")
         self.__class__.vm = vm
 
-        vm_obj = self._poll_vm_state(vm.id, "Running", timeout=600)
+        vm_obj = self._poll_vm_state(vm.id, "Running", timeout=900)
         self.assertEqual(
             vm_obj.state, "Running",
             "VM should be 'Running', got '%s'" % vm_obj.state
         )
+
+        pool = self.__class__.pool
+        self._assert_root_on_pool(vm.id, pool)
+        spool = self._wait_for_ready_spool_ref(self.__class__.pool_db_id)
+        self._assert_cache_on_ontap(pool, spool)
+
+    # ------------------------------------------------------------------
+    # Step 03a - Deploy a second VM — reuses the template cache
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_03a_deploy_second_vm_reuses_template_cache(self):
+        """
+        Deploy a second VM from the same template and offering.
+        Verifies:
+          - VM reaches 'Running'; its ROOT volume is on the ONTAP pool
+          - Still exactly one template_spool_ref (cache reused, not re-seeded)
+          - ONTAP: the same template cache file is still present
+        """
+        self.assertIsNotNone(self.__class__.vm,
+                             "VM absent — test_03 must pass first")
+
+        cmd = deployVirtualMachineAPI.deployVirtualMachineCmd()
+        cmd.zoneid = self.zone.id
+        cmd.templateid = self.__class__.template_id
+        cmd.serviceofferingid = self.__class__.service_offering_id
+        cmd.account = self.account.name
+        cmd.domainid = self.domain.id
+        if self.__class__.network_id:
+            cmd.networkids = self.__class__.network_id
+
+        vm2 = self.apiClient.deployVirtualMachine(cmd)
+        self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
+        self.__class__.vm2 = vm2
+        self._poll_vm_state(vm2.id, "Running", timeout=900)
+
+        pool = self.__class__.pool
+        self._assert_root_on_pool(vm2.id, pool)
+        spool = self._assert_single_ready_spool_ref(self.__class__.pool_db_id)
+        self._assert_cache_on_ontap(pool, spool)
+
+    # ------------------------------------------------------------------
+    # Step 03b - Expunge the second VM — template cache survives
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_03b_expunge_second_vm_template_cache_survives(self):
+        """
+        Destroy (expunge) the second VM. The primary template cache is only
+        removed by storage GC / pool deletion, never by VM lifecycle.
+        Verifies:
+          - template_spool_ref is still Ready / DOWNLOADED
+          - ONTAP: template cache file is still present
+        """
+        self.assertIsNotNone(self.__class__.vm2,
+                             "Second VM absent — test_03a must pass first")
+
+        self._stop_and_expunge_vm(self.__class__.vm2.id)
+        self.__class__.vm2 = None
+
+        pool = self.__class__.pool
+        spool = self._assert_single_ready_spool_ref(self.__class__.pool_db_id)
+        self._assert_cache_on_ontap(pool, spool)
 
     # ------------------------------------------------------------------
     # Step 04 - Attach ONTAP data volume to the running VM
@@ -761,12 +856,14 @@ class TestOntapVMVolumeAttach(OntapTestBase):
     def test_08_destroy_vm_and_cleanup(self):
         """
         Destroy the VM, delete the ONTAP data volume, enter maintenance,
-        then delete the pool.
+        then force-delete the pool.
         Verifies:
           - VM is destroyed/expunged from CloudStack
+          - Template cache survives VM delete: template_spool_ref still Ready
+            and the cache file is still on the FlexVol
           - Volume is deleted from CloudStack
           - ONTAP: NFS3 volume data file removed from FlexVol after deleteVolume
-          - Pool is removed from CloudStack
+          - Pool (still holding the template cache) is removed from CloudStack
           - ONTAP: FlexVol is deleted after pool removal
           - ONTAP: Export policy is removed after pool removal
         """
@@ -795,6 +892,10 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             self.apiClient.destroyVirtualMachine(dest_cmd)
             self.__class__.vm = None
 
+            spool = self._assert_single_ready_spool_ref(
+                self.__class__.pool_db_id)
+            self._assert_cache_on_ontap(pool, spool)
+
         # Delete the ONTAP data volume
         if vol is not None:
             vol_id = vol.id
@@ -821,7 +922,9 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.apiClient.enableStorageMaintenance(maint_cmd)
         self._poll_pool_state(pool.id, "Maintenance", timeout=120)
 
-        self._delete_pool(pool.id)
+        # forced=True: the template cache (template_spool_ref) is still on
+        # the pool — it is only reclaimed by storage GC or pool deletion.
+        self._delete_pool(pool.id, forced=True)
         self.__class__.pool = None
 
         # CloudStack: pool must be gone

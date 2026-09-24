@@ -32,7 +32,7 @@ CI wiring:
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (62 tests)
+├── TEST_CASES.md                 # Full test case reference table (72 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -42,8 +42,10 @@ test/integration/plugins/ontap/
 │   │   └── test_zone_scoped_pool.py      # Zone-scoped pool (attachZone)
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
-│   └── instance/
-│       └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach
+│   ├── instance/
+│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach + template cache
+│   └── template/
+│       └── test_template_cache_negative.py  # Template-cache boundary cases
 │
 └── iscsi/
     ├── pool/
@@ -52,8 +54,10 @@ test/integration/plugins/ontap/
     │   └── test_zone_scoped_pool.py      # Zone-scoped iSCSI pool
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
-    └── instance/
-        └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle
+    ├── instance/
+    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle + template cache
+    └── template/
+        └── test_template_cache_negative.py  # Template-cache boundary cases
 ```
 
 ---
@@ -149,14 +153,13 @@ bash test/integration/plugins/ontap/run_tests.sh both
 bash test/integration/plugins/ontap/run_tests.sh
 bash test/integration/plugins/ontap/run_tests.sh all
 
-# Template-cache suites only
-bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache
-bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache
+# Template-cache negative / boundary suites only
+# (the template-cache happy path runs inside the VM attach suites)
 bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache_negative
 bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
 ```
 
-Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach → template cache (last).
+Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
 
 | Command | What it runs |
 |---------|--------------|
@@ -165,8 +168,6 @@ Each protocol batch runs suites in this order: pool lifecycle → pool with volu
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
 | `run_tests.sh all` | `setup_zone`, then `both` (iSCSI before NFS3) |
 | `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
-| `run_tests.sh nfs3_template_cache` | NFS3 template-cache suite only |
-| `run_tests.sh iscsi_template_cache` | iSCSI template-cache suite only |
 | `run_tests.sh nfs3_template_cache_negative` | NFS3 template-cache boundary/negative suite |
 | `run_tests.sh iscsi_template_cache_negative` | iSCSI template-cache boundary/negative suite |
 | `run_tests.sh setup_zone` | Zone setup only |
@@ -318,15 +319,13 @@ self.assertEqual(result.state, "Maintenance")
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
-| NFS3 Template Cache | `nfs3/template/test_template_cache.py` | 6 | ROOT on tagged pool; seed/reuse cache; survive VM delete |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
-| iSCSI Template Cache | `iscsi/template/test_template_cache.py` | 6 | ROOT on tagged pool; `cs_tmpl_*` LUN cache seed/reuse |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
