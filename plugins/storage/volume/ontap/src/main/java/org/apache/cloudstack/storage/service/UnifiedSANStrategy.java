@@ -281,10 +281,10 @@ public class UnifiedSANStrategy extends SANStrategy {
      * </ul>
      */
     @Override
-    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> details,
+    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> poolDetails,
                                                               VolumeInfo volumeInfo, String sourceVolumePath,
                                                               String snapshotName) {
-        if (storagePool == null || details == null || volumeInfo == null) {
+        if (storagePool == null || poolDetails == null || volumeInfo == null) {
             throw new CloudRuntimeException("Failed to clone Lun from snapshot, invalid request");
         }
         if (sourceVolumePath == null || sourceVolumePath.isEmpty()) {
@@ -294,7 +294,7 @@ public class UnifiedSANStrategy extends SANStrategy {
             throw new CloudRuntimeException("Failed to clone Lun from snapshot, snapshot name is required");
         }
 
-        Lun lunRequest = buildCloneLunFromSnapshotRequest(storagePool, details, volumeInfo, sourceVolumePath, snapshotName);
+        Lun lunRequest = buildCloneLunFromSnapshotRequest(storagePool, poolDetails, volumeInfo, sourceVolumePath, snapshotName);
         logger.info("cloneCloudStackVolumeFromSnapshot [iSCSI]: Cloning LUN [{}] from snapshot source [{}]",
                 lunRequest.getName(), lunRequest.getClone().getSource().getName());
         try {
@@ -439,10 +439,10 @@ public class UnifiedSANStrategy extends SANStrategy {
                 return null;
             }
             logger.error("FeignException occurred while fetching Lun, Status: {}, Exception: {}", e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun poolDetails: " + e.getMessage());
         } catch (Exception e) {
             logger.error("Exception occurred while fetching Lun, Exception: {}", e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun poolDetails: " + e.getMessage());
         }
     }
 
@@ -453,9 +453,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             logger.error("createAccessGroup: Igroup creation failed. Invalid request: {}", accessGroup);
             throw new CloudRuntimeException("Failed to create Igroup, invalid request");
         }
-        // Get StoragePool details
+        // Get StoragePool poolDetails
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("Failed to create Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException("Failed to create Igroup, invalid datastore poolDetails in the request");
         }
         if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
             throw new CloudRuntimeException("Failed to create Igroup, no hosts to connect provided in the request");
@@ -464,7 +464,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         String igroupName = null;
         try {
             Map<String, String> dataStoreDetails = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
-            logger.trace("createAccessGroup: Successfully fetched datastore details.");
+            logger.trace("createAccessGroup: Successfully fetched datastore poolDetails.");
 
             // Generate Igroup request
             Igroup igroupRequest = new Igroup();
@@ -540,9 +540,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             logger.error("deleteAccessGroup: Igroup deletion failed. Invalid request: {}", accessGroup);
             throw new CloudRuntimeException("Failed to delete Igroup, invalid request");
         }
-        // Get StoragePool details
+        // Get StoragePool poolDetails
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("Failed to delete Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException("Failed to delete Igroup, invalid datastore poolDetails in the request");
         }
         try {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -649,10 +649,10 @@ public class UnifiedSANStrategy extends SANStrategy {
                 return null;
             }
             logger.error("FeignException occurred while fetching Igroup, Status: {}, Exception: {}", e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup poolDetails: " + e.getMessage());
         } catch (Exception e) {
             logger.error("Exception occurred while fetching Igroup, Exception: {}", e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup poolDetails: " + e.getMessage());
         }
     }
 
@@ -698,7 +698,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                     throw feignEx;
                 }
             }
-            // Get the LunMap details
+            // Get the LunMap poolDetails
             OntapResponse<LunMap> lunMapResponse = null;
             try {
                 lunMapResponse = sanFeignClient.getLunMapResponse(authHeader,
@@ -713,12 +713,12 @@ public class UnifiedSANStrategy extends SANStrategy {
                     lunNumber =  lunMapResponse.getRecords().get(0).getLogicalUnitNumber().toString();
 
                 } else {
-                    logger.error("enableLogicalAccess: Failed to fetch LunMap details for Lun: {} and igroup: {}. LunMap response is null or empty.", lunName, igroupName);
-                    throw new CloudRuntimeException("Failed to fetch LunMap details for Lun: " + lunName + " and igroup: " + igroupName);
+                    logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}. LunMap response is null or empty.", lunName, igroupName);
+                    throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
                 }
             } catch (Exception e) {
-                logger.error("enableLogicalAccess: Failed to fetch LunMap details for Lun: {} and igroup: {}, Exception: {}", lunName, igroupName, e);
-                throw new CloudRuntimeException("Failed to fetch LunMap details for Lun: " + lunName + " and igroup: " + igroupName);
+                logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}, Exception: {}", lunName, igroupName, e);
+                throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
             }
             logger.trace("enableLogicalAccess: LunMap created successfully, LunMap: {}", lunMapResponse.getRecords().get(0));
         } catch (Exception e) {

@@ -1141,8 +1141,10 @@ class OntapPrimaryDatastoreDriverTest {
 
     @Test
     void testCreateAsync_VolumeClonedFromSnapshot_PrefersSnapshotOverTemplate() {
-        // Corner: snapshot id is resolved first; template is only consulted when snapshot is absent.
+        // Corner: when both details are present, the snapshot clone wins over the template clone.
         stubVolumeCloneFromSnapshot(5368709120L, 5368709120L, ProtocolType.ISCSI.name());
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.CLONE_OF_TEMPLATE))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.CLONE_OF_TEMPLATE, "50", false));
 
         Lun clonedLun = new Lun();
         clonedLun.setName("/vol/vol1/test_volume");
@@ -1158,7 +1160,7 @@ class OntapPrimaryDatastoreDriverTest {
             driver.createAsync(dataStore, volumeInfo, createCallback);
 
             verify(sanStrategy).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
-            verify(volumeDetailsDao, never()).findDetail(100L, OntapStorageConstants.CLONE_OF_TEMPLATE);
+            verify(vmTemplatePoolDao, never()).findByPoolTemplate(anyLong(), anyLong(), any());
             verify(sanStrategy, never()).cloneCloudStackVolume(any());
             verify(sanStrategy, never()).createCloudStackVolume(any());
         }

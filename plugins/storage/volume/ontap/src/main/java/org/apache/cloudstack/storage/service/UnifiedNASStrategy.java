@@ -158,7 +158,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         String flexVolUuid = details.get(OntapStorageConstants.VOLUME_UUID);
         String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
         if (flexVolUuid == null || flexVolUuid.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file, FlexVolume uuid is missing from pool details");
+            throw new CloudRuntimeException("Failed to clone file, FlexVolume uuid is missing from pool poolDetails");
         }
         String sourcePath = cloudstackVolume.getFile().getPath();
         String destinationPath = cloudstackVolume.getDestinationPath();
@@ -206,10 +206,10 @@ public class UnifiedNASStrategy extends NASStrategy {
      * </ul>
      */
     @Override
-    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> details,
+    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> poolDetails,
                                                               VolumeInfo volumeInfo, String sourceVolumePath,
                                                               String snapshotName) {
-        if (storagePool == null || details == null || volumeInfo == null) {
+        if (storagePool == null || poolDetails == null || volumeInfo == null) {
             throw new CloudRuntimeException("Failed to clone file from snapshot, invalid request");
         }
         if (sourceVolumePath == null || sourceVolumePath.isEmpty()) {
@@ -219,10 +219,10 @@ public class UnifiedNASStrategy extends NASStrategy {
             throw new CloudRuntimeException("Failed to clone file from snapshot, snapshot name is required");
         }
 
-        String flexVolUuid = details.get(OntapStorageConstants.VOLUME_UUID);
-        String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
+        String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+        String flexVolName = poolDetails.get(OntapStorageConstants.VOLUME_NAME);
         if (flexVolUuid == null || flexVolUuid.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file from snapshot, FlexVolume uuid is missing from pool details");
+            throw new CloudRuntimeException("Failed to clone file from snapshot, FlexVolume uuid is missing from pool poolDetails");
         }
 
         String sourcePath = OntapStorageUtils.toFlexVolRelativePath(sourceVolumePath, flexVolName);
@@ -337,7 +337,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             logger.info("createAccessGroup: ExportPolicy created: {}, now attaching this policy to storage pool volume", createdPolicy.getName());
             // attach export policy to volume of storage pool
             assignExportPolicyToVolume(volumeUUID,createdPolicy.getName());
-            // save the export policy details in storage pool details
+            // save the export policy poolDetails in storage pool poolDetails
             storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), OntapStorageConstants.EXPORT_POLICY_ID, String.valueOf(createdPolicy.getId()), true);
             storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), OntapStorageConstants.EXPORT_POLICY_NAME, createdPolicy.getName(), true);
             logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
@@ -398,7 +398,7 @@ public class UnifiedNASStrategy extends NASStrategy {
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
         if (details == null || details.isEmpty()) {
-            throw new CloudRuntimeException("No storage pool details found for storagePoolId: " + accessGroup.getStoragePoolId());
+            throw new CloudRuntimeException("No storage pool poolDetails found for storagePoolId: " + accessGroup.getStoragePoolId());
         }
         String exportPolicyId = details.get(OntapStorageConstants.EXPORT_POLICY_ID);
         if (exportPolicyId == null || exportPolicyId.isEmpty()) {

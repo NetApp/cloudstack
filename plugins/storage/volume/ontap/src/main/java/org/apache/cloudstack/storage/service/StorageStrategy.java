@@ -833,8 +833,8 @@ public abstract class StorageStrategy {
     /**
      * Creates a new file/LUN in the same FlexVolume by cloning from a FlexVolume snapshot.
      *
-     * <p><b>Product scope (v1):</b> same primary pool / FlexVol only. Cross-pool restore is
-     * descoped — operators may later {@code migrateVolume} if another pool is required.</p>
+     * <p><b>Product scope (v1):</b> same primary pool / FlexVol only. Creating the volume on a
+     * different pool is descoped — operators may later {@code migrateVolume} if another pool is required.</p>
      *
      * <p>ONTAP backends (protocol-specific; each subclass builds its own request):</p>
      * <ul>
@@ -844,14 +844,14 @@ public abstract class StorageStrategy {
      * </ul>
      *
      * @param storagePool       target CloudStack primary pool (same FlexVol as the snapshot)
-     * @param details           pool details (SVM, FlexVol name/uuid, protocol, …)
+     * @param poolDetails       pool details (SVM, FlexVol name/uuid, protocol, …)
      * @param volumeInfo        destination CloudStack volume being created
      * @param sourceVolumePath  snapshotted object path from {@code snapshot_details.VOLUME_PATH}
      * @param snapshotName      ONTAP FlexVol snapshot name from {@code snapshot_details}
      * @return created CloudStackVolume with protocol-specific identity (LUN uuid or file path)
      */
     abstract public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool,
-                                                                        Map<String, String> details,
+                                                                        Map<String, String> poolDetails,
                                                                         VolumeInfo volumeInfo,
                                                                         String sourceVolumePath,
                                                                         String snapshotName);
