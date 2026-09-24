@@ -44,6 +44,7 @@ import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -300,7 +301,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         if (cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
             long volumeId = cloudstackVolume.getVolumeInfo().getId();
             VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
-            if (lunUuidDetail == null || lunUuidDetail.getValue() == null) {
+            if (lunUuidDetail == null || StringUtils.isBlank(lunUuidDetail.getValue())) {
                 throw new CloudRuntimeException("LUN UUID not found in volume details for volume " + volumeId);
             }
             Lun resolvedLun = new Lun();

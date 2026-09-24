@@ -1049,6 +1049,22 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
+    void testResizeCloudStackVolume_BlankUuidDetail_Throws() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getId()).thenReturn(100L);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "   ", false));
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.resizeCloudStackVolume(request, 100L));
+
+        assertTrue(exception.getMessage().contains("LUN UUID not found"));
+        verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
     void testResizeCloudStackVolume_NoVolumeInfo_Throws() {
         Lun lun = new Lun();
         lun.setUuid("lun-uuid-123");
@@ -1090,25 +1106,92 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testResizeCloudStackVolume_FeignException_Throws() {
+    void testResizeCloudStackVolume_FeignExceptions_Throw() {
         Lun lun = new Lun();
         lun.setUuid("lun-uuid-123");
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
         request.setVolumeInfo(mock(VolumeInfo.class));
 
-        FeignException feignException = mock(FeignException.class);
-        when(feignException.status()).thenReturn(500);
-        when(feignException.getMessage()).thenReturn("resize failed");
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            for (int status : new int[] {401, 403, 409, 500, -1}) {
+                FeignException feignException = mock(FeignException.class);
+                when(feignException.status()).thenReturn(status);
+                when(feignException.getMessage()).thenReturn(
+                        status == -1 ? "connection timed out" : "resize failed");
+                doThrow(feignException).when(sanFeignClient)
+                        .updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class));
+
+                assertThrows(CloudRuntimeException.class,
+                        () -> unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L));
+            }
+        }
+    }
+
+    @Test
+    void testResizeCloudStackVolume_DeletedLun_ThrowsSpecificMessage() {
+        Lun lun = new Lun();
+        lun.setUuid("deleted-lun-uuid");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
+        FeignException notFound = mock(FeignException.class);
+        when(notFound.status()).thenReturn(404);
+        when(notFound.getMessage()).thenReturn("LUN not found");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
-            doThrow(feignException).when(sanFeignClient).updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class));
+            utilityMock.when(() -> OntapStorageUtils.isOntapObjectNotFoundError(notFound))
+                    .thenReturn(true);
+            doThrow(notFound).when(sanFeignClient)
+                    .updateLun(eq(authHeader), eq("deleted-lun-uuid"), any(Lun.class));
 
-            assertThrows(CloudRuntimeException.class,
+            CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
                     () -> unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L));
+
+            assertTrue(exception.getMessage().contains("no longer exists on ONTAP"));
+            assertTrue(exception.getMessage().contains("deleted-lun-uuid"));
         }
+    }
+
+    @Test
+    void testResizeCloudStackVolume_UnexpectedException_IsWrapped() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            doThrow(new IllegalStateException("unexpected failure")).when(sanFeignClient)
+                    .updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class));
+
+            CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L));
+
+            assertTrue(exception.getMessage().contains("Unexpected error"));
+            assertTrue(exception.getMessage().contains("unexpected failure"));
+        }
+    }
+
+    @Test
+    void testResizeCloudStackVolume_SameSizePatchIsIdempotent() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
+
+        unifiedSANStrategy.resizeCloudStackVolume(request, 10737418240L);
+
+        ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+        verify(sanFeignClient).updateLun(any(), eq("lun-uuid-123"), lunCaptor.capture());
+        assertEquals(10737418240L, lunCaptor.getValue().getSpace().getSize());
     }
 
     @Test

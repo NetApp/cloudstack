@@ -68,6 +68,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -1439,6 +1440,7 @@ class OntapPrimaryDatastoreDriverTest {
         // volumeVO.getId() is only needed in the success path (volumeDao.update call)
         lenient().when(volumeVO.getId()).thenReturn(100L);
         lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
+        lenient().when(volumeDao.update(100L, volumeVO)).thenReturn(true);
     }
 
     @Test
@@ -1512,6 +1514,28 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testResize_NullData_FailsAndCompletesCallbackOnce() {
+        driver.resize(null, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+    }
+
+    @Test
+    void testResize_NonVolumeInfo_FailsAndCompletesCallbackOnce() {
+        when(templateInfo.getId()).thenReturn(50L);
+
+        driver.resize(templateInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+    }
+
+    @Test
     void testResize_NullNewSize_Fails() {
         // payload.newSize is null
         ResizeVolumePayload payload = new ResizeVolumePayload(null, null, null, null, false, "i-2-VM", null, false);
@@ -1544,6 +1568,21 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testResize_MissingDataStore_Fails() {
+        ResizeVolumePayload payload = new ResizeVolumePayload(21474836480L, null, null, null, false, "none", null, false);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+        when(volumeInfo.getDataStore()).thenReturn(null);
+
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Data store not found"));
+    }
+
+    @Test
     void testResize_VolumeVONotFound_Fails() {
         long newSize = 21474836480L;
         ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);
@@ -1566,6 +1605,27 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
             assertTrue(resultCaptor.getValue().getResult().contains("Volume not found"));
+        }
+    }
+
+    @Test
+    void testResize_MissingStoragePoolDetails_Fails() {
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(null))
+                    .thenThrow(new CloudRuntimeException("Storage pool details are missing"));
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback, times(1)).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Storage pool details are missing"));
+            verify(volumeVO, never()).setSize(anyLong());
         }
     }
 
@@ -1609,6 +1669,44 @@ class OntapPrimaryDatastoreDriverTest {
             assertTrue(resultCaptor.getValue().getResult().contains("ONTAP resize failed"));
             // volumeVO size must NOT be updated on failure
             verify(volumeVO, never()).setSize(anyLong());
+        }
+    }
+
+    @Test
+    void testResize_EqualSize_InvokesStrategyAndSucceeds() {
+        long size = 10737418240L;
+        stubResizeCommon(size, size);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            verify(sanStrategy).resizeCloudStackVolume(any(), eq(size));
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+        }
+    }
+
+    @Test
+    void testResize_DatabaseUpdateFailure_ReturnsFailure() {
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+        when(volumeDao.update(100L, volumeVO)).thenReturn(false);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback, times(1)).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Failed to update volume"));
         }
     }
 
@@ -1674,7 +1772,7 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testGetUsedBytes_FlexVolNotFound_ReturnsZero() {
+    void testGetUsedBytes_FlexVolNotFound_ThrowsException() {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -1684,12 +1782,14 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn(sanStrategy);
             when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(null);
 
-            assertEquals(0L, driver.getUsedBytes(storagePool));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("was not found on ONTAP"));
         }
     }
 
     @Test
-    void testGetUsedBytes_FlexVolNullSpace_ReturnsZero() {
+    void testGetUsedBytes_FlexVolNullSpace_ThrowsException() {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -1702,12 +1802,14 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn(sanStrategy);
             when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(flexVol);
 
-            assertEquals(0L, driver.getUsedBytes(storagePool));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("no space information"));
         }
     }
 
     @Test
-    void testGetUsedBytes_OntapException_ReturnsZero() {
+    void testGetUsedBytes_OntapException_PropagatesException() {
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
@@ -1718,7 +1820,29 @@ class OntapPrimaryDatastoreDriverTest {
             when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
                     .thenThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP unreachable"));
 
-            assertEquals(0L, driver.getUsedBytes(storagePool));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertEquals("ONTAP unreachable", ex.getMessage());
+        }
+    }
+
+    @Test
+    void testGetUsedBytes_UnexpectedException_IsWrapped() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
+                    .thenThrow(new IllegalStateException("invalid ONTAP response"));
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("Could not read used space"));
+            assertTrue(ex.getMessage().contains("invalid ONTAP response"));
+            assertTrue(ex.getCause() instanceof IllegalStateException);
         }
     }
 }

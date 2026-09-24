@@ -615,6 +615,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (payload == null || payload.newSize == null) {
                 throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
             }
+            if (volumeInfo.getDataStore() == null) {
+                throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
+            }
 
             StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
             if (storagePool == null) {
@@ -622,7 +625,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
 
-            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
             VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
             if (volumeVO == null) {
                 throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
@@ -632,26 +634,27 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         "Storage pool %s does not support shrinking a volume.", storagePool.getName()));
             }
 
+            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
             CloudStackVolume cloudStackVolume = new CloudStackVolume();
             cloudStackVolume.setVolumeInfo(volumeInfo);
-
-            // delegates to UnifiedSANStrategy (PATCH /api/storage/luns/{uuid}) for iSCSI
-            // or to UnifiedNASStrategy (ResizeVolumeCommand to KVM agent) for NFS3;
-            // protocol-specific setup (e.g. LUN UUID lookup) is handled inside each strategy
             storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
 
+            long currentSize = volumeVO.getSize();
             volumeVO.setSize(payload.newSize);
-            volumeDao.update(volumeVO.getId(), volumeVO);
+            if (!volumeDao.update(volumeVO.getId(), volumeVO)) {
+                throw new CloudRuntimeException("Failed to update volume " + volumeVO.getId()
+                        + " after resizing the ONTAP backing object");
+            }
             String instanceName = payload.instanceName != null ? payload.instanceName : "none";
 
             ResizeVolumeCommand resizeCmd = new ResizeVolumeCommand(volumeVO.getPath(),
-                    new StorageFilerTO(storagePool), volumeVO.getSize(), payload.newSize,
+                    new StorageFilerTO(storagePool), currentSize, payload.newSize,
                     false, instanceName);
             result = new CreateCmdResult(volumeVO.getPath(), new Answer(resizeCmd, true, null));
             logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
         } catch (Exception e) {
             String errMsg = e.getMessage();
-            logger.error("resize: Failed for volume [{}]: {}", data.getId(), errMsg, e);
+            logger.error("resize: Failed for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
             result = new CreateCmdResult(null, new Answer(null, false, errMsg));
             result.setResult(errMsg);
         } finally {
@@ -1080,15 +1083,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Returns the bytes available on the FlexVolume backing this pool, read directly from ONTAP
-     * ({@code space.available}).
+     * Returns the bytes used on the FlexVolume backing this pool, read directly from ONTAP
+     * ({@code space.used}).
      *
-     * <p>Returns {@code 0} if the ONTAP REST call fails for any reason (array unreachable, auth
-     * error, etc.). Throws if the FlexVolume UUID is not recorded in pool details, since that
-     * indicates the pool was never fully provisioned.</p>
+     * <p>Fails closed when ONTAP cannot provide trustworthy usage data. Returning zero for an
+     * unreachable or incomplete backend would make capacity checks treat an unknown pool as empty
+     * and could incorrectly authorize a volume grow.</p>
      *
      * @throws InvalidParameterValueException if {@code storagePool} is null
-     * @throws CloudRuntimeException if the pool has no FlexVolume UUID in its details
+     * @throws CloudRuntimeException if the pool has no FlexVolume UUID in its details, ONTAP
+     *         cannot be queried, or used-space data is missing
      */
     @Override
     public long getUsedBytes(StoragePool storagePool) {
@@ -1107,19 +1111,27 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
             var flexVol = strategy.getStorageVolume(flexVolUuid);
 
-            if (flexVol == null || flexVol.getSpace() == null) {
-                logger.warn("getUsedBytes: FlexVolume [{}] not found or has no space info for pool [{}]; returning 0",
-                        flexVolUuid, storagePool.getId());
-                return 0;
+            if (flexVol == null) {
+                throw new CloudRuntimeException(String.format(
+                        "FlexVolume [%s] backing pool [%s] was not found on ONTAP",
+                        flexVolUuid, storagePool.getId()));
+            }
+            if (flexVol.getSpace() == null) {
+                throw new CloudRuntimeException(String.format(
+                        "ONTAP returned no space information for FlexVolume [%s] backing pool [%s]",
+                        flexVolUuid, storagePool.getId()));
             }
 
             logger.debug("getUsedBytes: FlexVolume [{}] backing pool [{}] reports {} bytes used",
                     flexVolUuid, storagePool.getId(), flexVol.getSpace().getUsed());
             return flexVol.getSpace().getUsed();
+        } catch (CloudRuntimeException e) {
+            logger.error("getUsedBytes: Failed to get used bytes for pool [{}]", storagePool.getId(), e);
+            throw e;
         } catch (Exception e) {
-            logger.warn("getUsedBytes: Could not read used space from ONTAP for pool [{}]; returning 0",
-                    storagePool.getId(), e);
-            return 0;
+            logger.error("getUsedBytes: Failed to get used bytes for pool [{}]", storagePool.getId(), e);
+            throw new CloudRuntimeException(
+                    String.format("Could not read used space for pool [%s]: %s", storagePool.getId(), e.getMessage()), e);
         }
     }
 
