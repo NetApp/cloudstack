@@ -32,7 +32,7 @@ CI wiring:
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (62 tests)
+├── TEST_CASES.md                 # Full test case reference table (70 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -43,7 +43,7 @@ test/integration/plugins/ontap/
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
 │   └── instance/
-│       └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach
+│       └── test_vm_volume_attach.py      # Pool + volume + VM + attach/resize/detach
 │
 └── iscsi/
     ├── pool/
@@ -53,7 +53,7 @@ test/integration/plugins/ontap/
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
     └── instance/
-        └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle
+        └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/resize lifecycle
 ```
 
 ---
@@ -308,12 +308,12 @@ self.assertEqual(result.state, "Maintenance")
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 12 | Full VM lifecycle with stopped-VM qcow2 grow |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 12 | Full VM lifecycle; stopped-VM LUN grow and LUN-map checks |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
 
@@ -328,7 +328,7 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | `Lost connection to MySQL` | MySQL not accepting remote connections | Enable remote MySQL access (see Prerequisites §3) |
 | `sh: python: command not found` (repeated) | Marvin internal call — harmless on macOS | Ignore; Marvin Init still succeeds |
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
-| iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
+| iSCSI `test_10` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
 | `setup_zone` steps 11–12 slow on first run | System VMs and template download after zone enable | Normal — first run may take up to ~60 min; re-runs pass quickly when already ready |

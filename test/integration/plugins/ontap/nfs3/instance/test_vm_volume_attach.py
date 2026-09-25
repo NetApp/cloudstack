@@ -19,7 +19,7 @@
 Sequential workflow integration tests for NetApp ONTAP data volume lifecycle
 with a running virtual machine.
 
-Tests are numbered test_01 ... test_08 and must run in that order.  Each step
+Tests are numbered test_01 ... test_12 and must run in that order.  Each step
 builds on the shared state established by the previous step.
 
 Workflow:
@@ -27,10 +27,14 @@ Workflow:
   02  Create a CloudStack data volume on the ONTAP pool
   03  Deploy a VM (template and service offering discovered at setup time)
   04  Attach the ONTAP data volume to the running VM
-  05  Stop the VM — export policy stays; volume remains attached in CS
-  06  Start the VM — VM Running; volume still attached; FlexVol online
-  07  Detach the ONTAP data volume from the VM
-  08  Destroy VM; delete ONTAP volume; enter maintenance; delete pool
+  05  Verify resize is rejected while the attached VM is running
+  06  Stop the VM — export policy stays; volume remains attached in CS
+  07  Grow the attached volume and its qcow2 file while the VM is stopped
+  08  Verify shrinking the volume is rejected without changing its size
+  09  Start the VM — VM Running; volume still attached; FlexVol online
+  10  Detach the ONTAP data volume from the VM
+  11  Grow the detached data volume
+  12  Destroy VM; delete ONTAP volume; enter maintenance; delete pool
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -157,6 +161,9 @@ class TestOntapVMVolumeAttach(OntapTestBase):
     service_offering_id = None
     network_id = None      # None for Basic zones
     _created_network_id = None  # network created by this suite for Advanced zones
+    initial_volume_size = None
+    target_volume_size = None
+    volume_path = None
 
     _vol_name_prefix = "OntapVMVol"
 
@@ -348,8 +355,15 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         deadline = time.time() + timeout
         current_state = "unknown"
         while time.time() < deadline:
-            vms = self.apiClient.listVirtualMachines(
-                _list_vms_cmd(vm_id))
+            try:
+                vms = self.apiClient.listVirtualMachines(
+                    _list_vms_cmd(vm_id))
+            except Exception as exc:
+                logger.warning(
+                    "Transient API error while waiting for VM %s to reach "
+                    "'%s': %s", vm_id, target_state, exc)
+                time.sleep(interval)
+                continue
             if vms:
                 current_state = vms[0].state
                 if current_state.lower() == target_state.lower():
@@ -552,12 +566,70 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "after attach; files present: %s" % (vol.id, pool.name, files)
         )
 
+        volumes = self.apiClient.listVolumes(_list_vols_cmd(vol.id)) or []
+        self.assertTrue(volumes, "Attached volume is not listed in CloudStack")
+        initial_size = int(volumes[0].size)
+        self.__class__.initial_volume_size = initial_size
+        self.__class__.target_volume_size = (
+            (initial_size // (1024 ** 3)) + 1
+        ) * (1024 ** 3)
+        self.__class__.volume_path = vol_file
+
+        backend_size = self._get_qcow2_virtual_size(pool.id, vol_file)
+        self.assertEqual(
+            backend_size, initial_size,
+            "Initial qcow2 virtual size should match the CloudStack volume size"
+        )
+
     # ------------------------------------------------------------------
-    # Step 05 - Stop VM — export policy must be retained
+    # Step 05 - Resize attached volume while VM is running must fail
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_05_stop_vm_export_retained(self):
+    def test_05_resize_running_vm_rejected(self):
+        """
+        Attempt to grow the attached volume while its managed KVM VM is
+        running.
+        Verifies:
+          - CloudStack rejects the resize
+          - CloudStack volume size is unchanged
+          - qcow2 virtual size is unchanged
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped")
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+
+        target_gib = self.__class__.target_volume_size // (1024 ** 3)
+        with self.assertRaises(Exception) as context:
+            self._resize_volume(self.__class__.volume.id, target_gib)
+        self.assertIn(
+            "not in the Stopped state", str(context.exception),
+            "Resize failed for an unexpected reason")
+
+        volume = self._poll_volume_size(
+            self.__class__.volume.id, self.__class__.initial_volume_size)
+        self.assertIsNotNone(
+            volume, "CloudStack volume size changed after rejected resize")
+
+        # DB: size must remain unchanged after a rejected resize
+        db_size = self._get_db_volume_size(self.__class__.volume.id)
+        self.assertEqual(
+            db_size, self.__class__.initial_volume_size,
+            "cloud DB volumes.size changed after rejected running-VM resize")
+
+        backend_size = self._get_qcow2_virtual_size(
+            self.__class__.pool.id, self.__class__.volume_path)
+        self.assertEqual(
+            backend_size, self.__class__.initial_volume_size,
+            "qcow2 virtual size changed after rejected running-VM resize")
+
+    # ------------------------------------------------------------------
+    # Step 06 - Stop VM — export policy must be retained
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_06_stop_vm_export_retained(self):
         """
         Stop the running VM while the NFS3 data volume is still attached.
         Unlike iSCSI (where LUN-maps are removed on VM stop), NFS3 export
@@ -578,7 +650,15 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
         cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
         cmd.id = vm.id
-        self.apiClient.stopVirtualMachine(cmd)
+        try:
+            self.apiClient.stopVirtualMachine(cmd)
+        except Exception as exc:
+            # Marvin can lose the management API connection while polling an
+            # already-submitted async stop job. The VM state is authoritative,
+            # so continue polling before treating the stop as failed.
+            logger.warning(
+                "stopVirtualMachine polling failed; checking VM state: %s",
+                exc)
 
         result = self._poll_vm_state(vm.id, "Stopped", timeout=300)
         self.assertEqual(
@@ -611,11 +691,109 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 06 - Start VM — volume accessible; FlexVol online
+    # Step 07 - Grow attached volume while VM is stopped
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_06_start_vm_volume_accessible(self):
+    def test_07_grow_stopped_vm_volume(self):
+        """
+        Grow the attached NFS3 volume while its managed KVM VM is stopped.
+        Verifies:
+          - CloudStack reports the target size and Ready state
+          - KVM reports the target qcow2 virtual size
+          - The backing file remains present in the ONTAP FlexVol
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped")
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+
+        target_size = self.__class__.target_volume_size
+        self._resize_volume(
+            self.__class__.volume.id, target_size // (1024 ** 3))
+
+        volume = self._poll_volume_size(
+            self.__class__.volume.id, target_size)
+        self.assertIsNotNone(
+            volume, "CloudStack did not report the grown volume size")
+
+        # KVM: qcow2 virtual size must reflect the new allocation
+        backend_size = self._get_qcow2_virtual_size(
+            self.__class__.pool.id, self.__class__.volume_path)
+        self.assertEqual(
+            backend_size, target_size,
+            "KVM qcow2 virtual size does not match the requested size")
+
+        # DB: cloud.volumes.size must be updated by the driver's volumeDao call
+        db_size = self._get_db_volume_size(self.__class__.volume.id)
+        self.assertEqual(
+            db_size, target_size,
+            "cloud DB volumes.size (%s) does not match target (%s) after grow"
+            % (db_size, target_size))
+
+        # ONTAP REST: backing file must still be present in the FlexVol.
+        # Note: ONTAP's file-API returns bytes_used (actual disk blocks), NOT
+        # the qcow2 virtual size, so the host-side qemu-img check above is the
+        # correct NFS3 backend verification for virtual size.
+        files = self.ontap.list_files_in_volume(self.__class__.pool.name)
+        self.assertIn(
+            self.__class__.volume_path, files,
+            "NFS3 backing file disappeared from ONTAP after resize")
+
+    # ------------------------------------------------------------------
+    # Step 08 - Shrink must fail
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_08_shrink_rejected(self):
+        """
+        Attempt to shrink the grown NFS3 volume back to its initial size.
+        Verifies:
+          - CloudStack rejects qcow2 shrink even with shrinkok=true
+          - CloudStack and qcow2 sizes remain at the grown value
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped")
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+        self.assertEqual(
+            self._get_db_volume_size(self.__class__.volume.id),
+            self.__class__.target_volume_size,
+            "Volume was not grown to the target size — test_07 must pass "
+            "before the shrink check")
+
+        initial_gib = self.__class__.initial_volume_size // (1024 ** 3)
+        with self.assertRaises(Exception) as context:
+            self._resize_volume(
+                self.__class__.volume.id, initial_gib, shrink_ok=True)
+        self.assertIn(
+            "Unable to shrink volumes of type QCOW2", str(context.exception),
+            "Shrink failed for an unexpected reason")
+
+        volume = self._poll_volume_size(
+            self.__class__.volume.id, self.__class__.target_volume_size)
+        self.assertIsNotNone(
+            volume, "CloudStack volume size changed after rejected shrink")
+
+        # DB: size must remain at grown value after rejected shrink
+        db_size = self._get_db_volume_size(self.__class__.volume.id)
+        self.assertEqual(
+            db_size, self.__class__.target_volume_size,
+            "cloud DB volumes.size did not remain at the grown target after "
+            "the rejected NFS3 shrink")
+
+        backend_size = self._get_qcow2_virtual_size(
+            self.__class__.pool.id, self.__class__.volume_path)
+        self.assertEqual(
+            backend_size, self.__class__.target_volume_size,
+            "qcow2 virtual size changed after rejected shrink")
+
+    # ------------------------------------------------------------------
+    # Step 09 - Start VM — volume accessible; FlexVol online
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_09_start_vm_volume_accessible(self):
         """
         Start the stopped VM.
         Verifies:
@@ -666,12 +844,20 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "got virtualmachineid=%s" % (vm.id, vol_vmid)
         )
 
+        instance_name = getattr(result, "instancename", None)
+        self.assertIsNotNone(
+            instance_name, "Running VM response did not include instancename")
+        self.assertEqual(
+            self._get_vm_data_disk_capacity(instance_name),
+            self.__class__.target_volume_size,
+            "KVM data-disk capacity does not reflect the NFS3 resize")
+
     # ------------------------------------------------------------------
-    # Step 07 - Detach ONTAP data volume from the VM
+    # Step 10 - Detach ONTAP data volume from the VM
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_07_detach_volume_from_vm(self):
+    def test_10_detach_volume_from_vm(self):
         """
         Detach the ONTAP data volume from the running VM.
         Verifies:
@@ -754,11 +940,36 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 08 - Destroy VM, delete volume, delete pool
+    # Step 11 - Grow detached data volume
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_08_destroy_vm_and_cleanup(self):
+    def test_11_grow_detached_volume(self):
+        """Grow the materialized qcow2 after it has been detached."""
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+        detached_target = self.__class__.target_volume_size + (1024 ** 3)
+        self._resize_volume(
+            self.__class__.volume.id, detached_target // (1024 ** 3))
+
+        self._poll_volume_size(self.__class__.volume.id, detached_target)
+        self.assertEqual(
+            self._get_db_volume_size(self.__class__.volume.id),
+            detached_target,
+            "DB size does not match detached NFS3 grow target")
+        self.assertEqual(
+            self._get_qcow2_virtual_size(
+                self.__class__.pool.id, self.__class__.volume_path),
+            detached_target,
+            "qcow2 virtual size does not match detached grow target")
+        self.__class__.target_volume_size = detached_target
+
+    # ------------------------------------------------------------------
+    # Step 12 - Destroy VM, delete volume, delete pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["vm_volume_workflow"], required_hardware=True)
+    def test_12_destroy_vm_and_cleanup(self):
         """
         Destroy the VM, delete the ONTAP data volume, enter maintenance,
         then delete the pool.
