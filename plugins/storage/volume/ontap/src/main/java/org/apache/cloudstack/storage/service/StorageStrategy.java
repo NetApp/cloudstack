@@ -588,7 +588,27 @@ public abstract class StorageStrategy {
      * @return the retrieved Volume object
      */
     public Volume getStorageVolume(Volume volume) {
-        return null;
+        return getStorageVolume(volume.getUuid());
+    }
+
+    public Volume getStorageVolume(String uuid) {
+        if (uuid == null || uuid.isBlank()) {
+            throw new CloudRuntimeException("Cannot fetch ONTAP volume: UUID is null or empty");
+        }
+        logger.info("getStorageVolume: Fetching ONTAP volume by UUID: {}", uuid);
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        try {
+            Volume fetchedVolume = volumeFeignClient.getVolumeByUUID(authHeader, uuid);
+            logger.info("getStorageVolume: Volume [{}] fetched successfully", uuid);
+            return fetchedVolume;
+        } catch (FeignException e) {
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                logger.warn("getStorageVolume: Volume [{}] not found in ONTAP", uuid);
+                return null;
+            }
+            logger.error("getStorageVolume: Exception while fetching volume [{}]: ", uuid, e);
+            throw new CloudRuntimeException("Failed to fetch volume: " + e.getMessage());
+        }
     }
 
     /**

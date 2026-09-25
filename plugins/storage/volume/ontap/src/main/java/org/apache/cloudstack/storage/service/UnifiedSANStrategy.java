@@ -19,20 +19,23 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.host.HostVO;
-import com.cloud.utils.exception.CloudRuntimeException;
-import feign.FeignException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
-import org.apache.cloudstack.storage.feign.model.Svm;
-import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
-import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
+import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -41,18 +44,24 @@ import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+
+import com.cloud.host.HostVO;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.dao.VolumeDetailsDao;
+import com.cloud.utils.exception.CloudRuntimeException;
+
+import feign.FeignException;
 
 public class UnifiedSANStrategy extends SANStrategy {
 
     private static final Logger logger = LogManager.getLogger(UnifiedSANStrategy.class);
     @Inject
     private StoragePoolDetailsDao storagePoolDetailsDao;
+    @Inject
+    private VolumeDetailsDao volumeDetailsDao;
 
     public UnifiedSANStrategy(OntapStorage ontapStorage) {
         super(ontapStorage);
@@ -280,13 +289,26 @@ public class UnifiedSANStrategy extends SANStrategy {
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
-        if (cloudstackVolume == null || cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null) {
             logger.error("resizeCloudStackVolume: Lun resize failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("Failed to resize Lun, invalid request");
         }
         if (sizeInBytes <= 0) {
             throw new CloudRuntimeException("Failed to resize Lun, invalid size " + sizeInBytes);
         }
+
+        // Resolve LUN UUID from volume details when not pre-populated on the cloudstackVolume
+        if (cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+            long volumeId = cloudstackVolume.getVolumeInfo().getId();
+            VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
+            if (lunUuidDetail == null || StringUtils.isBlank(lunUuidDetail.getValue())) {
+                throw new CloudRuntimeException("LUN UUID not found in volume details for volume " + volumeId);
+            }
+            Lun resolvedLun = new Lun();
+            resolvedLun.setUuid(lunUuidDetail.getValue());
+            cloudstackVolume.setLun(resolvedLun);
+        }
+
         String lunUuid = cloudstackVolume.getLun().getUuid();
         logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
         try {
@@ -298,12 +320,19 @@ public class UnifiedSANStrategy extends SANStrategy {
             sanFeignClient.updateLun(authHeader, lunUuid, patch);
             logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
         } catch (FeignException e) {
-            logger.error("FeignException occurred while resizing LUN: {}, Status: {}, Exception: {}",
+            logger.error("FeignException occurred while resizing LUN [{}], Status: {}, Exception: {}",
                     lunUuid, e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+            if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
+                throw new CloudRuntimeException(String.format(
+                        "LUN [%s] no longer exists on ONTAP; it may have been deleted externally. " +
+                        "Verify the LUN is present before retrying the resize.", lunUuid));
+            }
+            throw new CloudRuntimeException(String.format(
+                    "Failed to resize LUN [%s]: %s",lunUuid, e.getMessage()));
         } catch (Exception e) {
-            logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+            logger.error("Exception occurred while resizing LUN [{}]: {}", lunUuid, e.getMessage());
+            throw new CloudRuntimeException(String.format(
+                    "Unexpected error while resizing LUN [%s]: %s", lunUuid, e.getMessage()));
         }
     }
 

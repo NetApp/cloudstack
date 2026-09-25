@@ -18,19 +18,9 @@
  */
 package org.apache.cloudstack.storage.driver;
 
-import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.host.Host;
-import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor;
-import com.cloud.storage.ScopeType;
-import com.cloud.storage.Storage;
-import com.cloud.storage.VMTemplateStoragePoolVO;
-import com.cloud.storage.VolumeVO;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.dao.VMTemplatePoolDao;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.exception.CloudRuntimeException;
+import java.util.HashMap;
+import java.util.Map;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.ObjectInDataStoreStateMachine;
@@ -44,6 +34,8 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Lun;
+import org.apache.cloudstack.storage.feign.model.Volume;
+import org.apache.cloudstack.storage.feign.model.VolumeSpace;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -51,31 +43,24 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockedStatic;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static com.cloud.agent.api.to.DataObjectType.TEMPLATE;
-import static com.cloud.agent.api.to.DataObjectType.VOLUME;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -83,8 +68,27 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import static com.cloud.agent.api.to.DataObjectType.TEMPLATE;
+import static com.cloud.agent.api.to.DataObjectType.VOLUME;
+import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.host.Host;
+import com.cloud.host.HostVO;
+import com.cloud.hypervisor.Hypervisor;
+import com.cloud.storage.ResizeVolumePayload;
+import com.cloud.storage.ScopeType;
+import com.cloud.storage.Storage;
+import com.cloud.storage.VMTemplateStoragePoolVO;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.VMTemplatePoolDao;
+import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
+import com.cloud.utils.exception.CloudRuntimeException;
 
 @ExtendWith(MockitoExtension.class)
 class OntapPrimaryDatastoreDriverTest {
@@ -1413,6 +1417,432 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
             verify(sanStrategy, never()).cloneCloudStackVolume(any());
+        }
+    }
+
+    // =========================================================================
+    // resize() tests
+    // =========================================================================
+
+    private void stubResizeCommon(long currentSize, long newSize) {
+        ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);
+        when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        // storagePool.getName() is only needed for the shrink-error message path
+        lenient().when(storagePool.getName()).thenReturn("test-pool");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getSize()).thenReturn(currentSize);
+        // volumeVO.getId() is only needed in the success path (volumeDao.update call)
+        lenient().when(volumeVO.getId()).thenReturn(100L);
+        lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
+        lenient().when(volumeDao.update(100L, volumeVO)).thenReturn(true);
+    }
+
+    @Test
+    void testResize_iSCSI_Success() {
+        long currentSize = 10737418240L; // 10 GB
+        long newSize = 21474836480L;     // 20 GB
+        stubResizeCommon(currentSize, newSize);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            doNothing().when(sanStrategy).resizeCloudStackVolume(any(), eq(newSize));
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+
+            // Driver only wires VolumeInfo; LUN UUID lookup is inside UnifiedSANStrategy
+            ArgumentCaptor<CloudStackVolume> volumeCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(sanStrategy).resizeCloudStackVolume(volumeCaptor.capture(), eq(newSize));
+            assertEquals(volumeInfo, volumeCaptor.getValue().getVolumeInfo());
+            assertNull(volumeCaptor.getValue().getLun());
+            verify(volumeDetailsDao, never()).findDetail(anyLong(), eq(OntapStorageConstants.LUN_DOT_UUID));
+
+            verify(volumeVO).setSize(newSize);
+            verify(volumeDao).update(eq(100L), any(VolumeVO.class));
+        }
+    }
+
+    @Test
+    void testResize_NFS_Success() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+            doNothing().when(nasStrategy).resizeCloudStackVolume(any(), eq(newSize));
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+
+            ArgumentCaptor<CloudStackVolume> volumeCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy).resizeCloudStackVolume(volumeCaptor.capture(), eq(newSize));
+            assertEquals(volumeInfo, volumeCaptor.getValue().getVolumeInfo());
+            // NFS has no LUN – driver must not look up a LUN UUID
+            verify(volumeDetailsDao, never()).findDetail(anyLong(), eq(OntapStorageConstants.LUN_DOT_UUID));
+            verify(volumeVO).setSize(newSize);
+            verify(volumeDao).update(eq(100L), any(VolumeVO.class));
+        }
+    }
+
+    @Test
+    void testResize_NullPayload_Fails() {
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(null);
+
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Invalid resize payload"));
+    }
+
+    @Test
+    void testResize_NullData_FailsAndCompletesCallbackOnce() {
+        driver.resize(null, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+    }
+
+    @Test
+    void testResize_NonVolumeInfo_FailsAndCompletesCallbackOnce() {
+        when(templateInfo.getId()).thenReturn(50L);
+
+        driver.resize(templateInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+    }
+
+    @Test
+    void testResize_NullNewSize_Fails() {
+        // payload.newSize is null
+        ResizeVolumePayload payload = new ResizeVolumePayload(null, null, null, null, false, "i-2-VM", null, false);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Invalid resize payload"));
+    }
+
+    @Test
+    void testResize_StoragePoolNotFound_Fails() {
+        ResizeVolumePayload payload = new ResizeVolumePayload(21474836480L, null, null, null, false, "i-2-VM", null, false);
+        when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+        when(storagePoolDao.findById(1L)).thenReturn(null);
+
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Storage pool not found"));
+    }
+
+    @Test
+    void testResize_MissingDataStore_Fails() {
+        ResizeVolumePayload payload = new ResizeVolumePayload(21474836480L, null, null, null, false, "none", null, false);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+        when(volumeInfo.getDataStore()).thenReturn(null);
+
+        driver.resize(volumeInfo, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Data store not found"));
+    }
+
+    @Test
+    void testResize_VolumeVONotFound_Fails() {
+        long newSize = 21474836480L;
+        ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);
+        when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeInfo.getpayload()).thenReturn(payload);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Volume not found"));
+        }
+    }
+
+    @Test
+    void testResize_MissingStoragePoolDetails_Fails() {
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(null))
+                    .thenThrow(new CloudRuntimeException("Storage pool details are missing"));
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback, times(1)).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Storage pool details are missing"));
+            verify(volumeVO, never()).setSize(anyLong());
+        }
+    }
+
+    @Test
+    void testResize_ShrinkAttempt_Fails() {
+        long currentSize = 21474836480L; // 20 GB
+        long newSize = 10737418240L;     // 10 GB – smaller than current
+        stubResizeCommon(currentSize, newSize);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("does not support shrinking"));
+            verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
+        }
+    }
+
+    @Test
+    void testResize_StrategyThrows_Fails() {
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            doThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP resize failed"))
+                    .when(sanStrategy).resizeCloudStackVolume(any(), eq(newSize));
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("ONTAP resize failed"));
+            // volumeVO size must NOT be updated on failure
+            verify(volumeVO, never()).setSize(anyLong());
+        }
+    }
+
+    @Test
+    void testResize_EqualSize_InvokesStrategyAndSucceeds() {
+        long size = 10737418240L;
+        stubResizeCommon(size, size);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            verify(sanStrategy).resizeCloudStackVolume(any(), eq(size));
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertTrue(resultCaptor.getValue().isSuccess());
+        }
+    }
+
+    @Test
+    void testResize_DatabaseUpdateFailure_ReturnsFailure() {
+        long currentSize = 10737418240L;
+        long newSize = 21474836480L;
+        stubResizeCommon(currentSize, newSize);
+        when(volumeDao.update(100L, volumeVO)).thenReturn(false);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback, times(1)).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains("Failed to update volume"));
+        }
+    }
+
+    // =========================================================================
+    // getUsedBytes() tests
+    // =========================================================================
+
+    @Test
+    void testGetUsedBytes_NullPool_ThrowsException() {
+        InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                () -> driver.getUsedBytes(null));
+        assertTrue(ex.getMessage().contains("storagePool is null, ensure the pool exists and is fully initialised before querying used bytes"));
+    }
+
+    @Test
+    void testGetUsedBytes_NoFlexVolUuid_ThrowsException() {
+        // VOLUME_UUID key is absent from pool details
+        storagePoolDetails.remove(OntapStorageConstants.VOLUME_UUID);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
+    }
+
+    @Test
+    void testGetUsedBytes_BlankFlexVolUuid_ThrowsException() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "   ");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
+    }
+
+    @Test
+    void testGetUsedBytes_NullPoolDetails_ThrowsException() {
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> driver.getUsedBytes(storagePool));
+        assertTrue(ex.getMessage().contains("FlexVolume UUID not found in pool details for pool 1"));
+    }
+
+    @Test
+    void testGetUsedBytes_Success_ReturnsUsedBytes() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        Volume flexVol = new Volume();
+        VolumeSpace space = new VolumeSpace();
+        space.setUsed(10737418240L); // 10 GB
+        flexVol.setSpace(space);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(flexVol);
+
+            assertEquals(10737418240L, driver.getUsedBytes(storagePool));
+        }
+    }
+
+    @Test
+    void testGetUsedBytes_FlexVolNotFound_ThrowsException() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(null);
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("was not found on ONTAP"));
+        }
+    }
+
+    @Test
+    void testGetUsedBytes_FlexVolNullSpace_ThrowsException() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        Volume flexVol = new Volume();
+        // space is intentionally left null
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(flexVol);
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("no space information"));
+        }
+    }
+
+    @Test
+    void testGetUsedBytes_OntapException_PropagatesException() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
+                    .thenThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP unreachable"));
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertEquals("ONTAP unreachable", ex.getMessage());
+        }
+    }
+
+    @Test
+    void testGetUsedBytes_UnexpectedException_IsWrapped() {
+        storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-123");
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
+                    .thenThrow(new IllegalStateException("invalid ONTAP response"));
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> driver.getUsedBytes(storagePool));
+            assertTrue(ex.getMessage().contains("Could not read used space"));
+            assertTrue(ex.getMessage().contains("invalid ONTAP response"));
+            assertTrue(ex.getCause() instanceof IllegalStateException);
         }
     }
 }

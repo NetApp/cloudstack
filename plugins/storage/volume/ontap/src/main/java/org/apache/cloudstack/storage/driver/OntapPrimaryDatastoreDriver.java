@@ -18,31 +18,14 @@
  */
 package org.apache.cloudstack.storage.driver;
 
-import org.apache.cloudstack.storage.utils.OntapStorageConstants;
-import com.cloud.agent.api.Answer;
-import com.cloud.agent.api.to.DataObjectType;
-import com.cloud.agent.api.to.DataStoreTO;
-import com.cloud.agent.api.to.DataTO;
-import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.host.Host;
-import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor.HypervisorType;
-import com.cloud.storage.Storage;
-import com.cloud.storage.StoragePool;
-import com.cloud.storage.Volume;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.VolumeVO;
-import com.cloud.storage.ScopeType;
-import com.cloud.storage.SnapshotVO;
-import com.cloud.storage.VMTemplateStoragePoolVO;
-import com.cloud.storage.dao.SnapshotDao;
-import com.cloud.storage.dao.SnapshotDetailsDao;
-import com.cloud.storage.dao.SnapshotDetailsVO;
-import com.cloud.storage.dao.VMTemplatePoolDao;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.Pair;
-import com.cloud.utils.exception.CloudRuntimeException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.ChapInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
@@ -55,7 +38,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver
 import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.command.CreateObjectAnswer;
@@ -78,17 +60,40 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
+import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.storage.ResizeVolumeCommand;
+import com.cloud.agent.api.to.DataObjectType;
+import com.cloud.agent.api.to.DataStoreTO;
+import com.cloud.agent.api.to.DataTO;
+import com.cloud.agent.api.to.StorageFilerTO;
+import com.cloud.exception.InvalidParameterValueException;
+import com.cloud.host.Host;
+import com.cloud.host.HostVO;
+import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.storage.ResizeVolumePayload;
+import com.cloud.storage.ScopeType;
+import com.cloud.storage.SnapshotVO;
+import com.cloud.storage.Storage;
+import com.cloud.storage.StoragePool;
+import com.cloud.storage.VMTemplateStoragePoolVO;
+import com.cloud.storage.Volume;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.VolumeVO;
+import com.cloud.storage.dao.SnapshotDao;
+import com.cloud.storage.dao.SnapshotDetailsDao;
+import com.cloud.storage.dao.SnapshotDetailsVO;
+import com.cloud.storage.dao.VMTemplatePoolDao;
+import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
+import com.cloud.utils.Pair;
+import com.cloud.utils.exception.CloudRuntimeException;
 
 /**
  * Primary datastore driver for NetApp ONTAP storage systems.
@@ -596,7 +601,66 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
-    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {}
+    public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
+        CreateCmdResult result = null;
+        try {
+            if (!(data instanceof VolumeInfo)) {
+                throw new CloudRuntimeException("resize: Expected VolumeInfo but received " +
+                        (data != null ? data.getClass().getSimpleName() : "null"));
+            }
+            VolumeInfo volumeInfo = (VolumeInfo) data;
+            Object rawPayload = volumeInfo.getpayload();
+            ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
+                    ? (ResizeVolumePayload) rawPayload : null;
+            if (payload == null || payload.newSize == null) {
+                throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
+            }
+            if (volumeInfo.getDataStore() == null) {
+                throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
+            }
+
+            StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
+            if (storagePool == null) {
+                throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
+            }
+            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+
+            VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
+            if (volumeVO == null) {
+                throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
+            }
+            if (payload.newSize < volumeVO.getSize()) {
+                throw new CloudRuntimeException(String.format(
+                        "Storage pool %s does not support shrinking a volume.", storagePool.getName()));
+            }
+
+            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+            CloudStackVolume cloudStackVolume = new CloudStackVolume();
+            cloudStackVolume.setVolumeInfo(volumeInfo);
+            storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
+
+            long currentSize = volumeVO.getSize();
+            volumeVO.setSize(payload.newSize);
+            if (!volumeDao.update(volumeVO.getId(), volumeVO)) {
+                throw new CloudRuntimeException("Failed to update volume " + volumeVO.getId()
+                        + " after resizing the ONTAP backing object");
+            }
+            String instanceName = payload.instanceName != null ? payload.instanceName : "none";
+
+            ResizeVolumeCommand resizeCmd = new ResizeVolumeCommand(volumeVO.getPath(),
+                    new StorageFilerTO(storagePool), currentSize, payload.newSize,
+                    false, instanceName);
+            result = new CreateCmdResult(volumeVO.getPath(), new Answer(resizeCmd, true, null));
+            logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
+        } catch (Exception e) {
+            String errMsg = e.getMessage();
+            logger.error("resize: Failed for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
+            result = new CreateCmdResult(null, new Answer(null, false, errMsg));
+            result.setResult(errMsg);
+        } finally {
+            callback.complete(result);
+        }
+    }
 
     @Override
     public ChapInfo getChapInfo(DataObject dataObject) {
@@ -1018,9 +1082,57 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return StringUtils.isNotBlank(templatePoolRef.getInstallPath());
     }
 
+    /**
+     * Returns the bytes used on the FlexVolume backing this pool, read directly from ONTAP
+     * ({@code space.used}).
+     *
+     * <p>Fails closed when ONTAP cannot provide trustworthy usage data. Returning zero for an
+     * unreachable or incomplete backend would make capacity checks treat an unknown pool as empty
+     * and could incorrectly authorize a volume grow.</p>
+     *
+     * @throws InvalidParameterValueException if {@code storagePool} is null
+     * @throws CloudRuntimeException if the pool has no FlexVolume UUID in its details, ONTAP
+     *         cannot be queried, or used-space data is missing
+     */
     @Override
     public long getUsedBytes(StoragePool storagePool) {
-        return 0;
+        if (storagePool == null) {
+            throw new InvalidParameterValueException("storagePool is null, ensure the pool exists and is fully initialised before querying used bytes");
+        }
+
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        String flexVolUuid = poolDetails != null ? poolDetails.get(OntapStorageConstants.VOLUME_UUID) : null;
+
+        if (StringUtils.isBlank(flexVolUuid)) {
+            throw new CloudRuntimeException("FlexVolume UUID not found in pool details for pool " + storagePool.getId());
+        }
+
+        try {
+            StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
+            var flexVol = strategy.getStorageVolume(flexVolUuid);
+
+            if (flexVol == null) {
+                throw new CloudRuntimeException(String.format(
+                        "FlexVolume [%s] backing pool [%s] was not found on ONTAP",
+                        flexVolUuid, storagePool.getId()));
+            }
+            if (flexVol.getSpace() == null) {
+                throw new CloudRuntimeException(String.format(
+                        "ONTAP returned no space information for FlexVolume [%s] backing pool [%s]",
+                        flexVolUuid, storagePool.getId()));
+            }
+
+            logger.debug("getUsedBytes: FlexVolume [{}] backing pool [{}] reports {} bytes used",
+                    flexVolUuid, storagePool.getId(), flexVol.getSpace().getUsed());
+            return flexVol.getSpace().getUsed();
+        } catch (CloudRuntimeException e) {
+            logger.error("getUsedBytes: Failed to get used bytes for pool [{}]", storagePool.getId(), e);
+            throw e;
+        } catch (Exception e) {
+            logger.error("getUsedBytes: Failed to get used bytes for pool [{}]", storagePool.getId(), e);
+            throw new CloudRuntimeException(
+                    String.format("Could not read used space for pool [%s]: %s", storagePool.getId(), e.getMessage()), e);
+        }
     }
 
     @Override
