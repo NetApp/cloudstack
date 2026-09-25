@@ -65,6 +65,7 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -828,6 +829,32 @@ public abstract class StorageStrategy {
      * @return the created CloudStackVolume, populated with the backend identity of the clone
      */
     abstract public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Creates a new file/LUN in the same FlexVolume by cloning from a FlexVolume snapshot.
+     *
+     * <p><b>Product scope (v1):</b> same primary pool / FlexVol only. Creating the volume on a
+     * different pool is descoped — operators may later {@code migrateVolume} if another pool is required.</p>
+     *
+     * <p>ONTAP backends (protocol-specific; each subclass builds its own request):</p>
+     * <ul>
+     *   <li><b>NAS (NFS3)</b> — {@code POST /api/storage/file/clone} with {@code snapshot.name}</li>
+     *   <li><b>SAN (iSCSI)</b> — {@code POST /api/storage/luns} with {@code clone.source.name} =
+     *       {@code /vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
+     * </ul>
+     *
+     * @param storagePool       target CloudStack primary pool (same FlexVol as the snapshot)
+     * @param poolDetails       pool details (SVM, FlexVol name/uuid, protocol, …)
+     * @param volumeInfo        destination CloudStack volume being created
+     * @param sourceVolumePath  snapshotted object path from {@code snapshot_details.VOLUME_PATH}
+     * @param snapshotName      ONTAP FlexVol snapshot name from {@code snapshot_details}
+     * @return created CloudStackVolume with protocol-specific identity (LUN uuid or file path)
+     */
+    abstract public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool,
+                                                                        Map<String, String> poolDetails,
+                                                                        VolumeInfo volumeInfo,
+                                                                        String sourceVolumePath,
+                                                                        String snapshotName);
 
     /**
      * Grows an existing backend object to {@code sizeInBytes}.

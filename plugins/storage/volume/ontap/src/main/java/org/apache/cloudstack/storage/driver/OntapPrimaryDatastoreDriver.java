@@ -27,6 +27,7 @@ import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
@@ -58,6 +59,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.command.CopyCmdAnswer;
 import org.apache.cloudstack.storage.command.CreateObjectAnswer;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
@@ -87,6 +89,7 @@ import javax.inject.Inject;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -116,6 +119,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         // Enables the framework to cache a template on the FlexVolume once and serve every later
         // deployment with an array-side clone instead of another copy from secondary storage.
         mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_VOLUME_FROM_VOLUME.toString(), Boolean.TRUE.toString());
+        // createTemplate(snapshotid) reads the snapshot from this pool instead of backing it up to secondary first.
+        mapCapabilities.put(DataStoreCapabilities.CAN_CREATE_TEMPLATE_FROM_SNAPSHOT.toString(), Boolean.TRUE.toString());
+        // Must be present and false: StorageSystemDataMotionStrategy then clones the snapshot into a
+        // temporary volume (see copyAsync) and copies that volume to secondary storage.
+        mapCapabilities.put(OntapStorageConstants.CAN_DIRECT_ATTACH_SNAPSHOT, Boolean.FALSE.toString());
         return mapCapabilities;
     }
 
@@ -170,37 +178,41 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 // Update CloudStack volume record with storage pool association and protocol-specific details
                 VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
                 if (volumeVO != null) {
-                    // Create the backend storage object: a clone of the cached template when the
-                    // orchestrator asked for one, otherwise a blank LUN (iSCSI) or qcow2 file (NFS).
+                    /*
+                     * Create-volume combinations on ONTAP primary (v1):
+                     *
+                     * 1) cloneOfSnapshot — StorageSystemDataMotionStrategy sets volume_details.cloneOfSnapshot
+                     *    when createVolume(snapshotid) targets a managed backend snapshot.
+                     *    - Same primary pool / FlexVol only (PRIMARY_POOL_ID must match dataStore).
+                     *    - DATA or ROOT snapshot → new attachable data volume (ROOT is never bootable
+                     *      via this path; bootable recovery is createTemplate(snapshotid) → deploy).
+                     *    - Backend: iSCSI → POST /api/storage/luns (clone.source in .snapshot/);
+                     *      NFS → POST /api/storage/file/clone with snapshot.name.
+                     *    - IOPS: MIN_IOPS/MAX_IOPS may be on snapshot_details; apply is TODO below.
+                     *
+                     * 2) cloneOfTemplate — deploy / create from cached template on this pool.
+                     *
+                     * 3) else — blank LUN (iSCSI) or qcow2 (NFS).
+                     *
+                     * Mutually exclusive from the motion/orchestrator layer; snapshot is checked first
+                     * (SolidFire-style) so a create-from-snapshot never accidentally falls through to blank create.
+                     */
+                    Long cloneOfSnapshotId = getSnapshotIdForCloning(volInfo.getId());
                     Long cloneOfTemplateId = getTemplateIdForCloning(volInfo.getId());
-                    CloudStackVolume clonedCloudStackVolume = cloneOfTemplateId != null
-                            ? cloneCloudStackVolumeFromTemplate(storagePool, volInfo, details, cloneOfTemplateId)
-                            : createCloudStackVolume(storagePool, volInfo, details);
-
-                    volumeVO.setPoolType(storagePool.getPoolType());
-                    volumeVO.setPoolId(storagePool.getId());
-                    volumeVO.setFormat(getImageFormat(storagePool));
-                    logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
-
-                    if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                        // createCloudStackVolume validates the Feign response (LUN name + uuid) before returning
-                        Lun createdLun = clonedCloudStackVolume.getLun();
-                        String lunName = createdLun.getName();
-
-                        // Persist LUN details for future operations (delete, grant/revoke access)
-                        volumeDetailsDao.addDetail(volInfo.getId(), OntapStorageConstants.LUN_DOT_UUID, createdLun.getUuid(), false);
-                        volumeDetailsDao.addDetail(volInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, lunName, false);
-                        volumeVO.setFolder(createdLun.getUuid());
-
-                        logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
-                                lunName, volumeVO.getId());
-                        createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
-                    } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                        createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
-                        logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
-                                volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
+                    CloudStackVolume clonedCloudStackVolume;
+                    if (cloneOfSnapshotId != null) {
+                        clonedCloudStackVolume = cloneCloudStackVolumeFromSnapshot(
+                                storagePool, volInfo, details, cloneOfSnapshotId);
+                        // TODO(CSTACKEX-306): apply persisted MIN_IOPS / MAX_IOPS from snapshot_details
+                        // onto this CloudStack volume (and ONTAP QoS if applicable) after successful clone.
+                    } else if (cloneOfTemplateId != null) {
+                        clonedCloudStackVolume = cloneCloudStackVolumeFromTemplate(
+                                storagePool, volInfo, details, cloneOfTemplateId);
+                    } else {
+                        clonedCloudStackVolume = createCloudStackVolume(storagePool, volInfo, details);
                     }
-                    volumeDao.update(volumeVO.getId(), volumeVO);
+
+                    createCmdResult = recordCreatedVolume(storagePool, volInfo, volumeVO, details, clonedCloudStackVolume);
                 }
             } else if (dataObject.getType() == DataObjectType.TEMPLATE) {
                 createCmdResult = createTemplateOnPrimary(storagePool, (TemplateInfo) dataObject, details);
@@ -220,6 +232,41 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             callback.complete(createCmdResult);
         }
+    }
+
+    /**
+     * Records pool association, image format and protocol-specific identity (LUN name/uuid for iSCSI)
+     * of a volume that was just created or cloned on ONTAP, and returns the create result whose path
+     * the framework stores on the volume.
+     */
+    private CreateCmdResult recordCreatedVolume(StoragePoolVO storagePool, VolumeInfo volInfo, VolumeVO volumeVO,
+                                                Map<String, String> details, CloudStackVolume createdCloudStackVolume) {
+        CreateCmdResult createCmdResult = null;
+        volumeVO.setPoolType(storagePool.getPoolType());
+        volumeVO.setPoolId(storagePool.getId());
+        volumeVO.setFormat(getImageFormat(storagePool));
+        logger.info("createAsync: Volume format set to [{}] for pool type [{}]", volumeVO.getFormat(), storagePool.getPoolType());
+
+        if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+            // createCloudStackVolume validates the Feign response (LUN name + uuid) before returning
+            Lun createdLun = createdCloudStackVolume.getLun();
+            String lunName = createdLun.getName();
+
+            // Persist LUN details for future operations (delete, grant/revoke access)
+            volumeDetailsDao.addDetail(volInfo.getId(), OntapStorageConstants.LUN_DOT_UUID, createdLun.getUuid(), false);
+            volumeDetailsDao.addDetail(volInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, lunName, false);
+            volumeVO.setFolder(createdLun.getUuid());
+
+            logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
+                    lunName, volumeVO.getId());
+            createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
+        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+            createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
+            logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
+                    volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
+        }
+        volumeDao.update(volumeVO.getId(), volumeVO);
+        return createCmdResult;
     }
 
     /**
@@ -325,6 +372,102 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return null;
         }
         return Long.valueOf(detail.getValue());
+    }
+
+    /**
+     * Returns the CloudStack snapshot id to clone from when {@code volume_details.cloneOfSnapshot}
+     * is set, or null when this create is not a create-volume-from-snapshot.
+     *
+     * <p>Set by {@code StorageSystemDataMotionStrategy.handleCreateManagedVolumeFromManagedSnapshot}
+     * for the duration of {@code createAsync} only (same pattern as {@link #getTemplateIdForCloning}).</p>
+     */
+    private Long getSnapshotIdForCloning(long volumeId) {
+        VolumeDetailVO detail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.CLONE_OF_SNAPSHOT);
+        if (detail == null || detail.getValue() == null || detail.getValue().isEmpty()) {
+            return null;
+        }
+        return Long.valueOf(detail.getValue());
+    }
+
+    /**
+     * Creates a new volume on this pool by cloning a file/LUN from a CloudStack volume snapshot
+     * that already lives on the same FlexVolume.
+     *
+     * <p><b>Combinations (product + plugin v1):</b></p>
+     * <ul>
+     *   <li><b>Same pool only</b> — {@code snapshot_details.PRIMARY_POOL_ID} must equal this
+     *       {@code storagePool}. Creating the volume on a different pool is descoped; use migrate later if needed.</li>
+     *   <li><b>DATA snapshot</b> → attachable data disk (disk offering usually inherited).</li>
+     *   <li><b>ROOT snapshot</b> → still a data disk here (not bootable). Bootable path remains
+     *       {@code createTemplate(snapshotid)} then deploy.</li>
+     *   <li><b>iSCSI</b> — {@code POST /api/storage/luns} with
+     *       {@code clone.source.name=/vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
+     *   <li><b>NFS3</b> — {@code POST /api/storage/file/clone} with {@code snapshot.name}</li>
+     *   <li><b>Not this path</b> — in-place revert ({@code revertSnapshot}); VM/instance snapshots;
+     *       secondary-storage archive restore.</li>
+     * </ul>
+     *
+     * <p>Optional grow when the disk offering is larger than the snapshot size (same pattern as
+     * clone-from-template).</p>
+     */
+    private CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, VolumeInfo volumeInfo,
+                                                               Map<String, String> details, long csSnapshotId) {
+        String snapshotName = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.ONTAP_SNAP_NAME);
+        String volumePath = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.VOLUME_PATH);
+        String primaryPoolId = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.PRIMARY_POOL_ID);
+        String snapProtocol = requireSnapshotDetail(csSnapshotId, OntapStorageConstants.PROTOCOL);
+
+        // Same-pool / same-protocol gate (v1). Fail before any ONTAP call.
+        if (!String.valueOf(storagePool.getId()).equals(primaryPoolId)) {
+            throw new CloudRuntimeException("Create volume from snapshot [" + csSnapshotId
+                    + "] requires the snapshot's primary pool [" + primaryPoolId
+                    + "]; requested pool is [" + storagePool.getId() + "] (creating a volume from a snapshot on a different pool is not supported)");
+        }
+        String poolProtocol = details.get(OntapStorageConstants.PROTOCOL);
+        if (poolProtocol == null || !poolProtocol.equalsIgnoreCase(snapProtocol)) {
+            throw new CloudRuntimeException("Create volume from snapshot [" + csSnapshotId
+                    + "] protocol mismatch: snapshot=[" + snapProtocol + "], pool=[" + poolProtocol + "]");
+        }
+
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+
+        logger.info("cloneCloudStackVolumeFromSnapshot: Cloning from CS snapshot [{}] (ONTAP snap [{}], path [{}]) "
+                        + "for volume [{}] on pool [{}] protocol [{}]",
+                csSnapshotId, snapshotName, volumePath, volumeInfo.getId(), storagePool.getId(), poolProtocol);
+
+        CloudStackVolume cloned = storageStrategy.cloneCloudStackVolumeFromSnapshot(
+                storagePool, details, volumeInfo, volumePath, snapshotName);
+        if (cloned == null) {
+            throw new CloudRuntimeException("ONTAP returned nothing when cloning snapshot [" + csSnapshotId
+                    + "] for volume [" + volumeInfo.getId() + "]");
+        }
+
+        long requestedSize = getDataObjectSizeIncludingHypervisorSnapshotReserve(volumeInfo, storagePool);
+        long snapshotSize = resolveSnapshotSizeBytes(csSnapshotId);
+        if (snapshotSize > 0 && requestedSize > snapshotSize) {
+            logger.info("cloneCloudStackVolumeFromSnapshot: Growing clone of snapshot [{}] from {} to {} bytes for volume [{}]",
+                    csSnapshotId, snapshotSize, requestedSize, volumeInfo.getId());
+            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+        }
+
+        return cloned;
+    }
+
+    private String requireSnapshotDetail(long csSnapshotId, String key) {
+        String value = getSnapshotDetail(csSnapshotId, key);
+        if (value == null || value.isEmpty()) {
+            throw new CloudRuntimeException("Missing snapshot_details [" + key + "] for snapshot [" + csSnapshotId
+                    + "]; cannot create volume from snapshot");
+        }
+        return value;
+    }
+
+    private long resolveSnapshotSizeBytes(long csSnapshotId) {
+        SnapshotVO snapshotVO = snapshotDao.findById(csSnapshotId);
+        if (snapshotVO == null || snapshotVO.getSize() <= 0) {
+            return 0L;
+        }
+        return snapshotVO.getSize();
     }
 
     private VMTemplateStoragePoolVO findTemplatePoolRef(long poolId, long templateId) {
@@ -473,6 +616,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
+                removeTemporarySnapshotCopyRecord(volumeInfo.getId());
                 commandResult.setResult(null);
                 commandResult.setSuccess(true);
             } else if (data.getType() == DataObjectType.TEMPLATE) {
@@ -491,7 +635,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             commandResult.setSuccess(false);
             commandResult.setResult(e.getMessage());
         } finally {
-            callback.complete(commandResult);
+            // StorageSystemDataMotionStrategy deletes its temporary snapshot copy with a null callback.
+            if (callback != null) {
+                callback.complete(commandResult);
+            }
         }
     }
 
@@ -582,17 +729,118 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+        copyAsync(srcData, destData, null, callback);
     }
 
+    /**
+     * Clones a CloudStack volume snapshot into the temporary volume that
+     * {@code StorageSystemDataMotionStrategy} creates while copying the snapshot to secondary storage
+     * for {@code createTemplate(snapshotid)}. The strategy then maps that volume to a KVM host, copies
+     * it into the template and deletes it again through {@link #deleteAsync}.
+     *
+     * <p>The strategy invokes this synchronously with a null callback, so failures are thrown.</p>
+     */
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, Host destHost, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+        if (!canCopy(srcData, destData)) {
+            throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+        }
+
+        CopyCommandResult result;
+        try {
+            VolumeInfo volInfo = (VolumeInfo) destData;
+            StoragePoolVO storagePool = storagePoolDao.findById(destData.getDataStore().getId());
+            if (storagePool == null) {
+                throw new CloudRuntimeException("Storage Pool not found for id: " + destData.getDataStore().getId());
+            }
+            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+            validateProtocol(details, destData.getDataStore());
+            VolumeVO volumeVO = volumeDao.findById(volInfo.getId());
+
+            renameTemporarySnapshotCopy(volInfo, volumeVO, srcData.getId());
+            logger.info("copyAsync: Cloning CS snapshot [{}] into temporary volume [{}] on pool [{}] for template creation",
+                    srcData.getId(), volInfo.getId(), storagePool.getId());
+            CloudStackVolume cloned = cloneCloudStackVolumeFromSnapshot(storagePool, volInfo, details, srcData.getId());
+            if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+                volumeVO.setPath(volInfo.getUuid());
+            }
+            recordCreatedVolume(storagePool, volInfo, volumeVO, details, cloned);
+            result = new CopyCommandResult(null, new CopyCmdAnswer(volInfo.getTO()));
+        } catch (Exception e) {
+            logger.error("copyAsync: Failed to clone snapshot [{}] into volume [{}]: {}", srcData.getId(), destData.getId(), e.getMessage());
+            result = new CopyCommandResult(null, new CopyCmdAnswer(e.getMessage()));
+            result.setResult(e.getMessage());
+        }
+
+        if (callback != null) {
+            callback.complete(result);
+        } else if (!result.isSuccess()) {
+            throw new CloudRuntimeException("Failed to clone snapshot [" + srcData.getId() + "] into volume ["
+                    + destData.getId() + "]: " + result.getResult());
+        }
     }
 
+    /**
+     * Only accepts the temporary snapshot-to-volume copy used for template creation.
+     *
+     * <p>{@code DataMotionServiceImpl} consults {@code canCopy} before choosing a data motion strategy, so
+     * accepting every snapshot-to-volume copy here would bypass
+     * {@code StorageSystemDataMotionStrategy} for createVolume(snapshotid). Template caching
+     * (template to template, template to volume) must keep returning false as well.</p>
+     */
     @Override
     public boolean canCopy(DataObject srcData, DataObject destData) {
-        return false;
+        if (srcData == null || destData == null || srcData.getDataStore() == null || destData.getDataStore() == null) {
+            return false;
+        }
+        if (srcData.getType() != DataObjectType.SNAPSHOT || destData.getType() != DataObjectType.VOLUME) {
+            return false;
+        }
+        if (srcData.getDataStore().getRole() != DataStoreRole.Primary
+                || srcData.getDataStore().getId() != destData.getDataStore().getId()) {
+            return false;
+        }
+        return isTemporarySnapshotCopyVolume(volumeDao.findById(destData.getId()));
+    }
+
+    /**
+     * The temporary volume created by {@code StorageSystemDataMotionStrategy} for a snapshot copy is
+     * persisted in Allocated state without a disk offering; user volumes always carry a disk offering.
+     */
+    private boolean isTemporarySnapshotCopyVolume(VolumeVO volumeVO) {
+        if (volumeVO == null || volumeVO.getState() != Volume.State.Allocated) {
+            return false;
+        }
+        Long diskOfferingId = volumeVO.getDiskOfferingId();
+        return diskOfferingId == null || diskOfferingId == 0L;
+    }
+
+    /**
+     * The framework names the temporary volume {@code <snapshot name>_<millis>.TMP}, which is not a valid
+     * ONTAP LUN name, so it is renamed before cloning. The in-memory object is updated as well because the
+     * SAN clone derives the LUN name from {@link VolumeInfo#getName()}.
+     */
+    private void renameTemporarySnapshotCopy(VolumeInfo volInfo, VolumeVO volumeVO, long csSnapshotId) {
+        String name = OntapStorageConstants.TEMP_SNAPSHOT_COPY_NAME_PREFIX + csSnapshotId + OntapStorageConstants.UNDERSCORE + volInfo.getId();
+        volumeVO.setName(name);
+        if (volInfo.getVolume() instanceof VolumeVO) {
+            ((VolumeVO) volInfo.getVolume()).setName(name);
+        }
+    }
+
+    /**
+     * {@code StorageSystemDataMotionStrategy} deletes the temporary snapshot copy on the array but leaves its
+     * volume row behind on success, so it is removed here once the backend object is gone.
+     */
+    private void removeTemporarySnapshotCopyRecord(long volumeId) {
+        VolumeVO volumeVO = volumeDao.findById(volumeId);
+        if (!isTemporarySnapshotCopyVolume(volumeVO)
+                || volumeVO.getName() == null || !volumeVO.getName().startsWith(OntapStorageConstants.TEMP_SNAPSHOT_COPY_NAME_PREFIX)) {
+            return;
+        }
+        volumeDetailsDao.removeDetails(volumeId);
+        volumeDao.remove(volumeId);
+        logger.info("deleteAsync: Removed temporary snapshot copy volume record [{}]", volumeId);
     }
 
     @Override
@@ -652,6 +900,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 volumeVO.setPoolType(storagePool.getPoolType());
                 volumeVO.setPoolId(storagePool.getId());
                 volumeDao.update(volumeVO.getId(), volumeVO);
+                syncTemporarySnapshotCopyPath(dataObject, volumeVO);
             } else if (dataObject.getType() == DataObjectType.TEMPLATE) {
                 grantAccessTemplate((TemplateInfo) dataObject, host, dataStore, storagePool);
             } else {
@@ -662,6 +911,22 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         } catch (Exception e) {
             logger.error("grantAccess: Failed for dataObject [{}]: {}", dataObject, e.getMessage());
             throw new CloudRuntimeException("Failed with error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * For the temporary snapshot copy, {@code StorageSystemDataMotionStrategy} builds the CopyCommand from
+     * the same in-memory volume object it passed to grantAccess, so the iSCSI path resolved by the LUN
+     * mapping must be reflected on that object too.
+     */
+    private void syncTemporarySnapshotCopyPath(DataObject dataObject, VolumeVO volumeVO) {
+        if (!isTemporarySnapshotCopyVolume(volumeVO) || !(dataObject instanceof VolumeInfo)) {
+            return;
+        }
+        Volume inMemoryVolume = ((VolumeInfo) dataObject).getVolume();
+        if (inMemoryVolume instanceof VolumeVO) {
+            ((VolumeVO) inMemoryVolume).setPath(volumeVO.getPath());
+            ((VolumeVO) inMemoryVolume).set_iScsiName(volumeVO.get_iScsiName());
         }
     }
 
@@ -1122,9 +1387,22 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             snapshotObjectTo.setPath(OntapStorageConstants.ONTAP_SNAP_ID + "=" + ontapSnapshotUuid);
 
             // Persist snapshot_details so deleteAsync can resolve ONTAP FlexVol/snapshot UUIDs
-            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume)
-            updateSnapshotDetails(snapshot.getId(), volumeInfo.getId(), flexVolUuid,
-                    ontapSnapshotUuid, snapshotName, volumePath, volumeVO.getPoolId(), protocol, lunUuid);
+            // (see deleteCloudStackVolumeSnapshot and StorageStrategy.deleteFlexVolSnapshotForCloudStackVolume).
+            // Also store source volume min/max IOPS when configured for later create-volume-from-snapshot.
+            Map<String, String> snapshotDetails = new LinkedHashMap<>();
+            snapshotDetails.put(OntapStorageConstants.SRC_CS_VOLUME_ID, String.valueOf(volumeInfo.getId()));
+            snapshotDetails.put(OntapStorageConstants.BASE_ONTAP_FV_ID, flexVolUuid);
+            snapshotDetails.put(OntapStorageConstants.ONTAP_SNAP_ID, ontapSnapshotUuid);
+            snapshotDetails.put(OntapStorageConstants.ONTAP_SNAP_NAME, snapshotName);
+            snapshotDetails.put(OntapStorageConstants.VOLUME_PATH, volumePath);
+            snapshotDetails.put(OntapStorageConstants.PRIMARY_POOL_ID, String.valueOf(volumeVO.getPoolId()));
+            snapshotDetails.put(OntapStorageConstants.PROTOCOL, protocol);
+            // iSCSI only — needed for LUN restore / identity; null (skipped) for NFS.
+            snapshotDetails.put(OntapStorageConstants.LUN_DOT_UUID, lunUuid);
+            // TODO(CSTACKEX-306): on create-volume-from-snapshot, read these and apply to the new volume.
+            putPositiveIopsDetail(snapshotDetails, OntapStorageConstants.MIN_IOPS, volumeVO.getMinIops());
+            putPositiveIopsDetail(snapshotDetails, OntapStorageConstants.MAX_IOPS, volumeVO.getMaxIops());
+            updateSnapshotDetails(snapshot.getId(), snapshotDetails);
 
             CreateObjectAnswer createObjectAnswer = new CreateObjectAnswer(snapshotObjectTo);
             result = new CreateCmdResult(null, createObjectAnswer);
@@ -1514,61 +1792,43 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Persists snapshot metadata in snapshot_details table.
-     *
-     * Persists ONTAP snapshot metadata in {@code snapshot_details} for revert and delete.
+     * Persists ONTAP snapshot metadata in {@code snapshot_details} for revert, delete, and
+     * create-volume-from-snapshot.
      *
      * <p>Volume-snapshot delete reads {@code base_ontap_fv_id} and {@code ontap_snap_id} here
      * during {@link #deleteCloudStackVolumeSnapshot}; missing rows prevent ONTAP cleanup.</p>
      *
-     * @param csSnapshotId      CloudStack snapshot ID
-     * @param csVolumeId        Source CloudStack volume ID
-     * @param flexVolUuid       ONTAP FlexVolume UUID
-     * @param ontapSnapshotUuid ONTAP FlexVolume snapshot UUID
-     * @param snapshotName      ONTAP snapshot name
-     * @param volumePath        Path of the volume file/LUN within the FlexVolume (for restore)
-     * @param storagePoolId     Primary storage pool ID
-     * @param protocol          Storage protocol (NFS3 or ISCSI)
-     * @param lunUuid           LUN UUID (only for iSCSI, null for NFS)
+     * <p>All rows go through {@link #persistSnapshotDetail} so DAO writes stay consistent;
+     * optional fields (LUN uuid, IOPS) are skipped when unset.</p>
+     *
+     * @param csSnapshotId CloudStack snapshot ID
+     * @param details      {@code snapshot_details} name to value, keyed by {@link OntapStorageConstants};
+     *                     entries with null or blank values are skipped
      */
-    private void updateSnapshotDetails(long csSnapshotId, long csVolumeId, String flexVolUuid,
-                                        String ontapSnapshotUuid, String snapshotName,
-                                        String volumePath, long storagePoolId, String protocol,
-                                        String lunUuid) {
-        SnapshotDetailsVO snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.SRC_CS_VOLUME_ID, String.valueOf(csVolumeId), false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.BASE_ONTAP_FV_ID, flexVolUuid, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.ONTAP_SNAP_ID, ontapSnapshotUuid, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.ONTAP_SNAP_NAME, snapshotName, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.VOLUME_PATH, volumePath, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.PRIMARY_POOL_ID, String.valueOf(storagePoolId), false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                OntapStorageConstants.PROTOCOL, protocol, false);
-        snapshotDetailsDao.persist(snapshotDetail);
-
-        // Store LUN UUID for iSCSI volumes (required for LUN restore API)
-        if (lunUuid != null && !lunUuid.isEmpty()) {
-            snapshotDetail = new SnapshotDetailsVO(csSnapshotId,
-                    OntapStorageConstants.LUN_DOT_UUID, lunUuid, false);
-            snapshotDetailsDao.persist(snapshotDetail);
+    private void updateSnapshotDetails(long csSnapshotId, Map<String, String> details) {
+        for (Map.Entry<String, String> detail : details.entrySet()) {
+            persistSnapshotDetail(csSnapshotId, detail.getKey(), detail.getValue());
         }
+    }
+
+    /**
+     * Adds an IOPS entry to {@code details} only when {@code iops} is non-null and positive.
+     */
+    private static void putPositiveIopsDetail(Map<String, String> details, String detailName, Long iops) {
+        if (iops != null && iops > 0) {
+            details.put(detailName, String.valueOf(iops));
+        }
+    }
+
+    /**
+     * Persists one {@code snapshot_details} row. No-op when {@code value} is null or blank so
+     * optional keys (e.g. LUN uuid on NFS) share the same DAO path as required keys.
+     */
+    private void persistSnapshotDetail(long csSnapshotId, String detailName, String value) {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        snapshotDetailsDao.persist(new SnapshotDetailsVO(csSnapshotId, detailName, value, false));
     }
 
 }
