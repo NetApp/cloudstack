@@ -144,7 +144,24 @@ class OntapRestClient:
         url = self._base + path
         resp = requests.delete(url, auth=self._auth, params=params,
                                verify=False, timeout=30)
+        if not resp.ok:
+            raise requests.HTTPError(
+                "%s for url: %s body=%s"
+                % (resp.status_code, resp.url, resp.text),
+                response=resp,
+            )
+
+    def _patch(self, path, payload=None, params=None):
+        url = self._base + path
+        resp = requests.patch(url, auth=self._auth, params=params,
+                              json=payload or {}, verify=False, timeout=30)
         resp.raise_for_status()
+        if resp.content:
+            try:
+                return resp.json()
+            except ValueError:
+                return None
+        return None
 
     def delete_volume(self, name):
         """Delete the ONTAP FlexVol with the given name. No-op if not found."""
@@ -273,6 +290,126 @@ class OntapRestClient:
             return []
         return [r.get("name", "") for r in resp.get("records", [])
                 if r.get("name") not in (".", "..")]
+
+    def _unmap_lun(self, svm_name, lun_uuid):
+        """Best-effort removal of all lun-maps for a LUN UUID."""
+        try:
+            maps = self._get(
+                "/protocols/san/lun-maps",
+                params={
+                    "svm.name": svm_name,
+                    "lun.uuid": lun_uuid,
+                    "fields": "lun.uuid,igroup.uuid",
+                },
+            )
+            for lun_map in maps.get("records", []):
+                mapped_lun = lun_map.get("lun", {}).get("uuid") or lun_uuid
+                igroup_uuid = lun_map.get("igroup", {}).get("uuid")
+                if not igroup_uuid:
+                    continue
+                try:
+                    self._delete(
+                        "/protocols/san/lun-maps/%s/%s"
+                        % (mapped_lun, igroup_uuid)
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _offline_lun(self, svm_name, lun_path, lun_uuid):
+        """Take LUN offline. Lab ONTAP rejects allow_delete_online."""
+        try:
+            self._patch(
+                "/storage/luns/%s" % lun_uuid,
+                payload={"enabled": False, "status": {"state": "offline"}},
+            )
+        except Exception:
+            try:
+                self._patch(
+                    "/storage/luns/%s" % lun_uuid,
+                    payload={"enabled": False},
+                )
+            except Exception:
+                return
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            cur = self.get_lun(svm_name, lun_path)
+            if not cur:
+                return
+            state = (
+                (cur.get("status") or {}).get("state")
+                or ("online" if cur.get("enabled") else "offline")
+            )
+            if str(state).lower() == "offline" or cur.get("enabled") is False:
+                return
+            time.sleep(2)
+
+    def _delete_lun_clones(self, svm_name, parent_uuid):
+        """Delete FlexClone child LUNs so the parent cache LUN can be removed."""
+        try:
+            data = self._get(
+                "/storage/luns",
+                params={
+                    "svm.name": svm_name,
+                    "fields": "name,uuid,clone",
+                },
+            )
+        except Exception:
+            return
+        for child in data.get("records", []):
+            clone = child.get("clone") or {}
+            source = clone.get("source") or {}
+            if source.get("uuid") != parent_uuid:
+                continue
+            child_path = child.get("name")
+            child_uuid = child.get("uuid")
+            if not child_path or not child_uuid:
+                continue
+            self._unmap_lun(svm_name, child_uuid)
+            self._offline_lun(svm_name, child_path, child_uuid)
+            try:
+                self._delete("/storage/luns/%s" % child_uuid)
+            except Exception:
+                pass
+
+    def delete_lun(self, svm_name, lun_path):
+        """Unmap + offline + delete a LUN by full path. No-op if missing."""
+        lun = self.get_lun(svm_name, lun_path)
+        if not lun:
+            return False
+        uuid = lun.get("uuid")
+        if not uuid:
+            return False
+
+        # Mapped LUNs / FlexClone parents cannot be deleted until dependents go.
+        self._unmap_lun(svm_name, uuid)
+        self._delete_lun_clones(svm_name, uuid)
+        self._offline_lun(svm_name, lun_path, uuid)
+        if not self.get_lun(svm_name, lun_path):
+            return True
+        # Do not pass allow_delete_online — rejected on this ONTAP build.
+        self._delete("/storage/luns/%s" % uuid)
+        return True
+
+    def delete_file_in_volume(self, vol_name, file_path):
+        """
+        Delete a file inside a FlexVol via ONTAP files API.
+
+        ``file_path`` may be absolute (``/foo/bar``) or relative to volume root.
+        Returns True if a delete was attempted on an existing volume.
+        """
+        vol = self.get_volume(vol_name)
+        if not vol:
+            return False
+        vol_uuid = vol.get("uuid", "")
+        if not vol_uuid:
+            return False
+        from urllib.parse import quote
+        path = file_path if file_path.startswith("/") else "/" + file_path
+        encoded_path = quote(path, safe="")
+        self._delete("/storage/volumes/%s/files/%s" % (vol_uuid, encoded_path))
+        return True
 
 
 # ---------------------------------------------------------------------------
