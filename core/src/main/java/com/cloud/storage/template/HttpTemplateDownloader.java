@@ -251,7 +251,8 @@ public class HttpTemplateDownloader extends ManagedContextRunnable implements Te
 
     private boolean copyBytes(File file, InputStream in, RandomAccessFile out) throws IOException {
         byte[] buffer = new byte[CHUNK_SIZE];
-        long offset = 0;
+        // Absolute file position for subsequent writes, seeks, and format verification.
+        long offset = out.getFilePointer();
         VerifyFormat verifyFormat = new VerifyFormat(file);
         status = Status.IN_PROGRESS;
         while (status != Status.ABORTED) {

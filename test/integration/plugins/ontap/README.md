@@ -21,8 +21,19 @@
 This folder contains end-to-end integration tests for the NetApp ONTAP primary storage plugin in Apache CloudStack. The tests use the **Marvin** framework to drive real CloudStack API calls against a live management server and verify outcomes on a real ONTAP storage system.
 
 CI wiring:
-- Bundles: `private-cicd/marvin/bundles.txt`
-- Zone config: `private-cicd/marvin/zones/` (downstream only)
+- Pipeline: `private-cicd/Jenkinsfile` (downstream only)
+- Inventory schema: `private-cicd/config/vm-inventory.yaml.example`
+- Runtime config: generated from a populated Jenkins Secret file and separate
+  Jenkins credentials; populated inventory and real credentials are never
+  committed
+- Test order: `setup_zone`, `iscsi`, then `nfs3`
+- Archived results: `presubmit-results/phase2/marvin/`
+
+The pipeline installs the version-matched Marvin archive produced by the
+CloudStack package build, stages this directory on a reverted lab VM, and runs
+the protocol batches sequentially. See
+[`private-cicd/docs/PRIVATE-CICD-GUIDE.md`](../../../../private-cicd/docs/PRIVATE-CICD-GUIDE.md)
+for the deployment, health-gate, and artifact contracts.
 
 ---
 
@@ -191,19 +202,23 @@ Marvin also writes raw logs to `/tmp/MarvinLogs/<run>/` during execution.
 ```bash
 # Single suite (e.g. NFS3 pool lifecycle)
 PYTHONPATH=test/integration/plugins/ontap \
-test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python \
+    test/integration/plugins/ontap/nose_compat.py --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     test/integration/plugins/ontap/nfs3/pool/test_pool_lifecycle.py -v
 
 # By tag
 PYTHONPATH=test/integration/plugins/ontap \
-test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python \
+    test/integration/plugins/ontap/nose_compat.py --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     -a tags=iscsi_workflow \
     test/integration/plugins/ontap/iscsi/pool/test_pool_lifecycle.py -v
 ```
 
 > **Important:** `PYTHONPATH=test/integration/plugins/ontap` is always required. Test files import `ontap_test_base` from the parent directory.
+
+> **Python 3.10+:** Always invoke legacy nose through `nose_compat.py`. The wrapper restores the `collections.Callable` alias that nose test discovery requires.
 
 > **Single-host lab:** Suites within a batch run **sequentially** (not in parallel). iSCSI completes before NFS3 starts in `both`/`all` so the one KVM host is not shared across protocol operations simultaneously.
 
@@ -330,6 +345,7 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
 | iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
+| `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
 | `setup_zone` steps 11–12 slow on first run | System VMs and template download after zone enable | Normal — first run may take up to ~60 min; re-runs pass quickly when already ready |
 | `cleanup_zone` pool delete fails | Pool stuck in Maintenance or KVM NFS mount stale | Re-run cleanup; check host connectivity; manually `umount /mnt/<pool-uuid>` on KVM if needed |
