@@ -32,7 +32,7 @@ CI wiring:
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (62 tests)
+├── TEST_CASES.md                 # Full test case reference table (87 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -69,7 +69,7 @@ The ONTAP plugin (`plugins/storage/volume/ontap/`) integrates CloudStack's prima
 
 | Aspect | NFS3 | iSCSI |
 |--------|------|-------|
-| ONTAP object per pool | FlexVol + export policy | FlexVol + igroup per KVM host |
+| ONTAP object per pool | FlexVol + export policy | FlexVol; igroups are shared per KVM host and SVM |
 | ONTAP object per CS volume | None (FlexVol is shared) | One LUN inside the FlexVol |
 | Host connectivity | NFS mount | iSCSI login (IQN-based) |
 | Volume detach from running VM | Works via virtio hot-unplug | Requires KVM guest to support SCSI hot-unplug |
@@ -244,13 +244,15 @@ pool = self.__class__.pool
 self.pool = pool
 ```
 
-**Guard assertion at the start of every test (except test_01)**
+**Guard assertion at the start of every test that depends on a previous one**
 
-Every test after the first starts with an assertion that the previous step's resource exists. This produces a clear, readable failure message instead of a confusing `AttributeError`:
+Every test in a sequential workflow starts with an assertion that the previous step's resource exists. This produces a clear, readable failure message instead of a confusing `AttributeError`:
 ```python
-def test_03_enable_storage_pool(self):
-    self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+def test_05_enable_storage_pool(self):
+    self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
 ```
+
+Isolated negative tests own everything they create, so they carry no such guard. In the pool lifecycle and zone-scoped suites the two create-rejection negatives are numbered `test_01` and `test_02` so that a misconfigured SVM fails within a minute rather than after the full workflow.
 
 **Creating a storage pool — always use indexed `details[N].key` syntax**
 
@@ -269,6 +271,15 @@ CloudStack operations are asynchronous. Use `_poll_pool_state()` rather than rea
 result = self._poll_pool_state(pool.id, "Maintenance", timeout=120)
 self.assertEqual(result.state, "Maintenance")
 ```
+
+**Shared iSCSI igroups**
+
+iSCSI igroups are named from the host UUID and SVM, not from the storage pool.
+Each iSCSI suite snapshots existing host igroups during `setUpClass()` and
+checks that pool-only operations preserve that baseline. Tests may therefore
+run while another ONTAP iSCSI pool uses the same SVM. The negative tests that
+deliberately delete igroups still require exclusive SVM use and skip when
+another ONTAP pool is present.
 
 ---
 
@@ -295,7 +306,7 @@ self.assertEqual(result.state, "Maintenance")
 | `get_data_lifs(svm_name)` | NFS data LIF count | NFS3 pool lifecycle |
 | `get_igroup(svm_name, name)` | iSCSI igroup existence and initiator list | iSCSI suites |
 | `list_luns_in_volume(svm_name, vol_name)` | LUNs present in a FlexVol | iSCSI volume/instance suites |
-| `list_lun_maps_for_volume(svm_name, vol_name)` | Active LUN-maps for a volume | iSCSI instance suite |
+| `list_lun_maps_for_volume(svm_name, vol_name)` | Active LUN-maps for a volume | iSCSI pool-with-volumes/instance suites |
 | `list_files_in_volume(svm_name, vol_name)` | Files inside a FlexVol | NFS3 instance suite |
 
 ---
@@ -304,14 +315,14 @@ self.assertEqual(result.state, "Maintenance")
 
 | Suite | File | Tests | What it covers |
 |-------|------|-------|---------------|
-| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete |
-| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
+| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/export policy |
+| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 10 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy and cancel-maintenance after CS volume deletion |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/export policy deletes |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
-| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
-| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
+| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/igroups |
+| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 11 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and cancel-maintenance after CS volume deletion |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/igroup deletes |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
 
