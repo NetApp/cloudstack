@@ -696,15 +696,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
         cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
         cmd.id = self.__class__.vm.id
-        try:
-            self.apiClient.stopVirtualMachine(cmd)
-        except Exception as exc:
-            # Marvin can lose the management API connection while polling an
-            # already-submitted async stop job. The VM state is authoritative,
-            # so continue polling before treating the stop as failed.
-            logger.warning(
-                "stopVirtualMachine polling failed; checking VM state: %s",
-                exc)
+        self.apiClient.stopVirtualMachine(cmd)
 
         result = self._poll_vm_state(self.__class__.vm.id, "Stopped",
                                      timeout=300)
