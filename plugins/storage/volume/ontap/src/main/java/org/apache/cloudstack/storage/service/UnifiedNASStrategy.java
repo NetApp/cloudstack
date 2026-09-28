@@ -50,6 +50,7 @@ import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.cloudstack.storage.volume.VolumeObject;
@@ -58,6 +59,7 @@ import org.apache.logging.log4j.Logger;
 
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.storage.ResizeVolumeCommand;
+import com.cloud.agent.api.to.DataTO;
 import com.cloud.agent.api.to.StorageFilerTO;
 import com.cloud.host.HostVO;
 import com.cloud.storage.Storage;
@@ -608,7 +610,11 @@ public class UnifiedNASStrategy extends NASStrategy {
 
         try {
             logger.info("createVolumeOnKVMHost: Sending CreateObjectCommand to KVM agent for volume: {}", volumeInfo.getUuid());
-            CreateObjectCommand cmd = new CreateObjectCommand(volumeInfo.getTO());
+            DataTO dataTO = volumeInfo.getTO();
+            if (dataTO instanceof VolumeObjectTO) {
+                ((VolumeObjectTO) dataTO).setFormat(Storage.ImageFormat.QCOW2);
+            }
+            CreateObjectCommand cmd = new CreateObjectCommand(dataTO);
             EndPoint ep = epSelector.select(volumeInfo);
             if (ep == null) {
                 String errMsg = "No remote endpoint to send CreateObjectCommand, check if host is up";
