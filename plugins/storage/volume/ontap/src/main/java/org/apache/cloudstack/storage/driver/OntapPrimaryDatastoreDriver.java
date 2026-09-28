@@ -31,6 +31,7 @@ import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.Storage;
+import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeDetailVO;
@@ -113,6 +114,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Inject private SnapshotDetailsDao snapshotDetailsDao;
     @Inject private SnapshotDao snapshotDao;
     @Inject private VMTemplatePoolDao vmTemplatePoolDao;
+    @Inject private StorageManager storageManager;
 
     @Override
     public Map<String, String> getCapabilities() {
@@ -1188,8 +1190,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     // Only retrieve LUN name for iSCSI volumes
                     grantAccessIscsi(host, volumeVO, details, svmName, storagePool);
                 } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                    // For NFS, no access grant needed - file is accessible via mount
-                    logger.debug("grantAccess: NFS volume [{}], no igroup mapping required", volumeVO.getUuid());
+                    if (shouldUpdateNfsExportForMigration(volumeVO)) {
+                        updateNfsExportPolicyForHost(storagePool, host, details, AccessGroup.HostRuleAction.ADD);
+                        if (!storageManager.connectHostToSharedPool(host, storagePool.getId())) {
+                            throw new CloudRuntimeException(String.format("Failed to connect host [%s] to NFS storage pool [%s]",
+                                    host.getName(), storagePool.getName()));
+                        }
+                    } else {
+                        logger.debug("grantAccess: NFS volume [{}] is not migrating, skipping export policy update", volumeVO.getUuid());
+                    }
                     return true;
                 }
                 volumeVO.setPoolType(storagePool.getPoolType());
@@ -1474,7 +1483,42 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 return;
             }
             unmapLunFromHost(storageStrategy, svmName, lunName, accessGroupName, host);
+        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+            if (storagePool.getScope() == ScopeType.CLUSTER
+                    && host.getClusterId() != null
+                    && storagePool.getClusterId() != null
+                    && !host.getClusterId().equals(storagePool.getClusterId())) {
+                updateNfsExportPolicyForHost(storagePool, host, details, AccessGroup.HostRuleAction.REMOVE);
+            }
         }
+    }
+
+    /**
+     * Offline copy grants dest access after createAsync, while the dest volume is still Ready/Allocated
+     * and unattached. Source is already Migrating. Create itself never calls grantAccess.
+     */
+    private boolean shouldUpdateNfsExportForMigration(VolumeVO volumeVO) {
+        if (Volume.State.Migrating.equals(volumeVO.getState())) {
+            return true;
+        }
+        return isUnattachedMigrationDestination(volumeVO);
+    }
+
+    private boolean isUnattachedMigrationDestination(VolumeVO volumeVO) {
+        return volumeVO.getInstanceId() == null
+                && (Volume.State.Ready.equals(volumeVO.getState())
+                        || Volume.State.Allocated.equals(volumeVO.getState())
+                        || Volume.State.Creating.equals(volumeVO.getState()));
+    }
+
+    private void updateNfsExportPolicyForHost(StoragePoolVO storagePool, Host host, Map<String, String> details,
+            AccessGroup.HostRuleAction action) {
+        AccessGroup accessGroup = new AccessGroup();
+        accessGroup.setStoragePoolId(storagePool.getId());
+        accessGroup.setHostsToConnect(List.of((HostVO) host));
+        accessGroup.setHostRuleAction(action);
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        storageStrategy.updateAccessGroup(accessGroup);
     }
 
     /**

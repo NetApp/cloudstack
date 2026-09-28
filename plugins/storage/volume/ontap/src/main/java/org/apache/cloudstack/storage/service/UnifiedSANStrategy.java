@@ -48,6 +48,11 @@ import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import javax.inject.Inject;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import com.cloud.host.HostVO;
 import com.cloud.storage.VolumeDetailVO;
@@ -781,11 +786,10 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
 
         // Create if not exists
-        Map<String, String> enableMap = Map.of(
-                OntapStorageConstants.LUN_DOT_NAME, lunName,
-                OntapStorageConstants.SVM_DOT_NAME, svmName,
-                OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName
-        );
+        Map<String, String> enableMap = new HashMap<>();
+        enableMap.put(OntapStorageConstants.LUN_DOT_NAME, lunName);
+        enableMap.put(OntapStorageConstants.SVM_DOT_NAME, svmName);
+        enableMap.put(OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName);
         String response = enableLogicalAccess(enableMap);
         if (response == null ) {
             throw new CloudRuntimeException("Failed to map LUN [" + lunName + "] to iGroup [" + accessGroupName + "]");
@@ -793,6 +797,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         logger.trace("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}] with LUN number [{}]", lunName, accessGroupName, response);
         return response;
     }
+
     /**
      * Reverts a LUN to a snapshot using the ONTAP CLI-based snapshot file restore API.
      *
