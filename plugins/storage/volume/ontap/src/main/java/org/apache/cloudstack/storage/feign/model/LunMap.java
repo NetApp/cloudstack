@@ -31,6 +31,7 @@ public class LunMap {
   @JsonProperty("igroup")
   private Igroup igroup = null;
   @JsonProperty("logical_unit_number")
+  @JsonInclude(JsonInclude.Include.NON_DEFAULT)
   private Integer logicalUnitNumber = null;
   @JsonProperty("lun")
   private Lun lun = null;
