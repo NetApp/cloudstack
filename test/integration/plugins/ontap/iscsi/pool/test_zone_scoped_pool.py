@@ -29,13 +29,11 @@ creates, so they can be run on their own:
   02  Create rejected when no assigned online aggregate has enough free space
   03  Create zone-scoped iSCSI pool — pool.state Up; ONTAP FlexVol online;
       pre-existing shared igroups unchanged
-  04  Grow zone-scoped pool — capacity increased; FlexVol resized; state Up
-  05  Shrink zone-scoped pool — capacity back to its pre-grow value; state Up
-  06  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
-  07  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
-  08  Delete zone-scoped pool — pool gone; FlexVol deleted; baseline restored
-  09  Delete an empty pool whose FlexVol was removed behind CloudStack's back
-  10  Delete an empty pool whose igroups were removed beforehand
+  04  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
+  05  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
+  06  Delete zone-scoped pool — pool gone; FlexVol deleted; baseline restored
+  07  Delete an empty pool whose FlexVol was removed behind CloudStack's back
+  08  Delete an empty pool whose igroups were removed beforehand
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
