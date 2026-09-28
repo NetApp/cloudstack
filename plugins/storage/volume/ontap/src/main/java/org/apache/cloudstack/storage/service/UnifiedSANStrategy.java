@@ -313,7 +313,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             lunSpace.setSize(sizeInBytes);
             Lun patch = new Lun();
             patch.setSpace(lunSpace);
-            sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
             logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
         } catch (FeignException e) {
             throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
