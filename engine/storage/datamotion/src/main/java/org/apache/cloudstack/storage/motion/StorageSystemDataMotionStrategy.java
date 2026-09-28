@@ -48,6 +48,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreCapabilities;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreDriver;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.HostScope;
@@ -85,6 +86,7 @@ import org.apache.logging.log4j.LogManager;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.Command;
 import com.cloud.agent.api.MigrateAnswer;
 import com.cloud.agent.api.MigrateCommand;
 import com.cloud.agent.api.MigrateCommand.MigrateDiskInfo;
@@ -160,6 +162,10 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     private static final Random RANDOM = new Random(System.nanoTime());
     private static final int LOCK_TIME_IN_SECONDS = 300;
     private static final String OPERATION_NOT_SUPPORTED = "This operation is not supported.";
+    private static final String ONTAP_SVM_NAME_DETAIL = "svmName";
+    private static final String ONTAP_SVM_UUID_DETAIL = "svmUUID";
+    private static final String ONTAP_STORAGE_IP_DETAIL = "storageIP";
+    private static final String ONTAP_PROTOCOL_DETAIL = "protocol";
 
 
     @Inject
@@ -849,11 +855,10 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     private void handleVolumeMigrationForKVM(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo, AsyncCompletionCallback<CopyCommandResult> callback) {
         VirtualMachine vm = srcVolumeInfo.getAttachedVM();
 
-        checkAvailableForMigration(vm);
-
         String errMsg = null;
         HostVO hostVO = null;
         try {
+            checkAvailableForMigration(vm);
             destVolumeInfo.getDataStore().getDriver().createAsync(destVolumeInfo.getDataStore(), destVolumeInfo, null);
             VolumeVO volumeVO = _volumeDao.findById(destVolumeInfo.getId());
             updatePathFromScsiName(volumeVO);
@@ -872,8 +877,12 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
             // re-retrieve volume to get any updated information from grant
             destVolumeInfo = _volumeDataFactory.getVolume(destVolumeInfo.getId(), destVolumeInfo.getDataStore());
 
-            // migrate the volume via the hypervisor
-            String path = migrateVolumeForKVM(srcVolumeInfo, destVolumeInfo, hostVO, "Unable to migrate the volume from non-managed storage to managed storage");
+            // migrate the volume via the hypervisor, unless the storage system can copy it between the pools itself
+            boolean useStorageSystemCopy = isSupportedOntapOfflineVolumeCopy(srcVolumeInfo, destVolumeInfo);
+            String path = migrateVolumeForKVM(srcVolumeInfo, destVolumeInfo, hostVO,
+                    useStorageSystemCopy ? "Unable to copy the volume between storage pools"
+                            : "Unable to migrate the volume from non-managed storage to managed storage",
+                    useStorageSystemCopy);
 
             updateVolumePath(destVolumeInfo.getId(), path);
             volumeVO = _volumeDao.findById(destVolumeInfo.getId());
@@ -2057,8 +2066,10 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 StoragePoolVO destStoragePool = _storagePoolDao.findById(destDataStore.getId());
                 StoragePoolVO sourceStoragePool = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
 
-                // do not initiate migration for the same PowerFlex/ScaleIO pool
-                if (sourceStoragePool.getId() == destStoragePool.getId() && sourceStoragePool.getPoolType() == Storage.StoragePoolType.PowerFlex) {
+                // do not initiate migration for the same PowerFlex/ScaleIO or ONTAP pool
+                if (sourceStoragePool.getId() == destStoragePool.getId()
+                        && (sourceStoragePool.getPoolType() == Storage.StoragePoolType.PowerFlex
+                                || isOntapPool(sourceStoragePool))) {
                     continue;
                 }
 
@@ -2099,7 +2110,10 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 destDataStore.getDriver().createAsync(destDataStore, destVolumeInfo, null);
 
                 managedStorageDestination = destStoragePool.isManaged();
-                String volumeIdentifier = managedStorageDestination ? destVolumeInfo.get_iScsiName() : destVolumeInfo.getUuid();
+                String volumeIdentifier = destVolumeInfo.getUuid();
+                if (destStoragePool.getPoolType() != StoragePoolType.NetworkFilesystem && managedStorageDestination) {
+                    volumeIdentifier = destVolumeInfo.get_iScsiName();
+                }
 
                 destVolume = _volumeDao.findById(destVolume.getId());
                 destVolume.setPath(volumeIdentifier);
@@ -2115,21 +2129,36 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 handleQualityOfServiceForVolumeMigration(destVolumeInfo, PrimaryDataStoreDriver.QualityOfServiceState.MIGRATION);
 
                 _volumeService.grantAccess(destVolumeInfo, destHost, destDataStore);
+                destVolumeInfo = _volumeDataFactory.getVolume(destVolume.getId(), destDataStore);
 
                 String destPath = generateDestPath(destHost, destStoragePool, destVolumeInfo);
 
                 MigrateCommand.MigrateDiskInfo migrateDiskInfo;
 
-                boolean isNonManagedToNfs = supportStoragePoolType(sourceStoragePool.getPoolType(), StoragePoolType.Filesystem, StoragePoolType.CLVM, StoragePoolType.CLVM_NG) && destStoragePool.getPoolType() == StoragePoolType.NetworkFilesystem && !managedStorageDestination;
-                if (isNonManagedToNfs) {
+                boolean isNonManagedToNfs = supportStoragePoolType(sourceStoragePool.getPoolType(),
+                        StoragePoolType.Filesystem, StoragePoolType.CLVM, StoragePoolType.CLVM_NG)
+                        && destStoragePool.getPoolType() == StoragePoolType.NetworkFilesystem
+                        && !managedStorageDestination;
+                // ONTAP NFS is managed, but the dest is still a file on an NFS export, not a block device.
+                boolean isOntapNfsDestination = isOntapPool(destStoragePool)
+                        && destStoragePool.getPoolType() == StoragePoolType.NetworkFilesystem;
+                if (isNonManagedToNfs || isOntapNfsDestination) {
                     migrateDiskInfo = new MigrateCommand.MigrateDiskInfo(srcVolumeInfo.getPath(),
                             MigrateCommand.MigrateDiskInfo.DiskType.FILE,
                             MigrateCommand.MigrateDiskInfo.DriverType.QCOW2,
                             MigrateCommand.MigrateDiskInfo.Source.FILE,
-                            connectHostToVolume(destHost, destVolumeInfo.getPoolId(), volumeIdentifier));
+                            destPath);
                 } else {
                     String backingPath = generateBackingPath(destStoragePool, destVolumeInfo);
-                    migrateDiskInfo = configureMigrateDiskInfo(srcVolumeInfo, destPath, backingPath);
+                    String sourcePath = srcVolumeInfo.getPath();
+                    if (sourceStoragePool.isManaged()) {
+                        if (sourceStoragePool.getPoolType() == StoragePoolType.OntapiSCSI) {
+                            _volumeService.grantAccess(srcVolumeInfo, srcHost, srcVolumeInfo.getDataStore());
+                            srcVolumeInfo = _volumeDataFactory.getVolume(srcVolumeInfo.getId(), srcVolumeInfo.getDataStore());
+                        }
+                        sourcePath = connectHostToVolume(srcHost, srcVolumeInfo.getPoolId(), srcVolumeInfo.get_iScsiName());
+                    }
+                    migrateDiskInfo = configureMigrateDiskInfo(srcVolumeInfo, destPath, backingPath, sourcePath);
                     migrateDiskInfo = updateMigrateDiskInfoForBlockDevice(migrateDiskInfo, destStoragePool);
                     migrateDiskInfo.setSourceDiskOnStorageFileSystem(isStoragePoolTypeOfFile(sourceStoragePool));
                     migrateDiskInfoList.add(migrateDiskInfo);
@@ -2137,8 +2166,14 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 migrateDiskInfo.setSourcePoolType(sourceStoragePool.getPoolType());
                 migrateDiskInfo.setDestPoolType(destVolumeInfo.getStoragePoolType());
                 prepareDiskWithSecretConsumerDetail(vmTO, srcVolumeInfo, destVolumeInfo.getPath());
+                if (isOntapPool(destStoragePool)) {
+                    prepareDiskWithDestinationVolume(vmTO, srcVolumeInfo, destVolumeInfo);
+                }
 
                 migrateStorage.put(srcVolumeInfo.getPath(), migrateDiskInfo);
+                if (!srcVolumeInfo.getPath().equals(migrateDiskInfo.getSerialNumber())) {
+                    migrateStorage.put(migrateDiskInfo.getSerialNumber(), migrateDiskInfo);
+                }
 
                 srcVolumeInfoToDestVolumeInfo.put(srcVolumeInfo, destVolumeInfo);
             }
@@ -2360,6 +2395,9 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
      * Returns the iScsi connection path.
      */
     protected String generateDestPath(Host destHost, StoragePoolVO destStoragePool, VolumeInfo destVolumeInfo) {
+        if (destStoragePool.getPoolType() == StoragePoolType.NetworkFilesystem) {
+            return connectHostToVolume(destHost, destVolumeInfo.getPoolId(), destVolumeInfo.getUuid());
+        }
         return connectHostToVolume(destHost, destVolumeInfo.getPoolId(), destVolumeInfo.get_iScsiName());
     }
 
@@ -2371,7 +2409,11 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
      * Configures a {@link MigrateDiskInfo} object with disk type of BLOCK, Driver type RAW and Source DEV
      */
     protected MigrateCommand.MigrateDiskInfo configureMigrateDiskInfo(VolumeInfo srcVolumeInfo, String destPath, String backingPath) {
-        return new MigrateCommand.MigrateDiskInfo(srcVolumeInfo.getPath(),
+        return configureMigrateDiskInfo(srcVolumeInfo, destPath, backingPath, srcVolumeInfo.getPath());
+    }
+
+    protected MigrateCommand.MigrateDiskInfo configureMigrateDiskInfo(VolumeInfo srcVolumeInfo, String destPath, String backingPath, String sourcePath) {
+        return new MigrateCommand.MigrateDiskInfo(sourcePath,
                 MigrateCommand.MigrateDiskInfo.DiskType.BLOCK,
                 MigrateCommand.MigrateDiskInfo.DriverType.RAW,
                 MigrateCommand.MigrateDiskInfo.Source.DEV, destPath, backingPath);
@@ -2414,7 +2456,9 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
      * Sets the volume path as the iScsi name in case of a configured iScsi.
      */
     protected void setVolumePath(VolumeVO volume) {
-        volume.setPath(volume.get_iScsiName());
+        if (StringUtils.isNotBlank(volume.get_iScsiName())) {
+            volume.setPath(volume.get_iScsiName());
+        }
     }
 
     /**
@@ -2502,8 +2546,8 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 VolumeVO volumeVO = _volumeDao.findById(destVolumeInfo.getId());
                 StoragePoolVO srcPoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
                 StoragePoolVO destPoolVO = _storagePoolDao.findById(destVolumeInfo.getPoolId());
-                volumeVO.setFormat(destPoolVO != null && destPoolVO.getPoolType() == StoragePoolType.CLVM
-                        ? ImageFormat.RAW : ImageFormat.QCOW2);
+                volumeVO.setFormat(destPoolVO != null && supportStoragePoolType(destPoolVO.getPoolType(),
+                        StoragePoolType.CLVM, StoragePoolType.OntapiSCSI) ? ImageFormat.RAW : ImageFormat.QCOW2);
                 volumeVO.setLastId(srcVolumeInfo.getId());
 
                 if (Objects.equals(srcVolumeInfo.getDiskOfferingId(), destVolumeInfo.getDiskOfferingId())) {
@@ -2524,6 +2568,10 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                     clvmPoolManager.setClvmLockHostId(destVolumeInfo.getId(), destHost.getId());
                 }
 
+                if (srcPoolVO != null && srcPoolVO.getPoolType() == StoragePoolType.OntapiSCSI) {
+                    disconnectSourceVolumeAfterMigration(srcVolumeInfo, srcHost);
+                }
+
                 _volumeService.copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Event.OperationSucceeded, null, srcVolumeInfo, destVolumeInfo, false);
 
                 // Update the volume ID for snapshots on secondary storage
@@ -2535,7 +2583,12 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
             }
             else {
                 try {
-                    disconnectHostFromVolume(destHost, destVolumeInfo.getPoolId(), destVolumeInfo.get_iScsiName());
+                    StoragePoolVO destPool = _storagePoolDao.findById(destVolumeInfo.getPoolId());
+                    String volumeIdentifier = destVolumeInfo.get_iScsiName();
+                    if (destPool != null && destPool.getPoolType() == StoragePoolType.NetworkFilesystem) {
+                        volumeIdentifier = destVolumeInfo.getUuid();
+                    }
+                    disconnectHostFromVolume(destHost, destVolumeInfo.getPoolId(), volumeIdentifier);
                 }
                 catch (Exception e) {
                     logger.debug("Failed to disconnect (new) dest volume", e);
@@ -2568,6 +2621,17 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
         }
     }
 
+    protected void disconnectSourceVolumeAfterMigration(VolumeInfo srcVolumeInfo, Host srcHost) {
+        if (srcHost != null) {
+            try {
+                disconnectHostFromVolume(srcHost, srcVolumeInfo.getPoolId(), srcVolumeInfo.get_iScsiName());
+            } catch (Exception e) {
+                logger.warn("Failed to disconnect source volume [{}] from source host [{}] after migration",
+                        srcVolumeInfo.getId(), srcHost.getId(), e);
+            }
+        }
+    }
+
     private Long getSuitableDiskOfferingForVolumeOnPool(VolumeVO volume, StoragePoolVO pool) {
         List<DiskOfferingVO> diskOfferings = _diskOfferingDao.listAllActiveAndNonComputeDiskOfferings();
         for (DiskOfferingVO diskOffering : diskOfferings) {
@@ -2590,6 +2654,7 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
         newVol.setInstanceId(null);
         newVol.setChainInfo(null);
         newVol.setPath(null);
+        newVol.set_iScsiName(null);
         newVol.setFolder(null);
         newVol.setPodId(storagePoolVO.getPodId());
         newVol.setPoolId(storagePoolVO.getId());
@@ -2647,18 +2712,21 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     }
 
     private List<String> sendModifyTargetsCommand(ModifyTargetsCommand cmd, long hostId) {
-        ModifyTargetsAnswer modifyTargetsAnswer = (ModifyTargetsAnswer)agentManager.easySend(hostId, cmd);
+        Answer answer = agentManager.easySend(hostId, cmd);
 
-        if (modifyTargetsAnswer == null) {
+        if (answer == null) {
             throw new CloudRuntimeException("Unable to get an answer to the modify targets command");
         }
 
-        if (!modifyTargetsAnswer.getResult()) {
-            String msg = "Unable to modify targets on the following host: " + hostId;
-
-            throw new CloudRuntimeException(msg);
+        if (!answer.getResult()) {
+            throw new CloudRuntimeException(String.format("Unable to modify targets on host [%s]: %s", hostId, answer.getDetails()));
+        }
+        if (!(answer instanceof ModifyTargetsAnswer)) {
+            throw new CloudRuntimeException(String.format("Unexpected answer type [%s] while modifying targets on host [%s]",
+                    answer.getClass().getSimpleName(), hostId));
         }
 
+        ModifyTargetsAnswer modifyTargetsAnswer = (ModifyTargetsAnswer)answer;
         return modifyTargetsAnswer.getConnectedPaths();
     }
 
@@ -2705,6 +2773,13 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
         }
     }
 
+    protected void prepareDiskWithDestinationVolume(VirtualMachineTO vmTO, VolumeInfo srcVolume, VolumeInfo destVolume) {
+        if (vmTO.getDisks() != null) {
+            Arrays.stream(vmTO.getDisks()).filter(diskTO -> diskTO.getData().getId() == srcVolume.getId())
+                    .forEach(diskTO -> diskTO.setData(destVolume.getTO()));
+        }
+    }
+
     /**
     * At a high level: The source storage cannot be managed and
     *                  the destination storages can be all managed or all not managed, not mixed.
@@ -2728,7 +2803,8 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 throw new CloudRuntimeException("Destination storage pool with ID " + dataStore.getId() + " was not located.");
             }
 
-            if (srcStoragePoolVO.isManaged() && srcStoragePoolVO.getId() != destStoragePoolVO.getId()) {
+            if (srcStoragePoolVO.isManaged() && srcStoragePoolVO.getId() != destStoragePoolVO.getId()
+                    && !isSupportedOntapMigrationPoolPair(srcStoragePoolVO, destStoragePoolVO)) {
                 throw new CloudRuntimeException("Migrating a volume online with KVM from managed storage is not currently supported.");
             }
 
@@ -2738,6 +2814,53 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 throw new CloudRuntimeException("Destination storage pools must be either all managed or all not managed");
             }
         }
+    }
+
+    protected boolean isSupportedOntapMigrationPoolPair(StoragePoolVO srcStoragePoolVO, StoragePoolVO destStoragePoolVO) {
+        if (!isOntapPool(srcStoragePoolVO) || !isOntapPool(destStoragePoolVO)) {
+            return false;
+        }
+
+        Map<String, String> srcDetails = _storagePoolDao.getDetails(srcStoragePoolVO.getId());
+        Map<String, String> destDetails = _storagePoolDao.getDetails(destStoragePoolVO.getId());
+        if (srcDetails == null || destDetails == null) {
+            return false;
+        }
+
+        String srcSvmName = srcDetails.get(ONTAP_SVM_NAME_DETAIL);
+        String destSvmName = destDetails.get(ONTAP_SVM_NAME_DETAIL);
+        String srcSvmUuid = srcDetails.get(ONTAP_SVM_UUID_DETAIL);
+        String destSvmUuid = destDetails.get(ONTAP_SVM_UUID_DETAIL);
+        String srcStorageIp = srcDetails.get(ONTAP_STORAGE_IP_DETAIL);
+        String destStorageIp = destDetails.get(ONTAP_STORAGE_IP_DETAIL);
+        String srcProtocol = srcDetails.get(ONTAP_PROTOCOL_DETAIL);
+        String destProtocol = destDetails.get(ONTAP_PROTOCOL_DETAIL);
+        boolean isSameSvm = StringUtils.isNotBlank(srcSvmUuid) || StringUtils.isNotBlank(destSvmUuid)
+                ? StringUtils.isNotBlank(srcSvmUuid) && srcSvmUuid.equals(destSvmUuid)
+                : StringUtils.isNotBlank(srcSvmName) && srcSvmName.equals(destSvmName);
+        return StringUtils.isNotBlank(srcStorageIp)
+                && srcStorageIp.equals(destStorageIp)
+                && isSameSvm
+                && StringUtils.isNotBlank(srcProtocol)
+                && srcProtocol.equalsIgnoreCase(destProtocol)
+                && srcStoragePoolVO.getPoolType() != null
+                && srcStoragePoolVO.getPoolType() == destStoragePoolVO.getPoolType();
+    }
+
+    protected boolean isOntapPool(StoragePoolVO storagePoolVO) {
+        return storagePoolVO != null && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePoolVO.getStorageProviderName());
+    }
+
+    protected boolean isSupportedOntapOfflineVolumeCopy(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo) {
+        StoragePoolVO srcStoragePoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
+        StoragePoolVO destStoragePoolVO = _storagePoolDao.findById(destVolumeInfo.getPoolId());
+        if (srcStoragePoolVO == null || destStoragePoolVO == null) {
+            return false;
+        }
+        StoragePoolType poolType = srcStoragePoolVO.getPoolType();
+        return (poolType == StoragePoolType.NetworkFilesystem || poolType == StoragePoolType.OntapiSCSI)
+                && poolType == destStoragePoolVO.getPoolType()
+                && isSupportedOntapMigrationPoolPair(srcStoragePoolVO, destStoragePoolVO);
     }
 
     private boolean canStorageSystemCreateVolumeFromVolume(long storagePoolId) {
@@ -3177,29 +3300,45 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     }
 
     private String migrateVolumeForKVM(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo, HostVO hostVO, String errMsg) {
+        return migrateVolumeForKVM(srcVolumeInfo, destVolumeInfo, hostVO, errMsg, false);
+    }
+
+    private String migrateVolumeForKVM(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo, HostVO hostVO, String errMsg,
+            boolean useStorageSystemCopy) {
         try {
             Map<String, String> srcDetails = getVolumeDetails(srcVolumeInfo);
             Map<String, String> destDetails = getVolumeDetails(destVolumeInfo);
 
             _volumeService.grantAccess(srcVolumeInfo, hostVO, srcVolumeInfo.getDataStore());
 
-            MigrateVolumeCommand migrateVolumeCommand = new MigrateVolumeCommand(srcVolumeInfo.getTO(), destVolumeInfo.getTO(),
-                    srcDetails, destDetails, StorageManager.KvmStorageOfflineMigrationWait.value());
+            Command command;
+            if (useStorageSystemCopy) {
+                CopyCommand copyCommand = new CopyCommand(srcVolumeInfo.getTO(), destVolumeInfo.getTO(),
+                        StorageManager.KvmStorageOfflineMigrationWait.value(), VirtualMachineManager.ExecuteInSequence.value());
+                copyCommand.setOptions(srcDetails);
+                copyCommand.setOptions2(destDetails);
+                command = copyCommand;
+            } else {
+                command = new MigrateVolumeCommand(srcVolumeInfo.getTO(), destVolumeInfo.getTO(),
+                        srcDetails, destDetails, StorageManager.KvmStorageOfflineMigrationWait.value());
+            }
 
             _volumeService.grantAccess(srcVolumeInfo, hostVO, srcVolumeInfo.getDataStore());
             handleQualityOfServiceForVolumeMigration(destVolumeInfo, PrimaryDataStoreDriver.QualityOfServiceState.MIGRATION);
             _volumeService.grantAccess(destVolumeInfo, hostVO, destVolumeInfo.getDataStore());
 
-            MigrateVolumeAnswer migrateVolumeAnswer = (MigrateVolumeAnswer)agentManager.send(hostVO.getId(), migrateVolumeCommand);
-            if (migrateVolumeAnswer == null || !migrateVolumeAnswer.getResult()) {
-                if (migrateVolumeAnswer != null && StringUtils.isNotEmpty(migrateVolumeAnswer.getDetails())) {
-                    throw new CloudRuntimeException(migrateVolumeAnswer.getDetails());
+            Answer answer = agentManager.send(hostVO.getId(), command);
+            if (answer == null || !answer.getResult()) {
+                if (answer != null && StringUtils.isNotEmpty(answer.getDetails())) {
+                    throw new CloudRuntimeException(answer.getDetails());
                 }
                 else {
                     throw new CloudRuntimeException(errMsg);
                 }
             }
-            return migrateVolumeAnswer.getVolumePath();
+            return useStorageSystemCopy
+                    ? ((VolumeObjectTO)((CopyCmdAnswer)answer).getNewData()).getPath()
+                    : ((MigrateVolumeAnswer)answer).getVolumePath();
         } catch (CloudRuntimeException ex) {
             throw ex;
         } catch (Exception ex) {
