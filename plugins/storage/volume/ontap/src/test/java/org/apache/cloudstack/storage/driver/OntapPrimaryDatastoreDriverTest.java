@@ -24,7 +24,9 @@ import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
+import com.cloud.storage.StorageManager;
 import com.cloud.storage.VMTemplateStoragePoolVO;
+import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.dao.VMTemplatePoolDao;
@@ -108,6 +110,9 @@ class OntapPrimaryDatastoreDriverTest {
     private VMTemplateStoragePoolVO templatePoolRef;
 
     @Mock
+    private StorageManager storageManager;
+
+    @Mock
     private DataStore dataStore;
 
     @Mock
@@ -143,10 +148,11 @@ class OntapPrimaryDatastoreDriverTest {
     private Map<String, String> storagePoolDetails;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         storagePoolDetails = new HashMap<>();
         storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name());
         storagePoolDetails.put(OntapStorageConstants.SVM_NAME, "svm1");
+        lenient().when(storageManager.connectHostToSharedPool(any(), anyLong())).thenReturn(true);
     }
 
     @Test
@@ -175,9 +181,27 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testCreateAsync_NullCallback_ThrowsException() {
-        assertThrows(InvalidParameterValueException.class,
-            () -> driver.createAsync(dataStore, volumeInfo, null));
+    void testCreateAsync_NullCallback_IsSupportedForStorageMigration() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        when(storagePool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+
+        CloudStackVolume mockCloudStackVolume = new CloudStackVolume();
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+            when(nasStrategy.createCloudStackVolume(any())).thenReturn(mockCloudStackVolume);
+
+            driver.createAsync(dataStore, volumeInfo, null);
+        }
     }
 
     @Test
@@ -496,6 +520,12 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testMigrationCapabilities() {
+        assertTrue(driver.requiresAccessForMigration(volumeInfo));
+        assertTrue(driver.zoneWideVolumesAvailableWithoutClusterMotion());
+    }
+
+    @Test
     void testGrantAccess_ClusterScope_Success() {
         // Setup
         when(dataStore.getId()).thenReturn(1L);
@@ -531,7 +561,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("7");
 
             // Execute
             boolean result = driver.grantAccess(volumeInfo, host, dataStore);
@@ -541,7 +571,54 @@ class OntapPrimaryDatastoreDriverTest {
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
             verify(sanStrategy).getAccessGroup(any());
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/7");
+            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/7");
             verify(sanStrategy, never()).validateInitiatorInAccessGroup(anyString(), anyString(), any(Igroup.class));
+        }
+    }
+
+    @Test
+    void testGrantAccess_UpdatesPathWhenOntapAssignsDifferentLunId() {
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePool.getPath()).thenReturn("iqn.1992-08.com.netapp:sn.123456");
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+
+        when(host.getName()).thenReturn("host1");
+        when(host.getUuid()).thenReturn("host-uuid-1");
+
+        VolumeDetailVO lunNameDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/lun1", false);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_NAME)).thenReturn(lunNameDetail);
+
+        AccessGroup existingAccessGroup = new AccessGroup();
+        Igroup existingIgroup = new Igroup();
+        existingIgroup.setName("igroup1");
+        existingAccessGroup.setIgroup(existingIgroup);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(sanStrategy);
+            utilityMock.when(() -> OntapStorageUtils.getIgroupName(anyString(), anyString()))
+                    .thenReturn("igroup1");
+
+            when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
+            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("1");
+
+            boolean result = driver.grantAccess(volumeInfo, host, dataStore);
+
+            assertTrue(result);
+            verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/1");
+            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/1");
         }
     }
 
@@ -593,7 +670,145 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).getAccessGroup(any());
             verify(sanStrategy).createAccessGroup(any());
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/0");
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
+        }
+    }
+
+    @Test
+    void testGrantAccess_NFSReady_DoesNotUpdateExportPolicy() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getUuid()).thenReturn("vol-uuid");
+        when(volumeVO.getState()).thenReturn(Volume.State.Ready);
+        when(volumeVO.getInstanceId()).thenReturn(50L);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            assertTrue(driver.grantAccess(volumeInfo, host, dataStore));
+            verify(nasStrategy, never()).updateAccessGroup(any());
+        }
+    }
+
+    @Test
+    void testGrantAccess_NFSReadyUnattachedDest_AddsHostToExportPolicy() throws Exception {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        HostVO hostVO = mock(HostVO.class);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getState()).thenReturn(Volume.State.Ready);
+        when(volumeVO.getInstanceId()).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
+            verify(nasStrategy).updateAccessGroup(argThat(ag -> ag.getHostRuleAction() == AccessGroup.HostRuleAction.ADD));
+            verify(storageManager).connectHostToSharedPool(hostVO, 1L);
+        }
+    }
+
+    @Test
+    void testGrantAccess_NFSMigrating_AddsHostToExportPolicy() throws Exception {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        HostVO hostVO = mock(HostVO.class);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getState()).thenReturn(Volume.State.Migrating);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
+
+            ArgumentCaptor<AccessGroup> captor = ArgumentCaptor.forClass(AccessGroup.class);
+            verify(nasStrategy).updateAccessGroup(captor.capture());
+            AccessGroup accessGroup = captor.getValue();
+            assertEquals(1L, accessGroup.getStoragePoolId());
+            assertEquals(AccessGroup.HostRuleAction.ADD, accessGroup.getHostRuleAction());
+            assertEquals(hostVO, accessGroup.getHostsToConnect().get(0));
+            verify(storageManager).connectHostToSharedPool(hostVO, 1L);
+        }
+    }
+
+    @Test
+    void testRevokeAccess_NFSSameCluster_DoesNotRemove() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        HostVO hostVO = mock(HostVO.class);
+        when(hostVO.getName()).thenReturn("host1");
+        when(hostVO.getClusterId()).thenReturn(10L);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getName()).thenReturn("test-volume");
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePool.getClusterId()).thenReturn(10L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            driver.revokeAccess(volumeInfo, hostVO, dataStore);
+            verify(nasStrategy, never()).updateAccessGroup(any());
+        }
+    }
+
+    @Test
+    void testRevokeAccess_NFSForeignCluster_RemovesHost() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        HostVO hostVO = mock(HostVO.class);
+        when(hostVO.getName()).thenReturn("host2");
+        when(hostVO.getClusterId()).thenReturn(20L);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getName()).thenReturn("test-volume");
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePool.getClusterId()).thenReturn(10L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            driver.revokeAccess(volumeInfo, hostVO, dataStore);
+
+            ArgumentCaptor<AccessGroup> captor = ArgumentCaptor.forClass(AccessGroup.class);
+            verify(nasStrategy).updateAccessGroup(captor.capture());
+            AccessGroup accessGroup = captor.getValue();
+            assertEquals(1L, accessGroup.getStoragePoolId());
+            assertEquals(AccessGroup.HostRuleAction.REMOVE, accessGroup.getHostRuleAction());
+            assertEquals(hostVO, accessGroup.getHostsToConnect().get(0));
         }
     }
 

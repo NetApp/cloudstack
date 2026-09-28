@@ -875,9 +875,10 @@ class UnifiedSANStrategyTest {
             // Execute
             String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
-            // Verify
+            ArgumentCaptor<LunMap> requestCaptor = ArgumentCaptor.forClass(LunMap.class);
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), requestCaptor.capture());
+            assertNull(requestCaptor.getValue().getLogicalUnitNumber());
             assertEquals("4", result);
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
         }
     }
 

@@ -347,6 +347,7 @@ public final class LibvirtMigrateCommandWrapper extends CommandWrapper<MigrateCo
                 }
 
                 deleteOrDisconnectDisksOnSourcePool(libvirtComputingResource, migrateDiskInfoList, disks);
+                disconnectDestinationOntapIscsiDisksOnSourceHost(libvirtComputingResource, mapMigrateStorage);
                 libvirtComputingResource.cleanOldSecretsByDiskDef(conn, disks);
             }
 
@@ -700,6 +701,28 @@ public final class LibvirtMigrateCommandWrapper extends CommandWrapper<MigrateCo
                 deleteLocalVolume(disk.getDiskPath());
             } else {
                 libvirtComputingResource.cleanupDisk(disk);
+            }
+        }
+    }
+
+    protected void disconnectDestinationOntapIscsiDisksOnSourceHost(final LibvirtComputingResource libvirtComputingResource,
+            final Map<String, MigrateDiskInfo> migrateStorage) {
+        if (MapUtils.isEmpty(migrateStorage)) {
+            return;
+        }
+
+        Set<String> disconnectedPaths = new HashSet<>();
+        for (MigrateDiskInfo migrateDiskInfo : migrateStorage.values()) {
+            String destinationPath = migrateDiskInfo.getSourceText();
+            if (migrateDiskInfo.getDestPoolType() != Storage.StoragePoolType.OntapiSCSI
+                    || StringUtils.isBlank(destinationPath) || !disconnectedPaths.add(destinationPath)) {
+                continue;
+            }
+
+            DiskDef destinationDisk = new DiskDef();
+            destinationDisk.setDiskPath(destinationPath);
+            if (!libvirtComputingResource.cleanupDisk(destinationDisk)) {
+                logger.warn("Failed to disconnect destination ONTAP iSCSI disk [{}] from the source host after migration", destinationPath);
             }
         }
     }
