@@ -275,24 +275,9 @@ public class StorageSystemDataMotionStrategyTest {
     }
 
     @Test
-    public void offlineMigrationBetweenSupportedOntapIscsiPoolsUsesCopyCommand() throws Exception {
+    public void offlineMigrationBetweenSupportedOntapIscsiPoolsUsesMigrateVolumeCommand() throws Exception {
         OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "ISCSI", "svm1", null,
                 StoragePoolType.OntapiSCSI, StoragePoolType.OntapiSCSI);
-        VolumeObjectTO copiedVolume = new VolumeObjectTO();
-        copiedVolume.setPath("copied-volume-path");
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class)))
-                .thenReturn(new CopyCmdAnswer(copiedVolume));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-        Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
-    }
-
-    @Test
-    public void offlineMigrationBetweenOntapPoolsWithDifferentProtocolUsesMigrateVolumeCommand() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "ISCSI", "svm1", null,
-                StoragePoolType.NetworkFilesystem, StoragePoolType.OntapiSCSI);
         Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
                 .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
 
@@ -300,6 +285,41 @@ public class StorageSystemDataMotionStrategyTest {
 
         Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
         Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
+    }
+
+    @Test(expected = CloudRuntimeException.class)
+    public void offlineMigrationBetweenOntapPoolsWithDifferentProtocolIsRejected() {
+        OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "svm1", null);
+        try {
+            strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
+        } finally {
+            Mockito.verify(context.callback).complete(Mockito.argThat(result ->
+                    result != null && result.isFailed()
+                            && result.getResult() != null
+                            && result.getResult().contains("Cross-protocol")));
+            Mockito.verify(context.destVolume.getDataStore().getDriver(), Mockito.never())
+                    .createAsync(Mockito.any(), Mockito.any(), Mockito.any());
+        }
+    }
+
+    @Test(expected = CloudRuntimeException.class)
+    public void offlineMigrationFromOntapIscsiToNfsIsRejected() {
+        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
+        VolumeInfo destVolume = Mockito.mock(VolumeInfo.class);
+        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
+        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
+        Mockito.doReturn(1L).when(srcVolume).getPoolId();
+        Mockito.doReturn(2L).when(destVolume).getPoolId();
+        Mockito.doReturn(1L).when(srcPool).getId();
+        Mockito.doReturn(2L).when(destPool).getId();
+        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(srcPool).getStorageProviderName();
+        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
+        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
+        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
+        Mockito.doReturn(Map.of("protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(1L);
+        Mockito.doReturn(Map.of("protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
+
+        strategy.checkUnsupportedOntapCrossProtocolMigration(srcVolume, destVolume);
     }
 
     @Test

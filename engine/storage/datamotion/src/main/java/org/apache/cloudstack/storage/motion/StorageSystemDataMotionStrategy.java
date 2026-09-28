@@ -859,6 +859,7 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
         HostVO hostVO = null;
         try {
             checkAvailableForMigration(vm);
+            checkUnsupportedOntapCrossProtocolMigration(srcVolumeInfo, destVolumeInfo);
             destVolumeInfo.getDataStore().getDriver().createAsync(destVolumeInfo.getDataStore(), destVolumeInfo, null);
             VolumeVO volumeVO = _volumeDao.findById(destVolumeInfo.getId());
             updatePathFromScsiName(volumeVO);
@@ -2854,13 +2855,27 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     protected boolean isSupportedOntapOfflineVolumeCopy(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo) {
         StoragePoolVO srcStoragePoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
         StoragePoolVO destStoragePoolVO = _storagePoolDao.findById(destVolumeInfo.getPoolId());
-        if (srcStoragePoolVO == null || destStoragePoolVO == null) {
-            return false;
-        }
-        StoragePoolType poolType = srcStoragePoolVO.getPoolType();
-        return (poolType == StoragePoolType.NetworkFilesystem || poolType == StoragePoolType.OntapiSCSI)
-                && poolType == destStoragePoolVO.getPoolType()
+        return srcStoragePoolVO != null && destStoragePoolVO != null
+                && srcStoragePoolVO.getPoolType() == StoragePoolType.NetworkFilesystem
+                && destStoragePoolVO.getPoolType() == StoragePoolType.NetworkFilesystem
                 && isSupportedOntapMigrationPoolPair(srcStoragePoolVO, destStoragePoolVO);
+    }
+
+    protected void checkUnsupportedOntapCrossProtocolMigration(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo) {
+        StoragePoolVO srcStoragePoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
+        StoragePoolVO destStoragePoolVO = _storagePoolDao.findById(destVolumeInfo.getPoolId());
+        if (!isOntapPool(srcStoragePoolVO) || !isOntapPool(destStoragePoolVO)) {
+            return;
+        }
+
+        Map<String, String> srcDetails = _storagePoolDao.getDetails(srcStoragePoolVO.getId());
+        Map<String, String> destDetails = _storagePoolDao.getDetails(destStoragePoolVO.getId());
+        String srcProtocol = srcDetails != null ? srcDetails.get(ONTAP_PROTOCOL_DETAIL) : null;
+        String destProtocol = destDetails != null ? destDetails.get(ONTAP_PROTOCOL_DETAIL) : null;
+        if (StringUtils.isNotBlank(srcProtocol) && StringUtils.isNotBlank(destProtocol)
+                && !srcProtocol.equalsIgnoreCase(destProtocol)) {
+            throw new CloudRuntimeException("Cross-protocol migration between ONTAP storage pools is not supported.");
+        }
     }
 
     private boolean canStorageSystemCreateVolumeFromVolume(long storagePoolId) {
