@@ -241,12 +241,13 @@ public abstract class StorageStrategy {
         Map<String, Object> query = new HashMap<>();
         query.put(OntapStorageConstants.FIELDS, OntapStorageConstants.CLUSTER_NODE_ASUP_FIELDS);
         OntapResponse<ClusterNode> response = clusterFeignClient.getClusterNodes(getAuthHeader(), query);
-        if (response == null || response.getRecords() == null || response.getRecords().isEmpty()) {
+        if (response == null || response.getRecords() == null
+                || response.getRecords().stream().allMatch(node -> node == null)) {
             throw new CloudRuntimeException(
                     "Unable to determine whether the ONTAP cluster is AFF or FAS");
         }
         for (ClusterNode node : response.getRecords()) {
-            if (node == null || Boolean.FALSE.equals(node.getAllFlashOptimized())) {
+            if (node != null && Boolean.FALSE.equals(node.getAllFlashOptimized())) {
                 return false;
             }
         }
@@ -1014,6 +1015,10 @@ public abstract class StorageStrategy {
             return;
         }
         VolumeQosPolicy policy = getVolumeQosPolicyByUuid(policyUuid);
+        if (policy == null) {
+            logger.info("QoS policy [{}] not found on ONTAP; skipping delete", policyUuid);
+            return;
+        }
         if (policy.getObjectCount() != null && policy.getObjectCount() > 0) {
             logger.info("QoS policy [{}] still has object_count={}; skipping delete",
                     policyUuid, policy.getObjectCount());

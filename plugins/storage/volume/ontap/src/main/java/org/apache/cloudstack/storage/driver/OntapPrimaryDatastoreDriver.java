@@ -1023,6 +1023,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         logger.info("deleteAsync: Removed temporary snapshot copy volume record [{}]", volumeId);
     }
 
+    /**
+     * Applies IOPS/QoS on resize. Capacity (LUN/file size) is not updated here.
+     * TODO: apply volume size change once size-resize support is merged.
+     */
     @Override
     public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
         String errMsg = null;
