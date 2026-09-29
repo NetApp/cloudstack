@@ -629,7 +629,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
                 }
                 if (payload.newSize < volumeVO.getSize()) {
-                    throw new CloudRuntimeException("Unable to shrink volume. Volume shrink is not supported.");
+                    throw new CloudRuntimeException("Unable to shrink volume.");
                 }
 
                 StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
