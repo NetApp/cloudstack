@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.ObjectInDataStoreStateMachine;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
@@ -73,6 +74,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static com.cloud.agent.api.to.DataObjectType.SNAPSHOT;
 import static com.cloud.agent.api.to.DataObjectType.TEMPLATE;
 import static com.cloud.agent.api.to.DataObjectType.VOLUME;
 import com.cloud.exception.InvalidParameterValueException;
@@ -1424,8 +1426,10 @@ class OntapPrimaryDatastoreDriverTest {
     // resize() tests
     // =========================================================================
 
-    private void stubResizeCommon(long currentSize, long newSize) {
+    private DataObject stubResizeCommon(long currentSize, long newSize) {
         ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
         when(volumeInfo.getDataStore()).thenReturn(dataStore);
         when(dataStore.getId()).thenReturn(1L);
         when(volumeInfo.getId()).thenReturn(100L);
@@ -1441,20 +1445,22 @@ class OntapPrimaryDatastoreDriverTest {
         lenient().when(volumeVO.getId()).thenReturn(100L);
         lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
         lenient().when(volumeDao.update(100L, volumeVO)).thenReturn(true);
+        return data;
     }
 
     @Test
     void testResize_iSCSI_Success() {
         long currentSize = 10737418240L; // 10 GB
         long newSize = 21474836480L;     // 20 GB
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
             doNothing().when(sanStrategy).resizeCloudStackVolume(any(), eq(newSize));
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
@@ -1477,14 +1483,15 @@ class OntapPrimaryDatastoreDriverTest {
         storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
         long currentSize = 10737418240L;
         long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(nasStrategy);
             doNothing().when(nasStrategy).resizeCloudStackVolume(any(), eq(newSize));
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
@@ -1502,10 +1509,13 @@ class OntapPrimaryDatastoreDriverTest {
 
     @Test
     void testResize_NullPayload_Fails() {
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
+        assertEquals(VOLUME, data.getType());
         when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getpayload()).thenReturn(null);
 
-        driver.resize(volumeInfo, createCallback);
+        driver.resize(data, createCallback);
 
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback).complete(resultCaptor.capture());
@@ -1524,25 +1534,44 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
-    void testResize_NonVolumeInfo_FailsAndCompletesCallbackOnce() {
+    void testResize_NonVolumeDataType_FailsAndCompletesCallbackOnce() {
+        DataObject data = templateInfo;
+        when(data.getType()).thenReturn(TEMPLATE);
         when(templateInfo.getId()).thenReturn(50L);
 
-        driver.resize(templateInfo, createCallback);
+        driver.resize(data, createCallback);
 
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback, times(1)).complete(resultCaptor.capture());
         assertFalse(resultCaptor.getValue().isSuccess());
-        assertTrue(resultCaptor.getValue().getResult().contains("Expected a VOLUME DataObject"));
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected a VOLUME DataObject but received TEMPLATE"));
+    }
+
+    @Test
+    void testResize_SnapshotDataType_FailsAndCompletesCallbackOnce() {
+        DataObject data = mock(DataObject.class);
+        when(data.getType()).thenReturn(SNAPSHOT);
+        when(data.getId()).thenReturn(75L);
+
+        driver.resize(data, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected a VOLUME DataObject but received SNAPSHOT"));
     }
 
     @Test
     void testResize_NullNewSize_Fails() {
         // payload.newSize is null
         ResizeVolumePayload payload = new ResizeVolumePayload(null, null, null, null, false, "i-2-VM", null, false);
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
+        assertEquals(VOLUME, data.getType());
         when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getpayload()).thenReturn(payload);
 
-        driver.resize(volumeInfo, createCallback);
+        driver.resize(data, createCallback);
 
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback).complete(resultCaptor.capture());
@@ -1553,13 +1582,16 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_StoragePoolNotFound_Fails() {
         ResizeVolumePayload payload = new ResizeVolumePayload(21474836480L, null, null, null, false, "i-2-VM", null, false);
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
+        assertEquals(VOLUME, data.getType());
         when(volumeInfo.getDataStore()).thenReturn(dataStore);
         when(dataStore.getId()).thenReturn(1L);
         when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getpayload()).thenReturn(payload);
         when(storagePoolDao.findById(1L)).thenReturn(null);
 
-        driver.resize(volumeInfo, createCallback);
+        driver.resize(data, createCallback);
 
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback).complete(resultCaptor.capture());
@@ -1570,11 +1602,14 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_MissingDataStore_Fails() {
         ResizeVolumePayload payload = new ResizeVolumePayload(21474836480L, null, null, null, false, "none", null, false);
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
+        assertEquals(VOLUME, data.getType());
         when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getpayload()).thenReturn(payload);
         when(volumeInfo.getDataStore()).thenReturn(null);
 
-        driver.resize(volumeInfo, createCallback);
+        driver.resize(data, createCallback);
 
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback).complete(resultCaptor.capture());
@@ -1586,6 +1621,9 @@ class OntapPrimaryDatastoreDriverTest {
     void testResize_VolumeVONotFound_Fails() {
         long newSize = 21474836480L;
         ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);
+        DataObject data = volumeInfo;
+        when(data.getType()).thenReturn(VOLUME);
+        assertEquals(VOLUME, data.getType());
         when(volumeInfo.getDataStore()).thenReturn(dataStore);
         when(dataStore.getId()).thenReturn(1L);
         when(volumeInfo.getId()).thenReturn(100L);
@@ -1599,7 +1637,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
@@ -1612,14 +1650,15 @@ class OntapPrimaryDatastoreDriverTest {
     void testResize_MissingStoragePoolDetails_Fails() {
         long currentSize = 10737418240L;
         long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(null))
                     .thenThrow(new CloudRuntimeException("Storage pool details are missing"));
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback, times(1)).complete(resultCaptor.capture());
@@ -1633,13 +1672,14 @@ class OntapPrimaryDatastoreDriverTest {
     void testResize_ShrinkAttempt_Fails() {
         long currentSize = 21474836480L; // 20 GB
         long newSize = 10737418240L;     // 10 GB – smaller than current
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
@@ -1653,7 +1693,8 @@ class OntapPrimaryDatastoreDriverTest {
     void testResize_StrategyThrows_Fails() {
         long currentSize = 10737418240L;
         long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
@@ -1661,7 +1702,7 @@ class OntapPrimaryDatastoreDriverTest {
             doThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP resize failed"))
                     .when(sanStrategy).resizeCloudStackVolume(any(), eq(newSize));
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
@@ -1675,13 +1716,14 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_EqualSize_InvokesStrategyAndSucceeds() {
         long size = 10737418240L;
-        stubResizeCommon(size, size);
+        DataObject data = stubResizeCommon(size, size);
+        assertEquals(VOLUME, data.getType());
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             verify(sanStrategy).resizeCloudStackVolume(any(), eq(size));
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
@@ -1694,14 +1736,15 @@ class OntapPrimaryDatastoreDriverTest {
     void testResize_DatabaseUpdateFailure_ReturnsFailure() {
         long currentSize = 10737418240L;
         long newSize = 21474836480L;
-        stubResizeCommon(currentSize, newSize);
+        DataObject data = stubResizeCommon(currentSize, newSize);
+        assertEquals(VOLUME, data.getType());
         when(volumeDao.update(100L, volumeVO)).thenReturn(false);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
 
-            driver.resize(volumeInfo, createCallback);
+            driver.resize(data, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback, times(1)).complete(resultCaptor.capture());
