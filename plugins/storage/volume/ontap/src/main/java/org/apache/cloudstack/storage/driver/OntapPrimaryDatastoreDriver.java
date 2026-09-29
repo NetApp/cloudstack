@@ -27,6 +27,7 @@ import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.offering.DiskOffering;
 import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
@@ -55,6 +56,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver;
 import org.apache.cloudstack.engine.subsystem.api.storage.SnapshotInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeDataFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
@@ -108,6 +110,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     @Inject private SnapshotDetailsDao snapshotDetailsDao;
     @Inject private SnapshotDao snapshotDao;
     @Inject private VMTemplatePoolDao vmTemplatePoolDao;
+    @Inject private VolumeDataFactory volumeDataFactory;
 
     @Override
     public Map<String, String> getCapabilities() {
@@ -594,10 +597,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
-                if (qosPolicyDetail != null) {
-                    volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-                    storageStrategy.deleteVolumeQosPolicy(qosPolicyDetail.getValue());
-                }
+                deleteUnusedQosPolicy(storageStrategy, volumeInfo.getId(), qosPolicyDetail);
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
                 commandResult.setResult(null);
                 commandResult.setSuccess(true);
@@ -736,7 +736,11 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
             VolumeInfo volumeInfo = (VolumeInfo) data;
             path = volumeInfo.getPath();
-            applyVolumeQos(volumeInfo);
+            ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
+            if (payload == null) {
+                throw new CloudRuntimeException("Missing resize payload for volume " + volumeInfo.getId());
+            }
+            applyVolumeQos(volumeInfo, payload.newMinIops, payload.newMaxIops);
         } catch (Exception e) {
             errMsg = e.getMessage();
             logger.error("Failed to update IOPS for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
@@ -747,11 +751,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         callback.complete(result);
     }
 
-    private void applyVolumeQos(VolumeInfo volumeInfo) {
-        ResizeVolumePayload payload = (ResizeVolumePayload) volumeInfo.getpayload();
-        if (payload == null) {
-            throw new CloudRuntimeException("Missing resize payload for volume " + volumeInfo.getId());
-        }
+    /**
+     * Applies or removes the ONTAP QoS policy for a volume.
+     * Used by resize and by change disk offering (when size/IOPS do not trigger resize).
+     * Destroy/expunge of a VM deletes its volumes through {@link #deleteAsync}, which
+     * removes the unused policy after the LUN/file is gone.
+     */
+    private void applyVolumeQos(VolumeInfo volumeInfo, Long minIops, Long maxIops) {
         VolumeVO volume = volumeDao.findById(volumeInfo.getId());
         if (volume == null || volume.getPoolId() == null) {
             throw new CloudRuntimeException("Unable to resolve volume or storage pool for IOPS update");
@@ -761,14 +767,14 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             throw new CloudRuntimeException("Storage pool not found for volume " + volume.getId());
         }
 
-        verifySufficientIopsForStoragePool(storagePool, payload.newMinIops, volume.getId());
+        verifySufficientIopsForStoragePool(storagePool, minIops, volume.getId());
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
         StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
         VolumeDetailVO qosDetail = volumeDetailsDao.findDetail(volume.getId(), OntapStorageConstants.QOS_POLICY_UUID);
         String previousUuid = qosDetail != null ? qosDetail.getValue() : null;
         VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
-                payload.newMinIops, payload.newMaxIops, volume.getPoolId());
+                minIops, maxIops, volume.getPoolId());
 
         if (qosPolicy != null && Objects.equals(previousUuid, qosPolicy.getUuid())) {
             return;
@@ -814,6 +820,24 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         VolumeQosPolicy noPolicy = new VolumeQosPolicy();
         noPolicy.setName(OntapStorageConstants.QOS_POLICY_NONE);
         attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, noPolicy);
+    }
+
+    /**
+     * After the LUN/file is deleted, drop the CloudStack QoS detail and delete the ONTAP policy
+     * when nothing else uses it ({@code object_count == 0}). Failure here must not fail volume
+     * (or VM expunge) delete.
+     */
+    private void deleteUnusedQosPolicy(StorageStrategy storageStrategy, long volumeId, VolumeDetailVO qosPolicyDetail) {
+        if (qosPolicyDetail == null || qosPolicyDetail.getValue() == null) {
+            return;
+        }
+        volumeDetailsDao.removeDetail(volumeId, OntapStorageConstants.QOS_POLICY_UUID);
+        try {
+            storageStrategy.deleteVolumeQosPolicy(qosPolicyDetail.getValue());
+        } catch (Exception e) {
+            logger.warn("Unused QoS policy [{}] was not deleted after volume [{}]: {}",
+                    qosPolicyDetail.getValue(), volumeId, e.getMessage());
+        }
     }
 
     @Override
@@ -1568,6 +1592,37 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void detachVolumeFromAllStorageNodes(Volume volume) {
+    }
+
+    @Override
+    public boolean informStorageForDiskOfferingChange() {
+        return true;
+    }
+
+    /**
+     * Applies ONTAP QoS for {@code changeOfferingForVolume} when size/IOPS did not trigger resize.
+     * When IOPS do change, {@link #resize} already applies QoS.
+     */
+    @Override
+    public void updateStorageWithTheNewDiskOffering(Volume volume, DiskOffering newDiskOffering) {
+        if (volume == null || newDiskOffering == null || volume.getPoolId() == null) {
+            return;
+        }
+        VolumeInfo volumeInfo = volumeDataFactory.getVolume(volume.getId());
+        if (volumeInfo == null) {
+            throw new CloudRuntimeException("Unable to load volume " + volume.getId()
+                    + " for disk offering QoS update");
+        }
+        Long minIops;
+        Long maxIops;
+        if (Boolean.TRUE.equals(newDiskOffering.isCustomizedIops())) {
+            minIops = volume.getMinIops();
+            maxIops = volume.getMaxIops();
+        } else {
+            minIops = newDiskOffering.getMinIops();
+            maxIops = newDiskOffering.getMaxIops();
+        }
+        applyVolumeQos(volumeInfo, minIops, maxIops);
     }
 
     private CloudStackVolume createDeleteCloudStackVolumeRequest(StoragePool storagePool, Map<String, String> details, VolumeInfo volumeInfo) {
