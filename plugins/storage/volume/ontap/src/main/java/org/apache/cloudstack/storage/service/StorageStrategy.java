@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
@@ -43,12 +45,12 @@ import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
-import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -56,8 +58,6 @@ import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
-
-import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -438,19 +438,15 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Gets ONTAP Flex-Volume
-     * Eligible only for Unified ONTAP storage
-     * throw exception in case of disaggregated ONTAP storage
+     * Gets ONTAP Flex-Volume by UUID.
+     * Eligible only for Unified ONTAP storage.
+     * Throws exception in case of disaggregated ONTAP storage.
      *
-     * @param volume the volume to retrieve
-     * @return the retrieved Volume object
+     * @param uuid the UUID of the volume to retrieve
+     * @return the retrieved Volume object, or null if not found
      */
-    public Volume getStorageVolume(Volume volume) {
-        return getStorageVolume(volume.getUuid());
-    }
-
     public Volume getStorageVolume(String uuid) {
-        if (uuid == null || uuid.isBlank()) {
+        if (StringUtils.isBlank(uuid)) {
             throw new CloudRuntimeException("Cannot fetch ONTAP volume: UUID is null or empty");
         }
         logger.info("getStorageVolume: Fetching ONTAP volume by UUID: {}", uuid);

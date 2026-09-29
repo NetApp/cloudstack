@@ -1520,7 +1520,7 @@ class OntapPrimaryDatastoreDriverTest {
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback, times(1)).complete(resultCaptor.capture());
         assertFalse(resultCaptor.getValue().isSuccess());
-        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected a VOLUME DataObject"));
     }
 
     @Test
@@ -1532,7 +1532,7 @@ class OntapPrimaryDatastoreDriverTest {
         ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
         verify(createCallback, times(1)).complete(resultCaptor.capture());
         assertFalse(resultCaptor.getValue().isSuccess());
-        assertTrue(resultCaptor.getValue().getResult().contains("Expected VolumeInfo"));
+        assertTrue(resultCaptor.getValue().getResult().contains("Expected a VOLUME DataObject"));
     }
 
     @Test
@@ -1644,7 +1644,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("does not support shrinking"));
+            assertTrue(resultCaptor.getValue().getResult().contains("Unable to shrink volume"));
             verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
         }
     }

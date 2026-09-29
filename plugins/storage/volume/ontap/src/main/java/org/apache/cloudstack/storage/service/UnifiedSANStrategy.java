@@ -299,6 +299,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
         // Resolve LUN UUID from volume details when not pre-populated on the cloudstackVolume
         if (cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+            logger.debug("LUN details not present on cloudstackVolume, resolving UUID from volume details");
             long volumeId = cloudstackVolume.getVolumeInfo().getId();
             VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeId, OntapStorageConstants.LUN_DOT_UUID);
             if (lunUuidDetail == null || StringUtils.isBlank(lunUuidDetail.getValue())) {
@@ -307,6 +308,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             Lun resolvedLun = new Lun();
             resolvedLun.setUuid(lunUuidDetail.getValue());
             cloudstackVolume.setLun(resolvedLun);
+        } else {
+            logger.debug("resizeCloudStackVolume: LUN UUID [{}] already present on cloudstackVolume, skipping volume details lookup", cloudstackVolume.getLun().getUuid());
         }
 
         String lunUuid = cloudstackVolume.getLun().getUuid();

@@ -68,11 +68,9 @@ import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.Nullable;
 
 import com.cloud.agent.api.Answer;
-import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
-import com.cloud.agent.api.to.StorageFilerTO;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
@@ -604,54 +602,52 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     public void resize(DataObject data, AsyncCompletionCallback<CreateCmdResult> callback) {
         CreateCmdResult result = null;
         try {
-            if (!(data instanceof VolumeInfo)) {
-                throw new CloudRuntimeException("resize: Expected VolumeInfo but received " +
-                        (data != null ? data.getClass().getSimpleName() : "null"));
-            }
-            VolumeInfo volumeInfo = (VolumeInfo) data;
-            Object rawPayload = volumeInfo.getpayload();
-            ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
-                    ? (ResizeVolumePayload) rawPayload : null;
-            if (payload == null || payload.newSize == null) {
-                throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
-            }
-            if (volumeInfo.getDataStore() == null) {
-                throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
-            }
+            if (data != null && data.getType() == DataObjectType.VOLUME) {
+                if (!(data instanceof VolumeInfo)) {
+                    throw new CloudRuntimeException("Expected VolumeInfo but received " +
+                            data.getClass().getSimpleName());
+                }
+                VolumeInfo volumeInfo = (VolumeInfo) data;
+                Object rawPayload = volumeInfo.getpayload();
+                ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
+                        ? (ResizeVolumePayload) rawPayload : null;
+                if (payload == null || payload.newSize == null) {
+                    throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
+                }
+                if (volumeInfo.getDataStore() == null) {
+                    throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
+                }
 
-            StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
-            if (storagePool == null) {
-                throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
-            }
-            Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+                StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
+                if (storagePool == null) {
+                    throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
+                }
+                Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
 
-            VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
-            if (volumeVO == null) {
-                throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
-            }
-            if (payload.newSize < volumeVO.getSize()) {
-                throw new CloudRuntimeException(String.format(
-                        "Storage pool %s does not support shrinking a volume.", storagePool.getName()));
-            }
+                VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
+                if (volumeVO == null) {
+                    throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
+                }
+                if (payload.newSize < volumeVO.getSize()) {
+                    throw new CloudRuntimeException("Unable to shrink volume. Volume shrink is not supported.");
+                }
 
-            StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-            CloudStackVolume cloudStackVolume = new CloudStackVolume();
-            cloudStackVolume.setVolumeInfo(volumeInfo);
-            storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
+                StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+                CloudStackVolume cloudStackVolume = new CloudStackVolume();
+                cloudStackVolume.setVolumeInfo(volumeInfo);
+                storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
 
-            long currentSize = volumeVO.getSize();
-            volumeVO.setSize(payload.newSize);
-            if (!volumeDao.update(volumeVO.getId(), volumeVO)) {
-                throw new CloudRuntimeException("Failed to update volume " + volumeVO.getId()
-                        + " after resizing the ONTAP backing object");
+                volumeVO.setSize(payload.newSize);
+                if (!volumeDao.update(volumeVO.getId(), volumeVO)) {
+                    throw new CloudRuntimeException("Failed to update volume " + volumeVO.getId()
+                            + " after resizing the ONTAP backing object");
+                }
+                result = new CreateCmdResult(volumeVO.getPath(), new Answer(null, true, null));
+                logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
+            } else {
+                throw new CloudRuntimeException("Expected a VOLUME DataObject but received " +
+                        (data != null ? data.getType() : "null"));
             }
-            String instanceName = payload.instanceName != null ? payload.instanceName : "none";
-
-            ResizeVolumeCommand resizeCmd = new ResizeVolumeCommand(volumeVO.getPath(),
-                    new StorageFilerTO(storagePool), currentSize, payload.newSize,
-                    false, instanceName);
-            result = new CreateCmdResult(volumeVO.getPath(), new Answer(resizeCmd, true, null));
-            logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
         } catch (Exception e) {
             String errMsg = e.getMessage();
             logger.error("resize: Failed for volume [{}]: {}", data != null ? data.getId() : null, errMsg, e);
