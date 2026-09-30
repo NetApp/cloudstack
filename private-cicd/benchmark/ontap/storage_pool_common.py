@@ -29,6 +29,7 @@ import dataclasses
 import datetime
 import os
 import random
+import re
 import sys
 import time
 
@@ -37,6 +38,7 @@ try:
 except ImportError:
     sys.exit("PyYAML is required: pip install -r requirements.txt")
 
+from benchmark_support import get_logger
 from cloudstack_client import CloudStackAPIError, CloudStackClient
 
 RAW_FIELDNAMES = [
@@ -64,12 +66,6 @@ class OpResult:
 
 def now_iso():
     return datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
-
-
-def new_run_id():
-    # ONTAP volume names only allow alphanumeric + underscore (no hyphens), and
-    # pool names flow straight through to the ONTAP volume name, so avoid "-" here.
-    return datetime.datetime.utcnow().strftime("RUN_%Y%m%d_%H%M%S")
 
 
 def build_create_pool_params(name, infra_cfg, ontap_cfg):
@@ -178,19 +174,66 @@ def append_summary_csv(path, rows):
         writer.writerows(rows)
 
 
-def cleanup_by_filter(client, name_filter):
+def _pool_name_pattern(prefix):
+    return re.compile(
+        rf"^{re.escape(prefix)}_(?:seq|c\d+)_[A-Za-z0-9]+_[A-Za-z0-9_]+_\d{{3}}$"
+    )
+
+
+def cleanup_by_filter(client, name_filter, cfg):
+    """Delete benchmark pools only.
+
+    A shared zone can contain pools this run did not create. A match has to use
+    this config's name prefix and naming pattern, sit in the configured zone and
+    cluster, and use one of the configured storage providers.
+    """
+    log = get_logger()
+    if not name_filter or len(name_filter) < 4:
+        sys.exit("Refusing cleanup: name filter is missing or shorter than 4 characters")
+
+    prefix = cfg["benchmark"]["pool_name_prefix"]
+    infra = cfg.get("infrastructure", {})
+    zoneid = infra.get("zoneid")
+    clusterid = infra.get("clusterid") if infra.get("scope", "cluster") == "cluster" else None
+    providers = {
+        str(entry.get("provider", "")).strip().lower()
+        for entry in cfg.get("ontap", {}).values()
+        if entry.get("provider")
+    }
+    pattern = _pool_name_pattern(prefix)
+
     payload, _ = client.call("listStoragePools", {}, poll_async=False)
     pools = payload.get("storagepool", []) if isinstance(payload, dict) else []
-    matches = [p for p in pools if name_filter in p.get("name", "")]
-    print(f"Found {len(matches)} pool(s) whose name contains '{name_filter}'")
-    for p in matches:
+    name_hits = [p for p in pools if name_filter in (p.get("name") or "")]
+    matches = []
+    for pool in name_hits:
+        name = pool.get("name") or ""
+        provider = str(pool.get("provider") or "").strip().lower()
+        if not pattern.match(name):
+            continue
+        if providers and provider not in providers:
+            continue
+        if zoneid and pool.get("zoneid") and pool.get("zoneid") != zoneid:
+            continue
+        if clusterid and pool.get("clusterid") and pool.get("clusterid") != clusterid:
+            continue
+        matches.append(pool)
+
+    skipped = len(name_hits) - len(matches)
+    log.info("Found %s pool(s) eligible for cleanup (filter=%r)", len(matches), name_filter)
+    if skipped:
+        log.warning(
+            "Skipped %s pool(s) whose name contains %r but failed the prefix, zone, cluster, or provider check",
+            skipped, name_filter,
+        )
+    for pool in matches:
         try:
-            if p.get("state") != "Maintenance":
-                client.call("enableStorageMaintenance", {"id": p["id"]})
-            client.call("deleteStoragePool", {"id": p["id"], "forced": "true"})
-            print(f"  deleted {p['name']} ({p['id']})")
+            if pool.get("state") != "Maintenance":
+                client.call("enableStorageMaintenance", {"id": pool["id"]})
+            client.call("deleteStoragePool", {"id": pool["id"], "forced": "true"})
+            log.info("deleted %s (%s)", pool["name"], pool["id"])
         except Exception as exc:  # noqa: BLE001
-            print(f"  FAILED to delete {p['name']}: {exc}")
+            log.error("FAILED to delete %s: %s", pool["name"], exc)
 
 
 def load_config(path):

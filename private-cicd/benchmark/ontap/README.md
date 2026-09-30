@@ -100,51 +100,52 @@ real lab IPs/credentials or run output.
 
 ## Running
 
+`run.py` is the entry point. Protocols, checkpoints, and concurrency levels
+come from `config.yaml` (`ontap` / `benchmark` for pools, `vm_bench` for
+VMs). Drop a protocol block to skip it, and edit `sequential_checkpoints` or
+`concurrency_levels` to change the matrix.
+
+Run ids are generated as `RUN_<UTC timestamp>_<4 hex chars>` (for example
+`RUN_20260927_081500_a1b2`). Letters, digits, and underscores only: a hyphen
+is rewritten to `_` because it is embedded in the storage pool name. Reuse
+one id across sequential and concurrency when you want a single report.
+
 ```bash
-# Sanity-check either script/config without hitting a real management server:
-python3 benchmark_storage_pool_sequential.py --config config.yaml --dry-run
-python3 benchmark_storage_pool_concurrency.py --config config.yaml --dry-run
+# Sanity-check without hitting a real management server:
+python3 run.py --test storage-pool-sequential --config config.yaml --dry-run
+python3 run.py --test storage-pool-concurrency --config config.yaml --dry-run
 
-# Sequential scale matrix, both protocols, up to config's sequential_checkpoints:
-python3 benchmark_storage_pool_sequential.py --config config.yaml
+# Sequential scale matrix, using the protocols and checkpoints in config.yaml:
+python3 run.py --test storage-pool-sequential --config config.yaml
 
-# Sequential scale matrix, NFS3 only:
-python3 benchmark_storage_pool_sequential.py --config config.yaml --protocol nfs3
+# Concurrency matrix, using config.yaml's concurrency_levels:
+python3 run.py --test storage-pool-concurrency --config config.yaml
 
-# Concurrency matrix, both protocols, up to config's concurrency_levels (e.g. 30):
-python3 benchmark_storage_pool_concurrency.py --config config.yaml
-
-# Concurrency matrix, iSCSI only, overriding the levels to run:
-python3 benchmark_storage_pool_concurrency.py --config config.yaml --protocol iscsi --levels 2,5,10,20,30
-
-# Use the SAME --run-id across both scripts to combine 5.1.x + 6.1.x into one
-# summary_<run_id>.csv / report (run sequential first, review it, then decide
-# whether to proceed with concurrency under the same run id):
-python3 benchmark_storage_pool_sequential.py --config config.yaml --run-id RUN-0001
-python3 benchmark_storage_pool_concurrency.py --config config.yaml --run-id RUN-0001
+# Same --run-id across both tests to combine 5.1.x + 6.1.x into one report.
+# Run sequential first, review it, then decide on concurrency:
+python3 run.py --test storage-pool-sequential --config config.yaml --run-id RUN_20260927_081500_a1b2
+python3 run.py --test storage-pool-concurrency --config config.yaml --run-id RUN_20260927_081500_a1b2
 ```
 
-At the end of a real run each script automatically checks for and deletes any
-storage pool whose name still contains the run id (safety net for pools that
-were created but never got torn down because of a mid-run crash). Pass
-`--skip-cleanup` to disable that and inspect the pools yourself.
+At the end of a real run each script deletes leftover pools from that run id.
+The sweep only deletes pools that match this config's name prefix, name
+pattern, zone, cluster, and storage provider, so other pools in a shared zone
+are left alone. Pass `--skip-cleanup` to inspect the pools yourself.
 
-If a run crashes hard (script killed, network partition, etc.) and left
-pools behind, recover with either script's `--cleanup-only` (they share the
-same cleanup logic):
+If a run crashes and leaves pools behind:
 
 ```bash
-# Deletes every pool whose name contains "bench_ontap" (the default prefix)
-python3 benchmark_storage_pool_sequential.py --config config.yaml --cleanup-only
+# Deletes benchmark pools for this config's pool_name_prefix (still provider/zone/cluster scoped):
+python3 run.py --test storage-pool-sequential --config config.yaml --cleanup-only
 
-# Or scope it to one specific run:
-python3 benchmark_storage_pool_sequential.py --config config.yaml --cleanup-only RUN_20260722_101500
+# Or scope it to one specific run (underscores, not hyphens):
+python3 run.py --test storage-pool-sequential --config config.yaml --cleanup-only RUN_20260927_081500_a1b2
 ```
 
 ## Rendering the Confluence-ready report
 
 ```bash
-python3 render_report.py --run-id RUN-20260722-101500 \
+python3 render_report.py --run-id RUN_20260722_101500_a1b2 \
     --cloudstack-build 4.23.0.0-SNAPSHOT --ontap-version 9.15.1
 ```
 
@@ -182,25 +183,23 @@ matching offerings - it does not create/destroy the pool itself:
 
 ```bash
 # Sanity-check without hitting a real management server:
-python3 benchmark_vm_instance_sequential.py --config config.yaml --dry-run
-python3 benchmark_vm_instance_concurrency.py --config config.yaml --dry-run
+python3 run.py --test vm-instance-sequential --config config.yaml --dry-run
+python3 run.py --test vm-instance-concurrency --config config.yaml --dry-run
 
-# Sequential scale matrix (5.2.1/5.2.2), both protocols:
-python3 benchmark_vm_instance_sequential.py --config config.yaml
+# Sequential scale matrix (5.2.1/5.2.2), protocols from config.yaml:
+python3 run.py --test vm-instance-sequential --config config.yaml
 
-# Concurrency matrix (6.2.1/6.2.2), iSCSI only, custom levels:
-python3 benchmark_vm_instance_concurrency.py --config config.yaml --protocol iscsi --levels 1,2,5,10
+# Concurrency matrix (6.2.1/6.2.2). Levels come from vm_bench.concurrency_levels:
+python3 run.py --test vm-instance-concurrency --config config.yaml
 
-# Both matrices in one invocation, combined into a single summary/report:
-python3 benchmark_vm_instance_combined.py --config config.yaml
+# Both matrices in one invocation:
+python3 run.py --test vm-instance-combined --config config.yaml
 
-# Or run the two standalone scripts under the SAME --run-id to combine them
-# instead (lets you review the sequential results before committing to
-# concurrency):
-python3 benchmark_vm_instance_sequential.py --config config.yaml --run-id RUN-0001
-python3 benchmark_vm_instance_concurrency.py --config config.yaml --run-id RUN-0001
+# Or run the two tests under the SAME --run-id (underscores only):
+python3 run.py --test vm-instance-sequential --config config.yaml --run-id RUN_20260927_081500_a1b2
+python3 run.py --test vm-instance-concurrency --config config.yaml --run-id RUN_20260927_081500_a1b2
 
-python3 render_report.py --run-id RUN-0001 --raw-prefix raw_ops_vm --summary-prefix summary_vm --report-suffix _vm
+python3 render_report.py --run-id RUN_20260927_081500_a1b2 --raw-prefix raw_ops_vm --summary-prefix summary_vm --report-suffix _vm
 ```
 
 All three scripts share the same `--skip-cleanup` / `--cleanup-only` safety

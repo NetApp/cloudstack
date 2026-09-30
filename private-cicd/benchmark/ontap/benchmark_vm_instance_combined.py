@@ -31,8 +31,10 @@ results before deciding whether to proceed with a concurrency run - this
 combined script is for when you already trust the config/environment and just
 want the full 5.2.x + 6.2.x matrix in one go.
 
+Protocols and concurrency levels come from config.yaml. Prefer run.py.
+
 Usage:
-    python3 benchmark_vm_instance_combined.py --config config.yaml --protocol both
+    python3 run.py --test vm-instance-combined --config config.yaml
     python3 benchmark_vm_instance_combined.py --config config.yaml --dry-run
     python3 benchmark_vm_instance_combined.py --config config.yaml --cleanup-only
 """
@@ -40,83 +42,94 @@ Usage:
 import argparse
 import os
 
-from benchmark_vm_instance_concurrency import parse_levels, run_concurrency
+from benchmark_support import (
+    assert_vm_name_prefix,
+    configure_logging,
+    get_logger,
+    normalize_run_id,
+)
+from benchmark_vm_instance_concurrency import run_concurrency
 from benchmark_vm_instance_sequential import run_sequential
 from vm_instance_common import (
     append_summary_csv,
     cleanup_by_filter,
     load_config,
     make_cloudstack_client,
-    new_run_id,
     RawLogger,
     resolve_protocols,
 )
 
+log = get_logger()
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", default="config.yaml", help="Path to config YAML (default: config.yaml)")
-    parser.add_argument("--protocol", default="both", help="nfs3 | iscsi | both (default: both)")
-    parser.add_argument("--run-id", default=None, help="Override auto-generated run id")
-    parser.add_argument(
-        "--levels", default=None,
-        help="Comma-separated concurrency levels to run, e.g. '2,5,10' "
-             "(default: config.vm_bench.concurrency_levels, typically up to 30)",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Simulate timings, no real API calls")
-    parser.add_argument("--skip-cleanup", action="store_true", help="Leave any leftover VMs from this run in place")
-    parser.add_argument(
-        "--cleanup-only", nargs="?", const="__PREFIX__", default=None, metavar="FILTER",
-        help="Destroy all VMs whose name contains FILTER (default: config vm_name_prefix) and exit",
-    )
-    args = parser.parse_args()
 
-    cfg = load_config(args.config)
-    os.makedirs(cfg["vm_bench"].get("output_dir", "results"), exist_ok=True)
+def execute(cfg, dry_run=False, skip_cleanup=False, cleanup_only=None, run_id=None):
+    configure_logging()
+    assert_vm_name_prefix(cfg["vm_bench"]["vm_name_prefix"])
+    output_dir = cfg["vm_bench"].get("output_dir", "results")
+    os.makedirs(output_dir, exist_ok=True)
 
-    if args.cleanup_only is not None:
+    if cleanup_only is not None:
         client = make_cloudstack_client(cfg)
-        name_filter = args.cleanup_only
-        if name_filter == "__PREFIX__":
-            name_filter = cfg["vm_bench"]["vm_name_prefix"]
-        cleanup_by_filter(client, name_filter)
+        name_filter = cfg["vm_bench"]["vm_name_prefix"] if cleanup_only == "__PREFIX__" else cleanup_only
+        cleanup_by_filter(client, name_filter, cfg)
         return
 
-    run_id = args.run_id or new_run_id()
-    protocols = resolve_protocols(cfg, args.protocol)
+    run_id = normalize_run_id(run_id)
+    protocols = resolve_protocols(cfg, "both")
     delay = cfg["vm_bench"].get("inter_op_delay_sec", 0)
-    output_dir = cfg["vm_bench"].get("output_dir", "results")
-    levels = parse_levels(args.levels, cfg["vm_bench"]["concurrency_levels"])
+    levels = sorted(cfg["vm_bench"]["concurrency_levels"])
 
-    print(f"Run ID: {run_id}")
-    print(f"Protocols: {protocols}")
-    print("Mode: sequential + concurrency (combined)")
-    print(f"Concurrency levels: {levels}")
-    print(f"Dry run: {args.dry_run}")
+    log.info("Run ID: %s", run_id)
+    log.info("Protocols: %s", protocols)
+    log.info("Mode: sequential + concurrency (combined)")
+    log.info("Concurrency levels: %s", levels)
+    log.info("Dry run: %s", dry_run)
 
-    client = None if args.dry_run else make_cloudstack_client(cfg)
+    client = None if dry_run else make_cloudstack_client(cfg)
 
     raw_logger = RawLogger(os.path.join(output_dir, f"raw_ops_vm_{run_id}.csv"))
     summary_rows = []
 
     try:
         for protocol_key in protocols:
-            run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, args.dry_run, delay)
-            run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows, args.dry_run, delay, levels)
+            run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, dry_run, delay)
+            run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows, dry_run, delay, levels)
     finally:
         raw_logger.close()
 
     summary_path = os.path.join(output_dir, f"summary_vm_{run_id}.csv")
     append_summary_csv(summary_path, summary_rows)
 
-    print(f"\nRaw per-operation log: {os.path.join(output_dir, f'raw_ops_vm_{run_id}.csv')}")
-    print(f"Checkpoint summary:    {summary_path}")
-    print("Next: python3 render_report.py --run-id " + run_id +
-          f" --output-dir {output_dir} --raw-prefix raw_ops_vm --summary-prefix summary_vm --report-suffix _vm")
+    log.info("Raw per-operation log: %s", os.path.join(output_dir, f"raw_ops_vm_{run_id}.csv"))
+    log.info("Checkpoint summary: %s", summary_path)
+    log.info(
+        "Next: python3 render_report.py --run-id %s --output-dir %s --raw-prefix raw_ops_vm --summary-prefix summary_vm --report-suffix _vm",
+        run_id, output_dir,
+    )
 
-    if not args.dry_run and not args.skip_cleanup:
-        print(f"\nVerifying no orphaned VMs remain for run {run_id}...")
-        cleanup_by_filter(client, run_id)
+    if not dry_run and not skip_cleanup:
+        log.info("Verifying no orphaned VMs remain for run %s", run_id)
+        cleanup_by_filter(client, run_id, cfg)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--config", default="config.yaml", help="Path to config YAML (default: config.yaml)")
+    parser.add_argument("--run-id", default=None, help="Override auto-generated run id")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate timings, no real API calls")
+    parser.add_argument("--skip-cleanup", action="store_true", help="Leave any leftover VMs from this run in place")
+    parser.add_argument(
+        "--cleanup-only", nargs="?", const="__PREFIX__", default=None, metavar="FILTER",
+        help="Destroy benchmark VMs whose name contains FILTER (default: config vm_name_prefix) and exit",
+    )
+    args = parser.parse_args()
+    execute(
+        load_config(args.config),
+        dry_run=args.dry_run,
+        skip_cleanup=args.skip_cleanup,
+        cleanup_only=args.cleanup_only,
+        run_id=args.run_id,
+    )
 
 
 if __name__ == "__main__":

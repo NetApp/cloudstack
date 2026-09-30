@@ -42,9 +42,8 @@ infrastructure:
   clusterid: "23788acb-1a63-45a9-8c61-5ed8f5374bc6"
   scope: "cluster"
 
-# One entry per protocol you want to benchmark. Keys must be "nfs3"/"iscsi"
-# to match --protocol on the CLI. Remove a block if you don't have that
-# backend available.
+# One entry per protocol you want to benchmark. Keys must be "nfs3"/"iscsi".
+# Remove a block to skip that protocol.
 # NOTE: the ONTAP plugin (StorageStrategy.java) builds its REST API base URL
 # from storageIP for EVERY call (aggregates/volumes/svm/jobs/network/san/nas) -
 # it never falls back to `url`. storageIP MUST answer HTTPS/443 with the ONTAP
@@ -77,6 +76,8 @@ ontap:
 
 benchmark:
   pool_name_prefix: "bench_ontap"  # ONTAP volume names disallow "-"; use "_" only
+  # Checkpoints and concurrency levels are the combinations for a run.
+  # Change them here.
   sequential_checkpoints: [1, 5, 10, 20, 30]
   concurrency_levels: [2, 5, 10, 20, 30]
   # Pause between deleteStoragePool calls to give the mgmt server GC/ONTAP a
@@ -104,6 +105,9 @@ vm_bench:
   # CloudStack VM names are used as hostnames (RFC1123): letters/digits/"-" only,
   # no "_" (the opposite of ONTAP's volume-name rule used by pool_name_prefix above).
   vm_name_prefix: "bench-vm"
+  # Unattached data disks are deleted only from pools with this name prefix,
+  # and only when that pool's provider and zone match this config.
+  cleanup_pool_name_prefix: "bench_vm"
   sequential_checkpoints: [1, 5, 10, 20]
   concurrency_levels: [2, 5, 10]
   inter_op_delay_sec: 0

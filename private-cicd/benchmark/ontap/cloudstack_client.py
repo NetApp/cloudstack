@@ -20,8 +20,7 @@ Minimal CloudStack HTTP/REST API client used by the ONTAP plugin benchmark
 scripts (private-cicd/benchmark/ontap/).
 
 Only session-key based auth (login -> sessionkey + JSESSIONID cookie) is
-implemented, matching the approach documented in:
-https://netapp.atlassian.net/wiki/spaces/OSSG/pages/608854350/CloudStack+API
+implemented. API key/secret signed requests are not.
 
 Every call is timed end-to-end (including async job polling, since that is
 part of the wall-clock cost an operator/automation actually pays) and the
@@ -33,7 +32,7 @@ import time
 
 import requests
 
-log = logging.getLogger("cloudstack_client")
+log = logging.getLogger("ontap.benchmark.client")
 
 
 class CloudStackAPIError(Exception):

@@ -16,15 +16,12 @@
 # specific language governing permissions and limitations
 # under the License.
 """
-Turn benchmark_storage_pool_sequential.py / benchmark_storage_pool_concurrency.py's
-raw_ops_<run_id>.csv / summary_<run_id>.csv into markdown tables that match the
-layout of the storage-pool sections
-(5.1.1, 5.1.2, 6.1.1, 6.1.2) and the Results Log (section 9) of the
-"ONTAP Plugin - CloudStack Operations, Scale & Parallel Test Matrix"
-Confluence page, ready to paste back in.
+Turn a benchmark run's raw and summary CSVs into markdown tables for sections
+5.1.1, 5.1.2, 6.1.1, 6.1.2 (storage pools) or 5.2.x / 6.2.x (VM instances),
+plus Results Log rows.
 
 Usage:
-    python3 render_report.py --run-id RUN-20260722-120000 \
+    python3 render_report.py --run-id RUN_20260722_120000_ab12 \
         --cloudstack-build 4.23.0.0-SNAPSHOT --ontap-version 9.15.1
 """
 
@@ -120,7 +117,7 @@ def render_concurrency_table(summary_rows, test_id):
     rows = [r for r in summary_rows if r["test_id"] == test_id]
     rows.sort(key=lambda r: (int(r["checkpoint"]), PROTOCOL_ORDER.index(r["protocol"])
                               if r["protocol"] in PROTOCOL_ORDER else 99))
-    lines = ["| Concurrency (C) | Protocol | Total Wall-clock (s) | Success | Failure | Avg Time/pool (s) | Notes |",
+    lines = ["| Concurrency (C) | Protocol | Total Wall-clock (s) | Success | Failure | Avg Time/op (s) | Notes |",
              "|---|---|---|---|---|---|---|"]
     for r in rows:
         lines.append(

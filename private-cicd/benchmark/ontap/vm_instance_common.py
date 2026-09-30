@@ -40,6 +40,7 @@ try:
 except ImportError:
     sys.exit("PyYAML is required: pip install -r requirements.txt")
 
+from benchmark_support import get_logger, vm_name_token
 from cloudstack_client import CloudStackAPIError, CloudStackClient
 
 RAW_FIELDNAMES = [
@@ -69,10 +70,6 @@ def now_iso():
     return datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
 
 
-def new_run_id():
-    return datetime.datetime.utcnow().strftime("RUN_%Y%m%d_%H%M%S")
-
-
 def build_deploy_vm_params(name, infra_cfg, vm_cfg, proto_cfg):
     return {
         "name": name,
@@ -90,14 +87,14 @@ _UUID_RE = re.compile(r'"uuid"\s*:\s*"([0-9a-fA-F-]{36})"')
 
 
 def _extract_vm_id_from_error(error_text):
-    """When deployVirtualMachine's async job fails deep in orchestration (e.g. the
-    ENOSPC-driven "Unable to orchestrate the start of VM instance" failures - see
-    Confluence Issue #10), CloudStack has ALREADY created the VM (and its ROOT/DATA
-    volume records) before the failure - it just never finished starting it. The
-    job's errortext embeds that VM's uuid (e.g. '...{"instanceName":"i-2-107-VM",
-    "uuid":"b8f4..."}.'), so scrape it out here so the leftover VM/volume can at
-    least be identified and reported for manual inspection (see
-    report_failed_creates()) instead of being silently invisible."""
+    """When deployVirtualMachine's async job fails deep in orchestration (for example
+    an ENOSPC-driven "Unable to orchestrate the start of VM instance" failure),
+    CloudStack has ALREADY created the VM (and its ROOT/DATA volume records) before
+    the failure - it just never finished starting it. The job's errortext embeds
+    that VM's uuid (e.g. '...{"instanceName":"i-2-107-VM", "uuid":"b8f4..."}.'),
+    so scrape it out here so the leftover VM/volume can at least be identified and
+    reported for manual inspection (see report_failed_creates()) instead of being
+    silently invisible."""
     if not error_text:
         return None
     m = _UUID_RE.search(error_text)
@@ -135,7 +132,7 @@ def _force_purge_destroy_state_volumes(client, volume_ids, max_wait_sec=10):
     calls deleteVolume() on them explicitly - which force-deletes a Destroy-state
     volume immediately, bypassing the delay. Without this, repeated benchmark
     runs progressively fill up the dedicated bench_vm_<protocol> pool with
-    "deleted" disks, compounding the ENOSPC failures in Confluence Issue #10.
+    "deleted" disks, compounding ENOSPC failures on the dedicated bench pool.
     """
     deadline = time.time() + max_wait_sec
     remaining = set(volume_ids)
@@ -244,8 +241,8 @@ def append_summary_csv(path, rows):
 
 
 def report_failed_creates(failed):
-    """Failed deployVirtualMachine calls (e.g. the ENOSPC "Unable to orchestrate
-    the start of VM instance" failures in Confluence Issue #10) still leave a real
+    """Failed deployVirtualMachine calls (for example ENOSPC "Unable to orchestrate
+    the start of VM instance" failures) still leave a real
     VM + ROOT/DATA volume record behind in CloudStack - they just never finished
     starting. These are intentionally NOT auto-destroyed here (unlike the
     `created` list, which the benchmark itself deletes as part of 5.2.2/6.2.2) so
@@ -253,45 +250,114 @@ def report_failed_creates(failed):
     `listVolumes --state Destroy` on the bench_vm_<protocol> pool - to confirm
     exactly what got left behind and why. Clean them up manually (or via
     --cleanup-only) once you're done inspecting them."""
+    log = get_logger()
     failed_with_id = [(name, vm_id) for name, vm_id in failed if vm_id]
     if not failed_with_id:
         return
-    print(f"\n=== {len(failed_with_id)} failed-create VM(s) left in place for inspection (not cleaned up) ===")
+    log.info("%s failed-create VM(s) left in place for inspection (not cleaned up)", len(failed_with_id))
     for name, vm_id in failed_with_id:
-        print(f"  {name} ({vm_id})")
+        log.info("left in place: %s (%s)", name, vm_id)
 
 
-def cleanup_by_filter(client, name_filter):
+def _vm_name_pattern(prefix):
+    return re.compile(
+        rf"^{re.escape(prefix)}-(?:seq|c\d+)-[A-Za-z0-9]+-[A-Za-z0-9-]+-\d{{3}}$"
+    )
+
+
+def _allowed_orphan_pool_names(client, cfg):
+    """Pools this config is allowed to reclaim unattached data disks from."""
+    vm_cfg = cfg.get("vm_bench", {})
+    pool_prefix = vm_cfg.get("cleanup_pool_name_prefix", "bench_vm")
+    infra = cfg.get("infrastructure", {})
+    zoneid = infra.get("zoneid")
+    providers = {
+        str(entry.get("provider", "")).strip().lower()
+        for entry in cfg.get("ontap", {}).values()
+        if entry.get("provider")
+    }
+    payload, _ = client.call("listStoragePools", {}, poll_async=False)
+    pools = payload.get("storagepool", []) if isinstance(payload, dict) else []
+    allowed = set()
+    for pool in pools:
+        name = pool.get("name") or ""
+        provider = str(pool.get("provider") or "").strip().lower()
+        if not name.startswith(pool_prefix):
+            continue
+        if providers and provider not in providers:
+            continue
+        if zoneid and pool.get("zoneid") and pool.get("zoneid") != zoneid:
+            continue
+        allowed.add(name)
+    return allowed
+
+
+def cleanup_by_filter(client, name_filter, cfg):
+    """Destroy benchmark VMs only.
+
+    VM names rewrite '_' to '-' (hostnames). The filter is rewritten the same
+    way, otherwise a run id such as RUN_20260927_081500 never matches the VM
+    that was actually created. A shared zone is protected by the name prefix,
+    the benchmark name pattern, and the configured zone.
+    """
+    log = get_logger()
+    token = vm_name_token(name_filter)
+    if not token or len(token) < 4:
+        sys.exit("Refusing cleanup: name filter is missing or shorter than 4 characters")
+
+    prefix = cfg["vm_bench"]["vm_name_prefix"]
+    zoneid = cfg.get("infrastructure", {}).get("zoneid")
+    pattern = _vm_name_pattern(prefix)
+
     payload, _ = client.call("listVirtualMachines", {}, poll_async=False)
     vms = payload.get("virtualmachine", []) if isinstance(payload, dict) else []
-    matches = [v for v in vms if name_filter in v.get("name", "")]
-    print(f"Found {len(matches)} VM(s) whose name contains '{name_filter}'")
-    for v in matches:
+    name_hits = [v for v in vms if token in (v.get("name") or "")]
+    matches = []
+    for vm in name_hits:
+        name = vm.get("name") or ""
+        if not pattern.match(name):
+            continue
+        if zoneid and vm.get("zoneid") and vm.get("zoneid") != zoneid:
+            continue
+        matches.append(vm)
+
+    skipped = len(name_hits) - len(matches)
+    log.info("Found %s VM(s) eligible for cleanup (filter=%r, match token=%r)", len(matches), name_filter, token)
+    if skipped:
+        log.warning(
+            "Skipped %s VM(s) whose name contains %r but failed the prefix, name pattern, or zone check",
+            skipped, token,
+        )
+    for vm in matches:
         try:
-            result = destroy_vm(client, v["id"], v["name"])
+            result = destroy_vm(client, vm["id"], vm["name"])
             if result.success:
-                print(f"  destroyed {v['name']} ({v['id']}) [incl. any data disks]")
+                log.info("destroyed %s (%s) including any data disks", vm["name"], vm["id"])
             else:
-                print(f"  FAILED to destroy {v['name']}: {result.error}")
+                log.error("FAILED to destroy %s: %s", vm["name"], result.error)
         except Exception as exc:  # noqa: BLE001
-            print(f"  FAILED to destroy {v['name']}: {exc}")
+            log.error("FAILED to destroy %s: %s", vm["name"], exc)
 
     # Data disks can also end up orphaned (unattached) from prior runs whose
-    # VM was already destroyed without this volumeids fix. Volume names (e.g.
-    # "DATA-25") don't carry the run id/prefix, so instead of matching
-    # name_filter here, sweep any unattached data disk left on our dedicated
-    # bench_vm_* pools - nothing else legitimately lives there.
+    # VM was already destroyed without the volumeids argument. Volume names
+    # (e.g. "DATA-25") don't carry the run id, so only unattached data disks
+    # on pools that match this config's provider, zone, and pool-name prefix
+    # are deleted.
+    allowed_pools = _allowed_orphan_pool_names(client, cfg)
     vol_payload, _ = client.call("listVolumes", {"type": "DATADISK"}, poll_async=False)
     vols = vol_payload.get("volume", []) if isinstance(vol_payload, dict) else []
-    orphan_vols = [v for v in vols if not v.get("virtualmachineid") and v.get("storage", "").startswith("bench_vm")]
+    orphan_vols = [
+        v for v in vols
+        if not v.get("virtualmachineid") and (v.get("storage") or "") in allowed_pools
+    ]
     if orphan_vols:
-        print(f"Found {len(orphan_vols)} orphaned unattached DATADISK volume(s) on matching pools")
-        for v in orphan_vols:
+        log.info("Found %s orphaned unattached DATADISK volume(s) on configured pools", len(orphan_vols))
+        for vol in orphan_vols:
             try:
-                client.call("deleteVolume", {"id": v["id"]})
-                print(f"  deleted orphan volume {v['name']} ({v['id']})")
+                client.call("deleteVolume", {"id": vol["id"]})
+                log.info("deleted orphan volume %s (%s)", vol["name"], vol["id"])
             except Exception as exc:  # noqa: BLE001
-                print(f"  FAILED to delete orphan volume {v['name']}: {exc}")
+                log.error("FAILED to delete orphan volume %s: %s", vol["name"], exc)
 
 
 def load_config(path):
