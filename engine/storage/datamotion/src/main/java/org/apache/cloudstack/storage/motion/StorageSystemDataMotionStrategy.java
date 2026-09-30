@@ -3321,10 +3321,11 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
     private String migrateVolumeForKVM(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo, HostVO hostVO, String errMsg,
             boolean useStorageSystemCopy) {
         try {
+            // Grant before reading details: some drivers (e.g. ONTAP iSCSI) assign a new IQN/LUN number on grant.
+            _volumeService.grantAccess(srcVolumeInfo, hostVO, srcVolumeInfo.getDataStore());
+
             Map<String, String> srcDetails = getVolumeDetails(srcVolumeInfo);
             Map<String, String> destDetails = getVolumeDetails(destVolumeInfo);
-
-            _volumeService.grantAccess(srcVolumeInfo, hostVO, srcVolumeInfo.getDataStore());
 
             Command command;
             if (useStorageSystemCopy) {
