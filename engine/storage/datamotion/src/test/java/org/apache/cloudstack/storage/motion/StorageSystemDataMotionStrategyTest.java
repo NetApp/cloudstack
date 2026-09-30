@@ -27,6 +27,7 @@ import static org.mockito.MockitoAnnotations.initMocks;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
@@ -53,6 +54,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -285,6 +287,27 @@ public class StorageSystemDataMotionStrategyTest {
 
         Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
         Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
+    }
+
+    @Test
+    public void offlineIscsiMigrationReadsSourceIqnAfterGrantAccess() throws Exception {
+        OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "ISCSI", "svm1", null,
+                StoragePoolType.OntapiSCSI, StoragePoolType.OntapiSCSI);
+        VolumeVO srcVolumeVO = volumeDao.findById(10L);
+        AtomicBoolean srcGranted = new AtomicBoolean(false);
+        Mockito.doAnswer(invocation -> srcGranted.get() ? "/iqn/2" : "/iqn/0").when(srcVolumeVO).get_iScsiName();
+        Mockito.doAnswer(invocation -> {
+            srcGranted.set(true);
+            return true;
+        }).when(volumeService).grantAccess(Mockito.eq(context.srcVolume), Mockito.any(), Mockito.any());
+        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
+                .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
+
+        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
+
+        ArgumentCaptor<MigrateVolumeCommand> commandCaptor = ArgumentCaptor.forClass(MigrateVolumeCommand.class);
+        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), commandCaptor.capture());
+        Assert.assertEquals("/iqn/2", commandCaptor.getValue().getSrcDetails().get(DiskTO.IQN));
     }
 
     @Test(expected = CloudRuntimeException.class)

@@ -657,6 +657,17 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                     // Only retrieve LUN name for iSCSI volumes
                     grantAccessIscsi(host, volumeVO, details, svmName, storagePool);
+                    // The LUN number can change on remap, and callers build commands from their in-memory volume after this call.
+                    if (dataObject instanceof VolumeInfo && ((VolumeInfo) dataObject).getVolume() instanceof VolumeVO) {
+                        VolumeVO callerVolumeVO = (VolumeVO) ((VolumeInfo) dataObject).getVolume();
+                        callerVolumeVO.setPath(volumeVO.getPath());
+                        callerVolumeVO.set_iScsiName(volumeVO.get_iScsiName());
+                    }
+                    if (shouldUpdateNfsExportForMigration(volumeVO)
+                            && !storageManager.connectHostToSharedPool(host, storagePool.getId())) {
+                        throw new CloudRuntimeException(String.format("Failed to connect host [%s] to iSCSI storage pool [%s]",
+                                host.getName(), storagePool.getName()));
+                    }
                 } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                     if (shouldUpdateNfsExportForMigration(volumeVO)) {
                         updateNfsExportPolicyForHost(storagePool, host, details, AccessGroup.HostRuleAction.ADD);
