@@ -251,10 +251,14 @@ public class StorageStrategyTest {
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap())).thenReturn(aggregateDetail);
 
         // Execute
-        boolean result = storageStrategy.connect();
+        Map<String, Object> result = storageStrategy.connect();
 
         // Verify
-        assertTrue(result, "connect() should return true on success");
+        assertEquals(Boolean.TRUE, result.get(OntapStorageConstants.IS_VALID));
+        @SuppressWarnings("unchecked")
+        List<Aggregate> aggregates = (List<Aggregate>) result.get(OntapStorageConstants.AGGREGATES);
+        assertEquals(1, aggregates.size());
+        assertEquals("aggr-uuid-1", aggregates.get(0).getUuid());
         verify(svmFeignClient, times(1)).getSvmResponse(anyMap(), anyString());
     }
 
@@ -280,8 +284,9 @@ public class StorageStrategyTest {
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap())).thenReturn(aggregateDetail);
 
         // Execute & Verify - connect(false) should succeed regardless of available space.
-        boolean result = storageStrategy.connect(false);
-        assertTrue(result, "connect() should succeed for an online aggregate even when its free space is below the pool capacity");
+        Map<String, Object> result = storageStrategy.connect(false);
+        assertEquals(Boolean.TRUE, result.get(OntapStorageConstants.IS_VALID));
+        assertEquals(List.of(), result.get(OntapStorageConstants.AGGREGATES));
     }
 
     @Test
@@ -420,9 +425,10 @@ public class StorageStrategyTest {
         // Execute & Verify
         CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.connect());
         assertTrue(ex.getMessage().contains("No suitable aggregates found"));
-        boolean result = storageStrategy.connect(false);
+        Map<String, Object> result = storageStrategy.connect(false);
 
-        assertTrue(result);
+        assertEquals(Boolean.TRUE, result.get(OntapStorageConstants.IS_VALID));
+        assertEquals(List.of(), result.get(OntapStorageConstants.AGGREGATES));
         // connect(true) called getAggregateByUUID once; connect(false) must not add more calls
         verify(aggregateFeignClient, times(1)).getAggregateByUUID(anyString(), anyString(), anyMap());
     }
@@ -574,14 +580,11 @@ public class StorageStrategyTest {
 
     @Test
     public void testChooseAggregate_positive() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a");
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
-        Aggregate result = storageStrategy.chooseAggregate(5000000000L);
+        Aggregate result = storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L);
 
         assertNotNull(result);
         assertEquals("aggr1", result.getName());
@@ -591,36 +594,27 @@ public class StorageStrategyTest {
 
     @Test
     public void testChooseAggregate_invalidSize() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(-1L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), -1L));
         assertTrue(ex.getMessage().contains("Invalid volume size"));
     }
 
     @Test
     public void testChooseAggregate_nullSize() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(null));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), null));
         assertTrue(ex.getMessage().contains("Invalid volume size"));
     }
 
     @Test
     public void testChooseAggregate_noAggregates() {
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(null, 5000000000L));
         assertTrue(ex.getMessage().contains("No aggregates available"));
     }
 
     @Test
     public void testChooseAggregate_aggregateNotOnline() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = new Aggregate();
         aggregateDetail.setName("aggr1");
         aggregateDetail.setUuid("aggr-uuid-1");
@@ -630,44 +624,35 @@ public class StorageStrategyTest {
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("No suitable aggregates found"));
     }
 
     @Test
     public void testChooseAggregate_insufficientSpace() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 1000000.0, "node-a");
 
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("No suitable aggregates found"));
     }
 
     @Test
     public void testChooseAggregate_missingNode() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0);
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("does not have a node name"));
     }
 
     @Test
     public void testChooseAggregate_forbidden() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Map<String, Collection<String>> emptyHeaders = Collections.emptyMap();
         Request dummyReq = Request.create(Request.HttpMethod.GET, "http://test", emptyHeaders, (byte[]) null, (Charset) null);
         FeignException.Forbidden forbidden = new FeignException.Forbidden("Forbidden", dummyReq, null);
@@ -675,7 +660,7 @@ public class StorageStrategyTest {
                 .thenThrow(forbidden);
 
         CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertEquals("Forbidden", ex.getMessage());
         assertNull(ex.getCause());
     }
@@ -1281,6 +1266,13 @@ public class StorageStrategyTest {
     }
 
     // ========== Helper Methods ==========
+
+    private static List<Aggregate> candidateAggregates() {
+        Aggregate aggregate = new Aggregate();
+        aggregate.setName("aggr1");
+        aggregate.setUuid("aggr-uuid-1");
+        return List.of(aggregate);
+    }
 
     private void setupSuccessfulConnect() {
         Svm svm = new Svm();

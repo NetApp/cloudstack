@@ -108,8 +108,8 @@ public class OntapStorageUtils {
     public static StorageStrategy getStrategyByStoragePoolDetails(Map<String, String> details,
             boolean validateAggregatesForVolumeCreation) {
         StorageStrategy storageStrategy = resolveStrategyFromPoolDetails(details);
-        boolean isValid = storageStrategy.connect(validateAggregatesForVolumeCreation);
-        if (isValid) {
+        Map<String, Object> connectResult = storageStrategy.connect(validateAggregatesForVolumeCreation);
+        if (Boolean.TRUE.equals(connectResult.get(OntapStorageConstants.IS_VALID))) {
             logger.info("Connection to Ontap SVM [{}] successful", details.get(OntapStorageConstants.SVM_NAME));
             return storageStrategy;
         } else {

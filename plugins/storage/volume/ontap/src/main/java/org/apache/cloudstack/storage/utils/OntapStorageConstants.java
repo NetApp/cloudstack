@@ -60,6 +60,9 @@ public class OntapStorageConstants {
 
     public static final String TRUE = "true";
 
+    // Plugin helper constants
+    public static final String IS_VALID = "isValid";
+
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";

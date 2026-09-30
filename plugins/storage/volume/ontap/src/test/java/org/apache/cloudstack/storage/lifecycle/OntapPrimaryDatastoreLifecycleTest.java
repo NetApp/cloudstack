@@ -132,14 +132,19 @@ public class OntapPrimaryDatastoreLifecycleTest {
         clusterVO.setHypervisorType("KVM");
         when(_clusterDao.findById(1L)).thenReturn(clusterVO);
 
-        when(storageStrategy.connect()).thenReturn(true);
+        Aggregate candidate = new Aggregate();
+        candidate.setName("aggr1");
+        candidate.setUuid("aggr-uuid-1");
+        when(storageStrategy.connect()).thenReturn(Map.of(
+                OntapStorageConstants.IS_VALID, true,
+                OntapStorageConstants.AGGREGATES, List.of(candidate)));
         Aggregate aggregate = new Aggregate();
         aggregate.setName("aggr1");
         aggregate.setUuid("aggr-uuid-1");
         Aggregate.Node node = new Aggregate.Node();
         node.setName("node-a");
         aggregate.setNode(node);
-        when(storageStrategy.chooseAggregate(any())).thenReturn(aggregate);
+        when(storageStrategy.chooseAggregate(any(), any())).thenReturn(aggregate);
         when(storageStrategy.getNetworkInterface(any())).thenReturn(
                 Map.of(OntapStorageConstants.DATA_LIF, "testNetworkInterface"));
 
@@ -737,7 +742,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
             // Verify LIF selection completes before FlexVol creation
             InOrder inOrder = inOrder(storageStrategy);
-            inOrder.verify(storageStrategy).chooseAggregate(any());
+            inOrder.verify(storageStrategy).chooseAggregate(any(), any());
             inOrder.verify(storageStrategy).getNetworkInterface(any());
             inOrder.verify(storageStrategy).createStorageVolume(any(), any(), any());
 

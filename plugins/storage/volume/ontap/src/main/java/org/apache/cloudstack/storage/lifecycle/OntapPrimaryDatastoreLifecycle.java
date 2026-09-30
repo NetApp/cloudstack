@@ -138,14 +138,16 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 protocol);
 
         StorageStrategy storageStrategy = StorageProviderFactory.getStrategy(ontapStorage);
-        boolean isValid = storageStrategy.connect();
-        if (isValid) {
+        Map<String, Object> connectResult = storageStrategy.connect();
+        if (Boolean.TRUE.equals(connectResult.get(OntapStorageConstants.IS_VALID))) {
             if (storageStrategy.getResolvedSvmUuid() != null && !storageStrategy.getResolvedSvmUuid().isEmpty()) {
                 details.put(OntapStorageConstants.SVM_UUID, storageStrategy.getResolvedSvmUuid());
             }
             Aggregate aggregate;
             try {
-                aggregate = storageStrategy.chooseAggregate(capacityBytes);
+                @SuppressWarnings("unchecked")
+                List<Aggregate> aggregates = (List<Aggregate>) connectResult.get(OntapStorageConstants.AGGREGATES);
+                aggregate = storageStrategy.chooseAggregate(aggregates, capacityBytes);
             } catch (Exception e) {
                 logger.error("Exception occurred while choosing aggregate for pool: " + storagePoolName, e);
                 throw new CloudRuntimeException("Failed to choose ONTAP aggregate for pool: " + storagePoolName

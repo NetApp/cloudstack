@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -88,10 +89,6 @@ public abstract class StorageStrategy {
 
     protected OntapStorage storage;
 
-    /**
-     * Presents aggregate object for the unified storage, not eligible for disaggregated
-     */
-    private List<Aggregate> aggregates;
     private String resolvedSvmUuid;
 
     private static final Logger logger = LogManager.getLogger(StorageStrategy.class);
@@ -249,7 +246,7 @@ public abstract class StorageStrategy {
      * Validates ONTAP cluster reachability, credentials, SVM state, protocol, and aggregate capacity
      * for new FlexVol creation (primary pool provisioning).
      */
-    public boolean connect() {
+    public Map<String, Object> connect() {
         return connect(true);
     }
 
@@ -261,12 +258,14 @@ public abstract class StorageStrategy {
      * {@code false} — they operate on an existing FlexVol and must not compare aggregate space to
      * the full pool capacity stored in pool details.</p>
      */
-    public boolean connect(boolean validateAggregatesForVolumeCreation) {
+    public Map<String, Object> connect(boolean validateAggregatesForVolumeCreation) {
         logger.info("Attempting to connect to ONTAP cluster at " + storage.getStorageIP() + " and validate SVM " +
                 storage.getSvmName() + ", protocol " + storage.getProtocol()
                 + (validateAggregatesForVolumeCreation ? " (with aggregate validation)" : " (operations only)"));
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         String svmName = storage.getSvmName();
+        Map<String, Object> result = new HashMap<>();
+        List<Aggregate> selectedAggregates = List.of();
         try {
             // Call the SVM API to check if the SVM exists
             Svm svm = new Svm();
@@ -297,7 +296,7 @@ public abstract class StorageStrategy {
             this.resolvedSvmUuid = svm.getUuid();
 
             if (validateAggregatesForVolumeCreation) {
-                validateAndSelectAggregatesForVolumeCreation(authHeader, svmName, svm.getAggregates());
+                selectedAggregates = validateAndSelectAggregatesForVolumeCreation(authHeader, svmName, svm.getAggregates());
             } else {
                 logger.debug("Skipping aggregate capacity validation — not required for existing-volume operations");
             }
@@ -316,7 +315,9 @@ public abstract class StorageStrategy {
             logger.error("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
             throw new CloudRuntimeException("Failed to connect to ONTAP cluster: " + e.getMessage(), e);
         }
-        return true;
+        result.put(OntapStorageConstants.IS_VALID, true);
+        result.put(OntapStorageConstants.AGGREGATES, selectedAggregates);
+        return result;
     }
 
     /**
@@ -326,11 +327,12 @@ public abstract class StorageStrategy {
         return resolvedSvmUuid;
     }
 
-    private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {
+    private List<Aggregate> validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {
         if (aggrs == null || aggrs.isEmpty()) {
             logger.error("No aggregates are assigned to SVM " + svmName);
             throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
         }
+        List<Aggregate> selectedAggregates = new ArrayList<>();
         for (Aggregate aggr : aggrs) {
             logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
             Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid(),
@@ -350,27 +352,28 @@ public abstract class StorageStrategy {
                 continue;
             }
             logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
-            this.aggregates = List.of(aggr);
+            selectedAggregates.add(aggr);
         }
-        if (this.aggregates == null || this.aggregates.isEmpty()) {
+        if (selectedAggregates.isEmpty()) {
             logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
             throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
         }
+        return selectedAggregates;
     }
 
     // Common methods like create/delete etc., should be here
 
     /**
-     * Selects the best aggregate for a volume of the given size from candidates populated by
-     * {@link #connect(boolean)} with aggregate validation enabled.
+     * Selects the best aggregate for a volume of the given size from the supplied candidates.
      *
      * <p>Picks the online aggregate with the largest available block space that can fit
      * {@code size}. The returned aggregate includes node information for LIF affinity.</p>
      *
+     * @param aggregates candidate aggregates to choose from
      * @param size requested volume size in bytes
      * @return the chosen aggregate detail response
      */
-    public Aggregate chooseAggregate(Long size) {
+    public Aggregate chooseAggregate(List<Aggregate> aggregates, Long size) {
         String svmName = storage.getSvmName();
         if (aggregates == null || aggregates.isEmpty()) {
             logger.error("No aggregates available to create volume on SVM " + svmName);
@@ -448,7 +451,7 @@ public abstract class StorageStrategy {
      *
      * @param volumeName the name of the volume to create
      * @param size the size of the volume in bytes
-     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(Long)}
+     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(List, Long)}
      * @return the created Volume object
      */
     public Volume createStorageVolume(String volumeName, Long size, Aggregate aggregate) {
@@ -681,7 +684,7 @@ public abstract class StorageStrategy {
      *   <li>Any UP and enabled LIF — returned with a warning</li>
      * </ol>
      *
-     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(Long)};
+     * @param aggregate the aggregate previously selected via {@link #chooseAggregate(List, Long)};
      *                  must include a node name for LIF affinity
      * @return map with {@link OntapStorageConstants#DATA_LIF} set to the LIF IP address, and
      *         optionally {@link OntapStorageConstants#LIF_WARNING} when a non-ideal LIF was selected
