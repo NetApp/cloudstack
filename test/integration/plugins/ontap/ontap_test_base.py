@@ -28,6 +28,7 @@ Provides:
 import logging
 import random
 import requests
+import socket
 import sys
 import time
 import urllib3
@@ -38,7 +39,9 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
+    listTemplates as listTemplatesAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
@@ -104,6 +107,75 @@ def get_datacenter_config(testclient, test_cls):
     return cfg
 
 
+def is_configured(value):
+    """Return whether a config value is non-empty and not a placeholder."""
+    return value is not None and str(value).strip() != "" and not (
+        str(value).startswith("<<") and str(value).endswith(">>")
+    )
+
+
+def normalize_template_name(name):
+    """Normalize common KVM template name variants for comparison."""
+    if not name:
+        return ""
+    normalized = " ".join(name.lower().strip().split())
+    return normalized.replace("(64 bit)", "(64-bit)").replace(
+        "(64bit)", "(64-bit)"
+    )
+
+
+def list_kvm_templates(api_client, zone_id):
+    """Return every KVM template visible in a zone."""
+    cmd = listTemplatesAPI.listTemplatesCmd()
+    cmd.templatefilter = "all"
+    cmd.listall = True
+    cmd.zoneid = zone_id
+    return [
+        template for template in (api_client.listTemplates(cmd) or [])
+        if str(getattr(template, "hypervisor", "")).lower() == "kvm"
+    ]
+
+
+def find_kvm_template(api_client, zone_id, template_name):
+    """Find a KVM template by normalized name."""
+    target = normalize_template_name(template_name)
+    for template in list_kvm_templates(api_client, zone_id):
+        if normalize_template_name(template.name) == target:
+            return template
+    return None
+
+
+def host_aliases(url):
+    """Return the DNS name and resolved IP represented by a host URL."""
+    hostname = urlparse(url).hostname or url
+    aliases = {hostname}
+    try:
+        aliases.add(socket.gethostbyname(hostname))
+    except (socket.error, UnicodeError):
+        pass
+    return {alias for alias in aliases if alias}
+
+
+def map_hosts_by_address(hosts):
+    """Index CloudStack hosts by both reported IP address and name."""
+    addresses = {}
+    for host in hosts or []:
+        for attribute in ("ipaddress", "name"):
+            value = getattr(host, attribute, None)
+            if value:
+                addresses[value] = host
+    return addresses
+
+
+def get_ready_hosts(hosts):
+    """Return hosts that are Up and enabled for resource allocation."""
+    return [
+        host for host in (hosts or [])
+        if str(getattr(host, "state", "")).lower() == "up"
+        and str(getattr(host, "resourcestate", "Enabled")).lower() == "enabled"
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Pool detail helper
 # ---------------------------------------------------------------------------
@@ -135,8 +207,20 @@ class OntapRestClient:
 
     def _get(self, path, params=None):
         url = self._base + path
-        resp = requests.get(url, auth=self._auth, params=params,
-                            verify=False, timeout=30)
+        for attempt in range(1, 4):
+            try:
+                resp = requests.get(url, auth=self._auth, params=params,
+                                    verify=False, timeout=30)
+                break
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout):
+                if attempt == 3:
+                    raise
+                logger.warning(
+                    "Transient ONTAP REST GET failure for %s; retrying "
+                    "(attempt %d of 3)", path, attempt + 1,
+                )
+                time.sleep(attempt)
         resp.raise_for_status()
         return resp.json()
 
@@ -145,6 +229,10 @@ class OntapRestClient:
         resp = requests.delete(url, auth=self._auth, params=params,
                                verify=False, timeout=30)
         resp.raise_for_status()
+
+    def check_connection(self):
+        """Return basic cluster data when the ONTAP REST endpoint is ready."""
+        return self._get("/cluster", params={"fields": "name,uuid"})
 
     def delete_volume(self, name):
         """Delete the ONTAP FlexVol with the given name. No-op if not found."""
@@ -219,7 +307,7 @@ class OntapRestClient:
         """Return the ONTAP LUN record for the given full path, or None."""
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name, "name": lun_path,
-                                 "fields": "name,uuid,enabled,status"})
+                                 "fields": "name,uuid,serial_number,enabled,status"})
         records = data.get("records", [])
         return records[0] if records else None
 

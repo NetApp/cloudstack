@@ -24,6 +24,7 @@
 #   bash test/integration/plugins/ontap/run_tests.sh iscsi      # all iSCSI suites
 #   bash test/integration/plugins/ontap/run_tests.sh nfs3       # all NFS3 suites
 #   bash test/integration/plugins/ontap/run_tests.sh both         # iscsi then nfs3
+#   bash test/integration/plugins/ontap/run_tests.sh migration  # setup + ordered migration suites
 #   bash test/integration/plugins/ontap/run_tests.sh nfs3_workflow  # single suite
 
 ONTAP_DIR=test/integration/plugins/ontap
@@ -73,6 +74,12 @@ NFS3_SUITES=(
     "NFS3 volume lifecycle|nfs3_volume|${ONTAP_DIR}/nfs3/volume/test_volume_lifecycle.py"
     "NFS3 zone-scoped pool|zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
     "NFS3 VM volume attach|vm_volume_workflow|${ONTAP_DIR}/nfs3/instance/test_vm_volume_attach.py"
+)
+
+MIGRATION_SUITES=(
+    "Live VM with storage migration|live_storage|${ONTAP_DIR}/migration/test_01_live_vm_with_storage_migration.py"
+    "Stopped VM storage migration|stopped_vm|${ONTAP_DIR}/migration/test_02_stopped_vm_storage_migration.py"
+    "Volume migration|volume_migration|${ONTAP_DIR}/migration/test_03_volume_migration.py"
 )
 
 record_results() {
@@ -225,6 +232,10 @@ should_run_tag() {
         nfs3)
             [[ "$tag" == nfs3_* || "$tag" == "zone_pool" || "$tag" == "vm_volume_workflow" ]]
             ;;
+        migration)
+            [[ "$tag" == "setup_zone" || "$tag" == "live_storage" ||
+                "$tag" == "stopped_vm" || "$tag" == "volume_migration" ]]
+            ;;
         *)
             [[ "$FILTER" == "$tag" ]]
             ;;
@@ -254,8 +265,18 @@ run_group() {
     fi
 
     set +e
-    $PYTHON -m nose --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
-    rc=${PIPESTATUS[0]}
+    local attempt
+    for attempt in 1 2 3; do
+        : > "$tmpout"
+        $PYTHON -m nose --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
+        rc=${PIPESTATUS[0]}
+        if grep -q "Marvin Init Failed" "$tmpout" && [[ "$attempt" -lt 3 ]]; then
+            echo "  Marvin init failed on attempt ${attempt}; retrying in 5s..."
+            sleep 5
+            continue
+        fi
+        break
+    done
     set -e
     out=$(cat "$tmpout")
 
@@ -312,6 +333,22 @@ run_nfs3_suites() {
     done
 }
 
+run_migration_suites() {
+    local entry label tag file index last_index
+    last_index=$((${#MIGRATION_SUITES[@]} - 1))
+    for index in "${!MIGRATION_SUITES[@]}"; do
+        entry="${MIGRATION_SUITES[$index]}"
+        IFS='|' read -r label tag file <<< "$entry"
+        if [[ "$index" -lt "$last_index" ]]; then
+            export ONTAP_MIGRATION_KEEP_POOLS=1
+        else
+            unset ONTAP_MIGRATION_KEEP_POOLS
+        fi
+        run_group "$label" "$tag" "$file"
+    done
+    unset ONTAP_MIGRATION_KEEP_POOLS
+}
+
 run_protocol_batch() {
     local protocol="$1"
     local parent_dir="${2:-}"
@@ -330,10 +367,17 @@ run_protocol_batch() {
     finalize_batch
 }
 
+run_migration_batch() {
+    local parent_dir="${1:-}"
+    init_batch "migration" "$parent_dir"
+    run_migration_suites
+    finalize_batch
+}
+
 run_single_suite_by_tag() {
     local want_tag="$1"
     local entry label tag file
-    for entry in "${ISCSI_SUITES[@]}" "${NFS3_SUITES[@]}"; do
+    for entry in "${ISCSI_SUITES[@]}" "${NFS3_SUITES[@]}" "${MIGRATION_SUITES[@]}"; do
         IFS='|' read -r label tag file <<< "$entry"
         if [[ "$tag" == "$want_tag" ]]; then
             run_group "$label" "$tag" "$file"
@@ -369,6 +413,7 @@ case "$FILTER" in
 
         run_protocol_batch iscsi "$BOTH_DIR"
         run_protocol_batch nfs3 "$BOTH_DIR"
+        run_migration_batch "$BOTH_DIR"
         write_combined_both_summary "$BOTH_DIR"
         ;;
     both)
@@ -386,6 +431,11 @@ case "$FILTER" in
     nfs3)
         run_protocol_batch nfs3
         ;;
+    migration)
+        run_group "Advanced zone setup" "setup_zone" \
+            "${ONTAP_DIR}/zone_setup/test_setup_zone.py"
+        run_migration_batch
+        ;;
     setup_zone)
         run_group "Advanced zone setup" "setup_zone" \
             "${ONTAP_DIR}/zone_setup/test_setup_zone.py"
@@ -401,7 +451,7 @@ case "$FILTER" in
             print_final_summary
         else
             echo "Unknown filter: $FILTER" >&2
-            echo "Use: all | both | iscsi | nfs3 | setup_zone | cleanup_zone | <suite_tag>" >&2
+            echo "Use: all | both | iscsi | nfs3 | migration | setup_zone | cleanup_zone | <suite_tag>" >&2
             exit 1
         fi
         ;;
