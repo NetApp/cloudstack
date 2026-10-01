@@ -154,6 +154,24 @@ public class OntapIscsiStorageAdaptorTest {
     }
 
     /**
+     * Other vendors publish the same scsi-3 plus 32 hex shape. Only NetApp's NAA prefix is ours, so a
+     * different array's LUN or a local RAID volume must fall through to the next adaptor.
+     */
+    @Test
+    public void disconnectByPathDoesNotClaimOtherVendorsScsiDevices() {
+        OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
+
+        assertFalse("Pure FlashArray also publishes scsi-3 names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3624a9370f1f4f5a4b0d3c2e1000113aa"));
+        assertFalse("HPE Primera also publishes scsi-3 names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-360002ac0000000000000012300020a1b"));
+        assertFalse("A local RAID volume also publishes scsi-3 names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600508b1001c4d2e8a0f6b1c2d3e4f50"));
+        assertFalse("NetApp E-Series is not managed by this adaptor",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a0b800029e3a4000012345f6a7b8c"));
+    }
+
+    /**
      * A claimed device that has already gone reports success: there is no session left to tear down,
      * and returning false would send the manager on to adaptors that would mishandle the path.
      */

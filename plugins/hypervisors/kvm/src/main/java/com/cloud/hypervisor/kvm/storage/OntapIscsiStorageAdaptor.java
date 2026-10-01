@@ -94,8 +94,16 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
      */
     private static final String BY_ID_SCSI_PREFIX = "/dev/disk/by-id/scsi-3";
 
-    /** A LUN WWID is the vendor OUI plus the hex of a 12-character serial: 32 hex digits. */
-    private static final Pattern LUN_WWID = Pattern.compile("[0-9a-fA-F]{32}");
+    /**
+     * A LUN WWID is NetApp's NAA prefix (type 6, OUI 00a098, vendor nibble 0) followed by the hex of
+     * a 12-character serial: 32 hex digits. The prefix must stay in step with NETAPP_NAA_OUI in the
+     * ONTAP storage plugin, which builds every WWID this adaptor sees. Lower case only: udev
+     * publishes lower case, and so does the plugin.
+     *
+     * Anchoring on the prefix is what stops this adaptor claiming another vendor's scsi-3 device
+     * when KVMStoragePoolManager.disconnectPhysicalDiskByPath scans every adaptor.
+     */
+    private static final Pattern LUN_WWID = Pattern.compile("600a0980[0-9a-f]{24}");
 
     private static final String SYS_BLOCK = "/sys/block";
     private static final String SYS_ISCSI_SESSION = "/sys/class/iscsi_session";
@@ -107,7 +115,7 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
     /** iscsiadm's ISCSI_ERR_SESS_EXISTS: returned by "--login" when already logged in (e.g. Ubuntu). */
     private static final int ISCSI_SESSION_EXISTS_CODE = 15;
 
-    private static final int DEVICE_WAIT_TRIES = 10;
+    private static final int DEVICE_WAIT_TRIES = 15;
     private static final int DEVICE_WAIT_INTERVAL_MS = 1000;
     private static final int DEFAULT_ISCSI_PORT = 3260;
 
@@ -235,10 +243,11 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
         Integer sessionId = findSessionId(kernelDevice);
         String iqn = sessionId == null ? null : readSessionAttribute(sessionId, "targetname");
         if (iqn == null) {
-            logger.warn("Device {} ({}) is not attached to a readable iSCSI session; removing the device only",
+            // A real ONTAP LUN always sits under an iSCSI session. If this one does not, it is not
+            // ours, so leave it alone and let the manager try the next adaptor.
+            logger.debug("Device {} ({}) is not on a readable iSCSI session, not claiming it",
                     localPath, kernelDevice);
-            removeScsiDevice(kernelDevice);
-            return true;
+            return false;
         }
 
         return disconnectLun(null, 0, iqn, localPath.substring(BY_ID_SCSI_PREFIX.length()));
@@ -331,10 +340,6 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
                                                                 KVMStoragePool destPool, Storage.ImageFormat format, int timeout) {
         return null;
     }
-
-    // ---------------------------------------------------------------------------------------------
-    // iSCSI session handling
-    // ---------------------------------------------------------------------------------------------
 
     private boolean createIscsiNode(String host, int port, String iqn, String volumePath) {
         String result = runIscsiadmNodeCommand(host, port, iqn, "-o", "new");
