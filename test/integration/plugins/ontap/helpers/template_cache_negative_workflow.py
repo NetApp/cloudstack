@@ -328,7 +328,7 @@ class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheBase):
             cmd.networkids = self.__class__.network_id
         vm = self.apiClient.deployVirtualMachine(cmd)
         self.assertIsNotNone(vm, "deployVirtualMachine returned None")
-        return self._poll_vm_state(vm.id, "Running", timeout=900)
+        return self._poll_vm_state(vm.id, "Running")
 
     def _deploy_vm_expect_failure(self, name_suffix, service_offering_id,
                                   timeout=300):
@@ -356,13 +356,11 @@ class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheBase):
             return
 
         self.assertIsNotNone(vm, "deploy returned None without raising")
+        reached_running = False
         try:
             self._poll_vm_state(vm.id, "Running", timeout=timeout)
-            self.fail(
-                "Deploy %s unexpectedly reached Running (boundary should fail)"
-                % name_suffix
-            )
-        except Exception as ex:
+            reached_running = True
+        except AssertionError as ex:
             logger.info(
                 "Deploy %s did not reach Running as expected: %s"
                 % (name_suffix, ex)
@@ -372,6 +370,11 @@ class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheBase):
                 self._destroy_vm_static(vm.id)
             except Exception:
                 pass
+        if reached_running:
+            self.fail(
+                "Deploy %s unexpectedly reached Running (boundary should fail)"
+                % name_suffix
+            )
 
     def _force_delete_pool(self, pool):
         if pool is None:

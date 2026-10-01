@@ -22,7 +22,10 @@ Provides:
   OntapRestClient    - thin wrapper around the ONTAP REST API (NFS + iSCSI methods)
   _parse_pool_details - converts a StoragePool details attribute to a plain dict
   OntapTestBase      - base cloudstackTestCase with common tearDownClass,
-                       _poll_pool_state, _create_volume, and _delete_pool
+                       _poll_pool_state, _poll_vm_state, _create_volume,
+                       _delete_pool and the template-cache assertions (every
+                       ONTAP ROOT volume on KVM is cloned from the primary
+                       template cache)
 """
 
 import logging
@@ -38,7 +41,10 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
+    listVirtualMachines as listVirtualMachinesAPI,
+    listVolumes as listVolumesAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
@@ -48,6 +54,8 @@ from marvin.lib.base import Account, DiskOffering
 from marvin.sshClient import SshClient
 from marvin.lib.common import get_domain, get_zone, list_clusters, list_storage_pools
 from marvin.lib.utils import cleanup_resources
+
+from helpers import template_cache_util as tcu
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -120,6 +128,20 @@ def _parse_pool_details(pool):
         k: v for k, v in vars(details_raw).items()
         if not k.startswith("_") and k != "typeInfo"
     }
+
+
+def _list_vms_cmd(vm_id):
+    cmd = listVirtualMachinesAPI.listVirtualMachinesCmd()
+    cmd.id = vm_id
+    cmd.listall = True
+    return cmd
+
+
+def _list_vols_for_vm(vm_id):
+    cmd = listVolumesAPI.listVolumesCmd()
+    cmd.virtualmachineid = vm_id
+    cmd.listall = True
+    return cmd
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +460,14 @@ class OntapTestBase(cloudstackTestCase):
     # Subclass sets this to distinguish volume names, e.g. "OntapNFS3Vol"
     _vol_name_prefix = "OntapVol"
 
+    # Template-cache suites set these: "NFS3" / "ISCSI" and the numeric
+    # vm_template.id used as the template_spool_ref key.
+    PROTOCOL = "NFS3"
+    template_db_id = None
+
+    # VM states from which the VM will never reach any other target state.
+    _VM_TERMINAL_STATES = ("error", "destroyed", "expunging")
+
     # ---- zone guard ----------------------------------------------------
 
     @classmethod
@@ -736,6 +766,121 @@ class OntapTestBase(cloudstackTestCase):
         self.fail(
             "Pool %s did not reach state '%s' within %ds (last: '%s')"
             % (pool_id, target_state, timeout, current_state)
+        )
+
+    def _poll_vm_state(self, vm_id, target_state, timeout=300, interval=10):
+        """
+        Poll listVirtualMachines until the VM reaches target_state.
+        Fails immediately when the VM lands in a terminal state other than
+        the target instead of waiting out the full timeout.
+        """
+        deadline = time.time() + timeout
+        current_state = "unknown"
+        target = target_state.lower()
+        while time.time() < deadline:
+            vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
+            if vms:
+                current_state = vms[0].state
+                current = (current_state or "").lower()
+                if current == target:
+                    return vms[0]
+                if current in self._VM_TERMINAL_STATES:
+                    self.fail(
+                        "VM %s entered terminal state '%s' while waiting for '%s'"
+                        % (vm_id, current_state, target_state)
+                    )
+            time.sleep(interval)
+        self.fail(
+            "VM %s did not reach state '%s' within %ds (last: '%s')"
+            % (vm_id, target_state, timeout, current_state)
+        )
+
+    # ---- template-cache assertions ------------------------------------
+
+    def _is_iscsi(self):
+        return self.PROTOCOL.upper() == "ISCSI"
+
+    def _root_volume_for_vm(self, vm_id):
+        vols = self.apiClient.listVolumes(_list_vols_for_vm(vm_id)) or []
+        roots = [
+            v for v in vols
+            if str(getattr(v, "type", "")).upper() == "ROOT"
+        ]
+        self.assertTrue(roots, "No ROOT volume for VM %s" % vm_id)
+        return roots[0]
+
+    def _assert_root_on_pool(self, vm_id, pool):
+        root = self._root_volume_for_vm(vm_id)
+        self.assertEqual(
+            str(root.storageid), str(pool.id),
+            "ROOT volume storageid=%s should equal ONTAP pool id=%s "
+            "(check service-offering / pool storage tags)"
+            % (root.storageid, pool.id),
+        )
+        return root
+
+    def _wait_for_ready_spool_ref(self, pool_db_id, timeout=600):
+        spool = tcu.wait_for_spool_ref(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+            timeout=timeout,
+        )
+        tcu.assert_spool_ref_ready(
+            self, spool, expect_local_path=self._is_iscsi(),
+        )
+        return spool
+
+    def _assert_single_ready_spool_ref(self, pool_db_id):
+        count = tcu.count_template_spool_refs(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+        )
+        self.assertEqual(
+            count, 1, "Expected one template_spool_ref, got %s" % count,
+        )
+        spool = tcu.get_template_spool_ref(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+        )
+        tcu.assert_spool_ref_ready(
+            self, spool, expect_local_path=self._is_iscsi(),
+        )
+        return spool
+
+    def _assert_cache_on_ontap(self, pool, spool_ref):
+        if self._is_iscsi():
+            tcu.assert_iscsi_template_cache_lun(
+                self, self.ontap, self.svm_name, pool.name,
+                self.__class__.template_db_id,
+            )
+            cache_count = tcu.count_iscsi_template_cache_luns(
+                self.ontap, self.svm_name, pool.name,
+                self.__class__.template_db_id,
+            )
+            self.assertEqual(
+                cache_count, 1,
+                "Expected exactly one cs_tmpl_%s LUN, found %s"
+                % (self.__class__.template_db_id, cache_count),
+            )
+        else:
+            tcu.assert_nfs_template_cache_file(
+                self, self.ontap, pool.name, spool_ref.get("install_path")
+            )
+
+    def _count_non_cache_luns(self, pool):
+        return tcu.count_luns_excluding_template_cache(
+            self.ontap, self.svm_name, pool.name
+        )
+
+    def _wait_for_non_cache_lun_count(self, pool, expected, timeout=180,
+                                      interval=10):
+        """Poll until the FlexVol holds ``expected`` non-cache LUNs."""
+        deadline = time.time() + timeout
+        current = self._count_non_cache_luns(pool)
+        while current != expected and time.time() < deadline:
+            time.sleep(interval)
+            current = self._count_non_cache_luns(pool)
+        self.assertEqual(
+            current, expected,
+            "Expected %s non-cache LUNs in FlexVol '%s', found %s"
+            % (expected, pool.name, current),
         )
 
     def _create_volume(self, pool_id):

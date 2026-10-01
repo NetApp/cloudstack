@@ -46,7 +46,7 @@ data volume's LUN, so the ROOT and cache LUNs in the same FlexVol do not
 affect them.
 
 Workflow:
-  01  Create iSCSI primary storage pool on ONTAP (tagged with templateCacheTags)
+  01  Create iSCSI primary storage pool on ONTAP (tagged <storagePoolTags>-tmpl-cache)
   02  Create a CloudStack data volume on the iSCSI pool (LUN on ONTAP)
   03  Deploy a VM — ROOT on ONTAP; seeds the cs_tmpl_* cache LUN
   03a Deploy a second VM — reuses the cache LUN (one more ROOT clone LUN only)
@@ -102,7 +102,6 @@ from marvin.lib.common import list_storage_pools
 from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
 from helpers import template_cache_util as tcu
 from helpers.template_cache_base import (
-    TemplateCacheAssertionsMixin,
     find_ready_kvm_template,
     tagged_compute_offering_data,
     template_cache_capacity_bytes,
@@ -197,7 +196,7 @@ class TestData:
 # Sequential workflow test class
 # ---------------------------------------------------------------------------
 
-class TestOntapVMVolumeAttachISCSI(TemplateCacheAssertionsMixin, OntapTestBase):
+class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     """
     Tests iSCSI ONTAP data volume lifecycle with a running CloudStack VM whose
     ROOT volume is on the ONTAP pool (primary template cache).
@@ -404,19 +403,6 @@ class TestOntapVMVolumeAttachISCSI(TemplateCacheAssertionsMixin, OntapTestBase):
         response = self.apiClient.createStoragePool(cmd)
         return StoragePool(response.__dict__)
 
-    def _poll_vm_state(self, vm_id, target_state, timeout=300, interval=10):
-        deadline = time.time() + timeout
-        current_state = "unknown"
-        while time.time() < deadline:
-            vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
-            if vms:
-                current_state = vms[0].state
-                if current_state.lower() == target_state.lower():
-                    return vms[0]
-            time.sleep(interval)
-        self.fail("VM %s did not reach '%s' within %ds (last: '%s')"
-                  % (vm_id, target_state, timeout, current_state))
-
     def _poll_volume_field(self, vol_id, field, target, timeout=120,
                            interval=5):
         """Poll a volume field until it matches target; return the volume."""
@@ -568,7 +554,7 @@ class TestOntapVMVolumeAttachISCSI(TemplateCacheAssertionsMixin, OntapTestBase):
         vm = self.apiClient.deployVirtualMachine(cmd)
         self.__class__.vm = vm
 
-        result = self._poll_vm_state(vm.id, "Running", timeout=900)
+        result = self._poll_vm_state(vm.id, "Running")
         self.assertEqual(
             result.state, "Running",
             "VM should be 'Running' after deploy, got '%s'" % result.state
@@ -619,7 +605,7 @@ class TestOntapVMVolumeAttachISCSI(TemplateCacheAssertionsMixin, OntapTestBase):
         vm2 = self.apiClient.deployVirtualMachine(cmd)
         self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
         self.__class__.vm2 = vm2
-        self._poll_vm_state(vm2.id, "Running", timeout=900)
+        self._poll_vm_state(vm2.id, "Running")
 
         self._assert_root_on_pool(vm2.id, pool)
         spool = self._assert_single_ready_spool_ref(self.__class__.pool_db_id)

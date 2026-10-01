@@ -18,10 +18,8 @@
 """
 Shared building blocks for ONTAP primary template-cache Marvin checks.
 
-  TemplateCacheAssertionsMixin
-      ROOT placement, template_spool_ref and ONTAP cache-object assertions.
-      Mixed into the VM instance suites (happy path: seed / reuse / survive)
-      and the negative suite.
+The template-cache assertions themselves live on OntapTestBase, since every
+ONTAP ROOT volume on KVM is cloned from the primary template cache.
 
   OntapTemplateCacheBase
       setUpClass for the standalone negative suite (zone, template, guest
@@ -43,11 +41,14 @@ from marvin.cloudstackAPI import (
     listNetworkOfferings as listNetworkOfferingsAPI,
     listNetworks as listNetworksAPI,
     listTemplates as listTemplatesAPI,
-    listVirtualMachines as listVirtualMachinesAPI,
-    listVolumes as listVolumesAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
 )
-from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
+from ontap_test_base import (
+    OntapRestClient,
+    OntapTestBase,
+    _list_vms_cmd,
+    get_datacenter_config,
+)
 from helpers import template_cache_util as tcu
 
 logger = logging.getLogger("TemplateCacheBase")
@@ -56,24 +57,13 @@ logger = logging.getLogger("TemplateCacheBase")
 DEFAULT_TEMPLATE_CACHE_CAPACITY_BYTES = 50 * 1024 * 1024 * 1024
 
 
-def _list_vms_cmd(vm_id):
-    cmd = listVirtualMachinesAPI.listVirtualMachinesCmd()
-    cmd.id = vm_id
-    cmd.listall = True
-    return cmd
-
-
-def _list_vols_for_vm(vm_id):
-    cmd = listVolumesAPI.listVolumesCmd()
-    cmd.virtualmachineid = vm_id
-    cmd.listall = True
-    return cmd
-
-
 def template_cache_tags(proto_cfg, protocol_cfg_key):
-    """Dedicated storage tag so ROOT is forced onto the ONTAP pool."""
-    return (proto_cfg.get("templateCacheTags")
-            or "ontap-%s-tmpl-cache" % protocol_cfg_key)
+    """
+    Dedicated storage tag (``<storagePoolTags>-tmpl-cache``) so ROOT is forced
+    onto the template-cache suite's own pool, not pools of other suites.
+    """
+    base = proto_cfg.get("storagePoolTags") or "ontap-%s" % protocol_cfg_key
+    return base + "-tmpl-cache"
 
 
 def template_cache_capacity_bytes(pool_cfg):
@@ -169,106 +159,7 @@ class TemplateCacheTestData(object):
         }
 
 
-class TemplateCacheAssertionsMixin(object):
-    """
-    Template-cache assertions shared by the instance and negative suites.
-
-    The host class must provide ``apiClient``, ``dbConnection``, ``ontap``,
-    ``svm_name``, ``PROTOCOL`` ("NFS3" / "ISCSI") and a class-level
-    ``template_db_id``.
-    """
-
-    PROTOCOL = "NFS3"
-    template_db_id = None
-
-    def _is_iscsi(self):
-        return self.PROTOCOL.upper() == "ISCSI"
-
-    def _root_volume_for_vm(self, vm_id):
-        vols = self.apiClient.listVolumes(_list_vols_for_vm(vm_id)) or []
-        roots = [
-            v for v in vols
-            if str(getattr(v, "type", "")).upper() == "ROOT"
-        ]
-        self.assertTrue(roots, "No ROOT volume for VM %s" % vm_id)
-        return roots[0]
-
-    def _assert_root_on_pool(self, vm_id, pool):
-        root = self._root_volume_for_vm(vm_id)
-        self.assertEqual(
-            str(root.storageid), str(pool.id),
-            "ROOT volume storageid=%s should equal ONTAP pool id=%s "
-            "(check service-offering / pool storage tags)"
-            % (root.storageid, pool.id),
-        )
-        return root
-
-    def _wait_for_ready_spool_ref(self, pool_db_id, timeout=600):
-        spool = tcu.wait_for_spool_ref(
-            self.dbConnection, pool_db_id, self.__class__.template_db_id,
-            timeout=timeout,
-        )
-        tcu.assert_spool_ref_ready(
-            self, spool, expect_local_path=self._is_iscsi(),
-        )
-        return spool
-
-    def _assert_single_ready_spool_ref(self, pool_db_id):
-        count = tcu.count_template_spool_refs(
-            self.dbConnection, pool_db_id, self.__class__.template_db_id,
-        )
-        self.assertEqual(
-            count, 1, "Expected one template_spool_ref, got %s" % count,
-        )
-        spool = tcu.get_template_spool_ref(
-            self.dbConnection, pool_db_id, self.__class__.template_db_id,
-        )
-        tcu.assert_spool_ref_ready(
-            self, spool, expect_local_path=self._is_iscsi(),
-        )
-        return spool
-
-    def _assert_cache_on_ontap(self, pool, spool_ref):
-        if self._is_iscsi():
-            tcu.assert_iscsi_template_cache_lun(
-                self, self.ontap, self.svm_name, pool.name,
-                self.__class__.template_db_id,
-            )
-            cache_count = tcu.count_iscsi_template_cache_luns(
-                self.ontap, self.svm_name, pool.name,
-                self.__class__.template_db_id,
-            )
-            self.assertEqual(
-                cache_count, 1,
-                "Expected exactly one cs_tmpl_%s LUN, found %s"
-                % (self.__class__.template_db_id, cache_count),
-            )
-        else:
-            tcu.assert_nfs_template_cache_file(
-                self, self.ontap, pool.name, spool_ref.get("install_path")
-            )
-
-    def _count_non_cache_luns(self, pool):
-        return tcu.count_luns_excluding_template_cache(
-            self.ontap, self.svm_name, pool.name
-        )
-
-    def _wait_for_non_cache_lun_count(self, pool, expected, timeout=180,
-                                      interval=10):
-        """Poll until the FlexVol holds ``expected`` non-cache LUNs."""
-        deadline = time.time() + timeout
-        current = self._count_non_cache_luns(pool)
-        while current != expected and time.time() < deadline:
-            time.sleep(interval)
-            current = self._count_non_cache_luns(pool)
-        self.assertEqual(
-            current, expected,
-            "Expected %s non-cache LUNs in FlexVol '%s', found %s"
-            % (expected, pool.name, current),
-        )
-
-
-class OntapTemplateCacheBase(TemplateCacheAssertionsMixin, OntapTestBase):
+class OntapTemplateCacheBase(OntapTestBase):
     """
     Class-level setup for standalone template-cache suites.
 
@@ -410,18 +301,3 @@ class OntapTemplateCacheBase(TemplateCacheAssertionsMixin, OntapTestBase):
         dest.id = vm_id
         dest.expunge = True
         cls.apiClient.destroyVirtualMachine(dest)
-
-    def _poll_vm_state(self, vm_id, target_state, timeout=900, interval=10):
-        deadline = time.time() + timeout
-        current = "unknown"
-        while time.time() < deadline:
-            vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
-            if vms:
-                current = vms[0].state
-                if current.lower() == target_state.lower():
-                    return vms[0]
-            time.sleep(interval)
-        self.fail(
-            "VM %s did not reach '%s' within %ds (last='%s')"
-            % (vm_id, target_state, timeout, current)
-        )

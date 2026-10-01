@@ -118,7 +118,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_nfs3_pool` | Create NFS3 ONTAP primary storage pool tagged with `templateCacheTags` | setUpClass (zone, cluster, template, tagged SO) | `pool.state == "Up"` | FlexVol `online`; export policy present | positive |
+| 01 | `test_01_create_nfs3_pool` | Create NFS3 ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (zone, cluster, template, tagged SO) | `pool.state == "Up"` | FlexVol `online`; export policy present | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume on the ONTAP pool | test_01 (`pool`) | Volume non-None and listed in `listVolumes` | FlexVol still `online` | positive |
 | 03 | `test_03_deploy_vm` | Deploy a VM with the tagged SO — ROOT on ONTAP; seeds template cache | test_02 (`pool`, `volume`) | `vm.state == "Running"`; ROOT `storageid` = pool; `template_spool_ref` Ready/DOWNLOADED | Cache file present at spool `install_path` | positive |
 | 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuses cache | test_03 | VM-2 Running; ROOT on pool; still exactly one `template_spool_ref` | Same cache file (no second cache) | positive |
@@ -212,7 +212,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged with `templateCacheTags` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
+| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
 | 03 | `test_03_deploy_vm` | Deploy VM with the tagged SO — ROOT on ONTAP; seeds `cs_tmpl_*`; verify 0 data-volume LUN-maps before attach | test_02 (`volume`) | `vm.state == "Running"`; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | Exactly one `/vol/<flex>/cs_tmpl_<id>` LUN; 0 data-volume LUN-maps | positive |
 | 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuse cache | test_03 | VM-2 Running; ROOT on pool; still one spool_ref | Still one `cs_tmpl_*`; non-cache LUN count +1 | positive |

@@ -29,7 +29,7 @@ template cache (seed / reuse / survive VM delete) alongside the data-volume
 workflow.
 
 Workflow:
-  01  Create NFS3 primary storage pool on ONTAP (tagged with templateCacheTags)
+  01  Create NFS3 primary storage pool on ONTAP (tagged <storagePoolTags>-tmpl-cache)
   02  Create a CloudStack data volume on the ONTAP pool
   03  Deploy a VM — ROOT on ONTAP; seeds template cache (template_spool_ref
       Ready + cache file on the FlexVol)
@@ -88,7 +88,6 @@ from marvin.lib.common import list_storage_pools
 from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
 from helpers import template_cache_util as tcu
 from helpers.template_cache_base import (
-    TemplateCacheAssertionsMixin,
     find_ready_kvm_template,
     tagged_compute_offering_data,
     template_cache_capacity_bytes,
@@ -160,7 +159,7 @@ class TestData:
 # Sequential workflow test class
 # ---------------------------------------------------------------------------
 
-class TestOntapVMVolumeAttach(TemplateCacheAssertionsMixin, OntapTestBase):
+class TestOntapVMVolumeAttach(OntapTestBase):
     """
     Tests ONTAP data volume lifecycle with a running CloudStack VM whose ROOT
     volume is on the ONTAP pool (primary template cache).
@@ -369,23 +368,6 @@ class TestOntapVMVolumeAttach(TemplateCacheAssertionsMixin, OntapTestBase):
 
     # ---- VM state helpers ----------------------------------------------
 
-    def _poll_vm_state(self, vm_id, target_state, timeout=300, interval=10):
-        """Poll listVirtualMachines until the VM reaches target_state."""
-        deadline = time.time() + timeout
-        current_state = "unknown"
-        while time.time() < deadline:
-            vms = self.apiClient.listVirtualMachines(
-                _list_vms_cmd(vm_id))
-            if vms:
-                current_state = vms[0].state
-                if current_state.lower() == target_state.lower():
-                    return vms[0]
-            time.sleep(interval)
-        self.fail(
-            "VM %s did not reach state '%s' within %ds (last: '%s')"
-            % (vm_id, target_state, timeout, current_state)
-        )
-
     def _volume_state(self, vol_id):
         """Return the current CloudStack state string for a volume."""
         cmd = listVolumesAPI.listVolumesCmd()
@@ -505,7 +487,7 @@ class TestOntapVMVolumeAttach(TemplateCacheAssertionsMixin, OntapTestBase):
         self.assertIsNotNone(vm, "deployVirtualMachine returned None")
         self.__class__.vm = vm
 
-        vm_obj = self._poll_vm_state(vm.id, "Running", timeout=900)
+        vm_obj = self._poll_vm_state(vm.id, "Running")
         self.assertEqual(
             vm_obj.state, "Running",
             "VM should be 'Running', got '%s'" % vm_obj.state
@@ -544,7 +526,7 @@ class TestOntapVMVolumeAttach(TemplateCacheAssertionsMixin, OntapTestBase):
         vm2 = self.apiClient.deployVirtualMachine(cmd)
         self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
         self.__class__.vm2 = vm2
-        self._poll_vm_state(vm2.id, "Running", timeout=900)
+        self._poll_vm_state(vm2.id, "Running")
 
         pool = self.__class__.pool
         self._assert_root_on_pool(vm2.id, pool)
