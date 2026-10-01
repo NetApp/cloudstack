@@ -1015,30 +1015,35 @@ public class UnifiedNASStrategyTest {
         assertEquals("volume-uuid", captor.getValue().getDestinationPath());
         assertEquals("flexvol1", captor.getValue().getVolume().getName());
         assertEquals("flexvol-uuid-1", captor.getValue().getVolume().getUuid());
+        assertNull(captor.getValue().getSnapshot());
     }
 
     @Test
-    public void testCloneCloudStackVolumeFromSnapshot_Success() {
+    public void testCloneCloudStackVolume_SnapshotSource_SendsSnapshotName() {
         VolumeObject volumeObject = mock(VolumeObject.class);
         VolumeVO volumeVO = mock(VolumeVO.class);
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
         when(volumeObject.getId()).thenReturn(100L);
-        when(volumeObject.getUuid()).thenReturn("new-volume-uuid");
-        when(storagePool.getId()).thenReturn(1L);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
 
         Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.SVM_NAME, "svm1");
         details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
         details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+
+        FileInfo source = new FileInfo();
+        source.setPath("source-file-uuid");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setDatastoreId("1");
+        request.setVolumeInfo(volumeObject);
+        request.setFile(source);
+        request.setDestinationPath("new-volume-uuid");
+        request.setSnapshotName("snap_cs200");
 
         when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(new JobResponse());
 
-        CloudStackVolume result = strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, "source-file-uuid", "snap_cs200");
+        CloudStackVolume result = strategy.cloneCloudStackVolume(request);
 
-        assertNotNull(result);
         assertEquals("new-volume-uuid", result.getFile().getPath());
         assertEquals("snap_cs200", result.getSnapshotName());
         ArgumentCaptor<FileCloneRequest> captor = ArgumentCaptor.forClass(FileCloneRequest.class);
@@ -1047,98 +1052,6 @@ public class UnifiedNASStrategyTest {
         assertEquals("new-volume-uuid", captor.getValue().getDestinationPath());
         assertNotNull(captor.getValue().getSnapshot());
         assertEquals("snap_cs200", captor.getValue().getSnapshot().getName());
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_MissingSnapshotName_Throws() {
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
-        VolumeObject volumeObject = mock(VolumeObject.class);
-        when(volumeObject.getUuid()).thenReturn("new-volume-uuid");
-        Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
-        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
-
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, "source-file-uuid", null));
-        verify(nasFeignClient, never()).cloneFile(anyString(), any(FileCloneRequest.class));
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_MissingSourcePath_Throws() {
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
-        VolumeObject volumeObject = mock(VolumeObject.class);
-        Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
-        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
-
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, null, "snap_cs200"));
-        verify(nasFeignClient, never()).cloneFile(anyString(), any(FileCloneRequest.class));
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_MissingFlexVolUuid_Throws() {
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
-        VolumeObject volumeObject = mock(VolumeObject.class);
-        when(volumeObject.getUuid()).thenReturn("new-volume-uuid");
-        Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
-
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, "source-file-uuid", "snap_cs200"));
-        verify(nasFeignClient, never()).cloneFile(anyString(), any(FileCloneRequest.class));
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_NullArgs_Throws() {
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolumeFromSnapshot(
-                null, new HashMap<>(), mock(VolumeObject.class), "src", "snap"));
-        verify(nasFeignClient, never()).cloneFile(anyString(), any(FileCloneRequest.class));
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_AbsoluteSourcePath_StrippedToRelative() {
-        VolumeObject volumeObject = mock(VolumeObject.class);
-        VolumeVO volumeVO = mock(VolumeVO.class);
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
-        when(volumeObject.getId()).thenReturn(100L);
-        when(volumeObject.getUuid()).thenReturn("new-volume-uuid");
-        when(storagePool.getId()).thenReturn(1L);
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
-
-        Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
-        details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
-
-        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(new JobResponse());
-
-        strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, "/vol/flexvol1/source-file-uuid", "snap_cs200");
-
-        ArgumentCaptor<FileCloneRequest> captor = ArgumentCaptor.forClass(FileCloneRequest.class);
-        verify(nasFeignClient).cloneFile(anyString(), captor.capture());
-        assertEquals("source-file-uuid", captor.getValue().getSourcePath());
-        assertNotNull(captor.getValue().getSnapshot());
-    }
-
-    @Test
-    public void testCloneCloudStackVolumeFromSnapshot_FeignException_Throws() {
-        VolumeObject volumeObject = mock(VolumeObject.class);
-        StoragePoolVO storagePool = mock(StoragePoolVO.class);
-        when(volumeObject.getUuid()).thenReturn("new-volume-uuid");
-
-        Map<String, String> details = new HashMap<>();
-        details.put(OntapStorageConstants.VOLUME_NAME, "flexvol1");
-        details.put(OntapStorageConstants.VOLUME_UUID, "flexvol-uuid-1");
-
-        FeignException feignException = mock(FeignException.class);
-        when(feignException.status()).thenReturn(500);
-        when(feignException.getMessage()).thenReturn("clone failed");
-        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenThrow(feignException);
-
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolumeFromSnapshot(
-                storagePool, details, volumeObject, "source-file-uuid", "snap_cs200"));
     }
 
     @Test

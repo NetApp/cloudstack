@@ -982,7 +982,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -991,9 +991,13 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
 
-            verify(sanStrategy).cloneCloudStackVolumeFromSnapshot(
-                    eq(storagePool), any(), eq(volumeInfo), eq("/vol/vol1/source_lun"), eq("snap_cs200"));
-            verify(sanStrategy, never()).cloneCloudStackVolume(any());
+            ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(sanStrategy).cloneCloudStackVolume(requestCaptor.capture());
+            Lun lunRequest = requestCaptor.getValue().getLun();
+            assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun", lunRequest.getClone().getSource().getName());
+            assertNull(lunRequest.getClone().getSource().getUuid());
+            assertEquals("/vol/vol1/test_volume", lunRequest.getName());
+            assertEquals("svm1", lunRequest.getSvm().getName());
             verify(sanStrategy, never()).createCloudStackVolume(any());
             verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("snap-cloned-lun-uuid"), eq(false));
@@ -1012,7 +1016,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -1035,7 +1039,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(nasStrategy);
-            when(nasStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(nasStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -1044,8 +1048,13 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
 
-            verify(nasStrategy).cloneCloudStackVolumeFromSnapshot(
-                    eq(storagePool), any(), eq(volumeInfo), eq("source-file-uuid"), eq("snap_cs200"));
+            ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy).cloneCloudStackVolume(requestCaptor.capture());
+            CloudStackVolume request = requestCaptor.getValue();
+            assertEquals("source-file-uuid", request.getFile().getPath());
+            assertEquals("new-volume-uuid", request.getDestinationPath());
+            assertEquals("snap_cs200", request.getSnapshotName());
+            assertEquals("1", request.getDatastoreId());
             verify(nasStrategy, never()).createCloudStackVolume(any());
         }
     }
@@ -1064,7 +1073,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            verify(sanStrategy, never()).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
+            verify(sanStrategy, never()).cloneCloudStackVolume(any());
         }
     }
 
@@ -1081,7 +1090,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            verify(sanStrategy, never()).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
+            verify(sanStrategy, never()).cloneCloudStackVolume(any());
         }
     }
 
@@ -1100,7 +1109,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            verify(sanStrategy, never()).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
+            verify(sanStrategy, never()).cloneCloudStackVolume(any());
         }
     }
 
@@ -1110,7 +1119,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(null);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -1127,7 +1136,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenThrow(new CloudRuntimeException("ONTAP clone failed"));
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -1154,14 +1163,16 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
 
-            verify(sanStrategy).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
+            ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(sanStrategy).cloneCloudStackVolume(requestCaptor.capture());
+            assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun",
+                    requestCaptor.getValue().getLun().getClone().getSource().getName());
             verify(vmTemplatePoolDao, never()).findByPoolTemplate(anyLong(), anyLong(), any());
-            verify(sanStrategy, never()).cloneCloudStackVolume(any());
             verify(sanStrategy, never()).createCloudStackVolume(any());
         }
     }
@@ -1180,13 +1191,13 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(nasStrategy);
-            when(nasStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(nasStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
 
             verify(nasStrategy).resizeCloudStackVolume(eq(cloned), eq(21474836480L));
-            verify(sanStrategy, never()).cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString());
+            verify(sanStrategy, never()).cloneCloudStackVolume(any());
         }
     }
 
@@ -1202,7 +1213,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenReturn(cloned);
 
             driver.createAsync(dataStore, volumeInfo, createCallback);
@@ -1744,6 +1755,8 @@ class OntapPrimaryDatastoreDriverTest {
         lenient().when(volumeInfo.getType()).thenReturn(VOLUME);
         lenient().when(volumeInfo.getDataStore()).thenReturn(dataStore);
         lenient().when(volumeInfo.getId()).thenReturn(100L);
+        // VolumeObject.getName() reads the VolumeVO, which copyAsync renames before cloning.
+        lenient().when(volumeInfo.getName()).thenReturn("cs_tmp_snap_200_100");
         lenient().when(dataStore.getId()).thenReturn(1L);
         lenient().when(dataStore.getRole()).thenReturn(DataStoreRole.Primary);
         lenient().when(volumeDao.findById(100L)).thenReturn(destVolume);
@@ -1827,6 +1840,34 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testCanCopy_VolumeMigration_ReturnsFalse() {
+        VolumeInfo destVolumeInfo = mock(VolumeInfo.class);
+        DataStore destStore = mock(DataStore.class);
+        lenient().when(volumeInfo.getType()).thenReturn(VOLUME);
+        lenient().when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        lenient().when(destVolumeInfo.getType()).thenReturn(VOLUME);
+        lenient().when(destVolumeInfo.getDataStore()).thenReturn(destStore);
+
+        assertFalse(driver.canCopy(volumeInfo, destVolumeInfo));
+        verify(volumeDao, never()).findById(anyLong());
+    }
+
+    @Test
+    void testCopyAsync_VolumeMigration_Throws() {
+        VolumeInfo destVolumeInfo = mock(VolumeInfo.class);
+        DataStore destStore = mock(DataStore.class);
+        lenient().when(volumeInfo.getType()).thenReturn(VOLUME);
+        lenient().when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        lenient().when(destVolumeInfo.getType()).thenReturn(VOLUME);
+        lenient().when(destVolumeInfo.getDataStore()).thenReturn(destStore);
+
+        assertThrows(UnsupportedOperationException.class,
+                () -> driver.copyAsync(volumeInfo, destVolumeInfo, null, null));
+        verify(sanStrategy, never()).cloneCloudStackVolume(any());
+        verify(nasStrategy, never()).cloneCloudStackVolume(any());
+    }
+
+    @Test
     void testCopyAsync_UnsupportedPair_Throws() {
         lenient().when(templateInfo.getType()).thenReturn(TEMPLATE);
         lenient().when(templateInfo.getDataStore()).thenReturn(dataStore);
@@ -1853,10 +1894,15 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(eq(storagePool), any(), eq(volumeInfo),
-                    eq("/vol/vol1/source_lun"), eq("snap_cs200"))).thenReturn(cloned);
+            when(sanStrategy.cloneCloudStackVolume(any())).thenReturn(cloned);
 
             driver.copyAsync(snapshotInfo, volumeInfo, null, null);
+
+            ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(sanStrategy).cloneCloudStackVolume(requestCaptor.capture());
+            assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun",
+                    requestCaptor.getValue().getLun().getClone().getSource().getName());
+            assertEquals("/vol/vol1/cs_tmp_snap_200_100", requestCaptor.getValue().getLun().getName());
 
             assertEquals("cs_tmp_snap_200_100", dbVolume.getName());
             assertEquals("cs_tmp_snap_200_100", inMemoryVolume.getName());
@@ -1885,10 +1931,15 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(nasStrategy);
-            when(nasStrategy.cloneCloudStackVolumeFromSnapshot(eq(storagePool), any(), eq(volumeInfo),
-                    eq("source-file-uuid"), eq("snap_cs200"))).thenReturn(cloned);
+            when(nasStrategy.cloneCloudStackVolume(any())).thenReturn(cloned);
 
             driver.copyAsync(snapshotInfo, volumeInfo, null, null);
+
+            ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy).cloneCloudStackVolume(requestCaptor.capture());
+            assertEquals("source-file-uuid", requestCaptor.getValue().getFile().getPath());
+            assertEquals("tmp-volume-uuid", requestCaptor.getValue().getDestinationPath());
+            assertEquals("snap_cs200", requestCaptor.getValue().getSnapshotName());
 
             assertEquals("tmp-volume-uuid", dbVolume.getPath());
             assertEquals(Storage.ImageFormat.QCOW2, dbVolume.getFormat());
@@ -1904,7 +1955,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenThrow(new CloudRuntimeException("clone failed"));
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
@@ -1924,7 +1975,7 @@ class OntapPrimaryDatastoreDriverTest {
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
-            when(sanStrategy.cloneCloudStackVolumeFromSnapshot(any(), any(), any(), anyString(), anyString()))
+            when(sanStrategy.cloneCloudStackVolume(any()))
                     .thenThrow(new CloudRuntimeException("clone failed"));
 
             driver.copyAsync(snapshotInfo, volumeInfo, null, copyCallback);

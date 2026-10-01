@@ -31,7 +31,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
 import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
@@ -141,7 +140,8 @@ public class UnifiedNASStrategy extends NASStrategy {
      * Clones a file inside the FlexVolume using ONTAP's file clone API.
      *
      * <p>The source is taken from {@code file.path} and the destination from
-     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.</p>
+     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.
+     * When {@code snapshotName} is set, the source is read from that FlexVolume snapshot.</p>
      */
     @Override
     public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
@@ -162,10 +162,12 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
         String sourcePath = cloudstackVolume.getFile().getPath();
         String destinationPath = cloudstackVolume.getDestinationPath();
+        String snapshotName = cloudstackVolume.getSnapshotName();
 
-        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}]", sourcePath, destinationPath, flexVolName);
+        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}] from snapshot [{}]",
+                sourcePath, destinationPath, flexVolName, snapshotName);
         try {
-            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath);
+            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath, snapshotName);
             JobResponse jobResponse = nasFeignClient.cloneFile(getAuthHeader(), request);
             pollJobIfPresent(jobResponse, "clone file [" + sourcePath + "] to [" + destinationPath + "]");
 
@@ -178,6 +180,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             clonedCloudStackVolume.setFile(clonedFile);
             clonedCloudStackVolume.setDatastoreId(cloudstackVolume.getDatastoreId());
             clonedCloudStackVolume.setVolumeInfo(cloudstackVolume.getVolumeInfo());
+            clonedCloudStackVolume.setSnapshotName(snapshotName);
             return clonedCloudStackVolume;
         } catch (FeignException e) {
             logger.error("FeignException occurred while cloning file [{}], Status: {}, Exception: {}",
@@ -186,76 +189,6 @@ public class UnifiedNASStrategy extends NASStrategy {
         } catch (Exception e) {
             logger.error("Exception occurred while cloning file [{}], Exception: {}", sourcePath, e.getMessage());
             throw new CloudRuntimeException("Failed to clone file: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Creates a new qcow2 (or other file) in the FlexVol by cloning from a FlexVolume snapshot
-     * via {@code POST /api/storage/file/clone} with {@code snapshot.name}.
-     *
-     * <p>Builds the NFS request and executes it (mirrors {@link #createTemplateCache}).
-     * SAN uses the LUN REST clone path instead.</p>
-     *
-     * <p><b>Combinations covered here:</b></p>
-     * <ul>
-     *   <li>DATA or ROOT snapshot → new data volume (ROOT restore is never bootable as a volume;
-     *       CloudStack still uses this path for {@code createVolume(snapshotid)}; bootable ROOT
-     *       recovery remains {@code createTemplate} → deploy)</li>
-     *   <li>Same pool / FlexVol only (v1)</li>
-     *   <li>IOPS from snapshot_details are not applied here — see driver TODO</li>
-     * </ul>
-     */
-    @Override
-    public CloudStackVolume cloneCloudStackVolumeFromSnapshot(StoragePoolVO storagePool, Map<String, String> poolDetails,
-                                                              VolumeInfo volumeInfo, String sourceVolumePath,
-                                                              String snapshotName) {
-        if (storagePool == null || poolDetails == null || volumeInfo == null) {
-            throw new CloudRuntimeException("Failed to clone file from snapshot, invalid request");
-        }
-        if (sourceVolumePath == null || sourceVolumePath.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file from snapshot, source path is required");
-        }
-        if (snapshotName == null || snapshotName.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file from snapshot, snapshot name is required");
-        }
-
-        String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
-        String flexVolName = poolDetails.get(OntapStorageConstants.VOLUME_NAME);
-        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file from snapshot, FlexVolume uuid is missing from pool poolDetails");
-        }
-
-        String sourcePath = OntapStorageUtils.toFlexVolRelativePath(sourceVolumePath, flexVolName);
-        String destinationPath = OntapStorageUtils.toFlexVolRelativePath(volumeInfo.getUuid(), flexVolName);
-
-        logger.info("cloneCloudStackVolumeFromSnapshot [NFS]: Cloning file [{}] -> [{}] from snapshot [{}] on FlexVol [{}]",
-                sourcePath, destinationPath, snapshotName, flexVolName);
-        try {
-            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath, snapshotName);
-            JobResponse jobResponse = nasFeignClient.cloneFile(getAuthHeader(), request);
-            pollJobIfPresent(jobResponse, "clone file from snapshot [" + snapshotName + "] [" + sourcePath
-                    + "] to [" + destinationPath + "]");
-
-            updateCloudStackVolumeMetadata(String.valueOf(storagePool.getId()), volumeInfo);
-
-            FileInfo clonedFile = new FileInfo();
-            clonedFile.setPath(destinationPath);
-
-            CloudStackVolume clonedCloudStackVolume = new CloudStackVolume();
-            clonedCloudStackVolume.setFile(clonedFile);
-            clonedCloudStackVolume.setDatastoreId(String.valueOf(storagePool.getId()));
-            clonedCloudStackVolume.setVolumeInfo(volumeInfo);
-            clonedCloudStackVolume.setSnapshotName(snapshotName);
-            return clonedCloudStackVolume;
-        } catch (FeignException e) {
-            logger.error("FeignException while cloning file from snapshot [{}], Status: {}, Exception: {}",
-                    snapshotName, e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to clone file from snapshot: " + e.getMessage());
-        } catch (CloudRuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            logger.error("Exception while cloning file from snapshot [{}]: {}", snapshotName, e.getMessage());
-            throw new CloudRuntimeException("Failed to clone file from snapshot: " + e.getMessage());
         }
     }
 
