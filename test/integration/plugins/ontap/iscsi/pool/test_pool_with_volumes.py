@@ -47,6 +47,15 @@ Workflow:
   06  Re-enter maintenance; forced=False delete rejected            (Neg SN 5)
   07  Delete volume from Maintenance, then force-delete pool        (SN 7)
 
+Isolated tests (test_08 onwards) run after that workflow and share no state
+with it.  Each one builds its own pool plus CloudStack volume, breaks a single
+ONTAP object behind CloudStack's back, and force-deletes the pool:
+
+  08  FlexVol pre-deleted on ONTAP, then force-delete pool with CS volume
+  09  Host igroups pre-deleted on ONTAP, then force-delete pool with CS volume
+  10  Enter maintenance with CS volume after LUN maps are pre-deleted
+  11  Cancel maintenance once the CS volume has been deleted
+
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
   - KVM cluster where every host has iSCSI initiator configured
@@ -62,7 +71,6 @@ Running:
 import base64
 import logging
 import random
-import re
 import unittest
 
 from nose.plugins.attrib import attr
@@ -71,6 +79,7 @@ from marvin.cloudstackAPI import (
     cancelStorageMaintenance,
     createStoragePool as createStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    destroyVolume as destroyVolumeAPI,
     enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
@@ -81,7 +90,6 @@ from marvin.lib.common import list_storage_pools
 from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
 
 logger = logging.getLogger("TestOntapISCSIPoolWithVolumes")
-
 
 # ---------------------------------------------------------------------------
 # Test data
@@ -142,24 +150,13 @@ class TestData:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _igroup_name(svm_name, host_name):
-    """Mirror OntapStorageUtils.getIgroupName: cs_{svmName}_{sanitizedHostName}"""
-    short = host_name.split(".")[0]
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", short)
-    return "cs_%s_%s" % (svm_name, sanitized)
-
-
-# ---------------------------------------------------------------------------
 # Test class
 # ---------------------------------------------------------------------------
 
 class TestOntapISCSIPoolWithVolumes(OntapTestBase):
     """
     iSCSI pool lifecycle tests with a CloudStack data volume present throughout.
-    All 7 tests are sequential and share class-level state.
+    Tests 01-07 are sequential; tests 08-10 use isolated throwaway resources.
     """
 
     _vol_name_prefix = "OntapISCSIWV"
@@ -201,6 +198,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         cls.svm_name = svm_name
 
         cls._setup_cloudstack_resources(config, cls.testdata[TestData.account])
+        cls._capture_igroup_baseline()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -339,18 +337,12 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
             "ONTAP FlexVol should be 'online', got '%s'" % ontap_vol.get("state")
         )
 
-        # ONTAP: igroup must exist for each cluster host that has an IQN
-        for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            self.assertIsNotNone(
-                igroup,
-                "ONTAP igroup '%s' not found for host '%s'"
-                % (igroup_name, host.name)
-            )
+        # ONTAP: the plugin creates an igroup only when a host is first
+        # granted access to a LUN, so the empty pool must not change the
+        # suite-start igroup baseline.
+        self._assert_igroup_baseline_unchanged(
+            "after creating an empty pool"
+        )
 
         # Allocate a CloudStack data volume on this pool
         vol = self._create_volume(pool.id)
@@ -359,6 +351,9 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
 
         # ONTAP: a LUN must exist in the FlexVol after volume creation
         self._assert_lun_exists(pool.name, "after volume creation")
+        self._assert_igroup_baseline_unchanged(
+            "after creating an unattached volume"
+        )
 
         # Capacity reporting: LUN allocated but FlexVol size unchanged
         self._assert_pool_capacity(pool, "volume-allocated")
@@ -693,15 +688,546 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
             "ONTAP FlexVol '%s' still exists after pool force deletion" % pool_name
         )
 
-        # ONTAP: igroups for all cluster hosts must be deleted
-        for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            self.assertIsNone(
-                igroup,
-                "ONTAP igroup '%s' still exists after pool force deletion"
-                % igroup_name
+        self._assert_no_lun_maps_for_volume(
+            pool_name, "after pool force deletion"
+        )
+        self._assert_igroup_baseline_unchanged("after pool force deletion")
+
+    # ==================================================================
+    # Isolated tests — appended after the sequential workflow above.
+    #
+    # Each one creates its own pool and CloudStack volume in the pool2 /
+    # volume2 slots (which OntapTestBase.tearDownClass also sweeps), runs a
+    # single scenario, and cleans up in a finally block.  They never reuse a
+    # pool destroyed by another test.
+    # ==================================================================
+
+    def _host_igroup_names(self):
+        """igroup names the plugin creates, one per cluster host with an IQN.
+
+        Built from the host UUID so the names match the plugin.
+        """
+        return [name for name, _ in self._host_igroup_specs()]
+
+    def _host_igroup_specs(self):
+        """(igroup name, initiator IQN) per cluster host that reports an IQN."""
+        return self._iscsi_host_specs()
+
+    def _enter_maintenance(self, pool):
+        """Put the pool into Maintenance and wait for the state to settle."""
+        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
+        cmd.id = pool.id
+        self.apiClient.enableStorageMaintenance(cmd)
+        return self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+
+    def _create_isolated_pool_with_volume(self, label):
+        """Build a fresh pool plus CS volume for one isolated scenario.
+
+        Returns ``(pool, volume)``.  Any pool a previous isolated test could
+        not clean up is swept first so its ONTAP objects are never orphaned by
+        the overwrite of the pool2 slot.
+        """
+        if self.__class__.pool2 is not None:
+            self._cleanup_isolated_pool(
+                self.__class__.pool2, "leftover-from-previous-isolated-test"
             )
+
+        pool = self._create_pool()
+        self.__class__.pool2 = pool
+        logger.info("[%s] created isolated pool '%s'", label, pool.name)
+
+        self.assertEqual(
+            pool.state, "Up",
+            "[%s] new pool state should be 'Up', got '%s'" % (label, pool.state)
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol,
+            "[%s] ONTAP FlexVol not found for new pool '%s'" % (label, pool.name)
+        )
+
+        vol = self._create_volume(pool.id)
+        self.__class__.volume2 = vol
+        self.assertIsNotNone(vol, "[%s] createVolume returned None" % label)
+        self._assert_lun_exists(pool.name, "%s: after volume creation" % label)
+        return pool, vol
+
+    def _assert_pool_absent(self, pool, label, delete_error=None):
+        """Assert CloudStack no longer lists the pool."""
+        try:
+            remaining = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            remaining = None
+        self.assertFalse(
+            remaining,
+            "[%s] pool '%s' is still listed after deleteStoragePool(forced=True)%s"
+            % (label, pool.name,
+               "; the API raised: %s" % delete_error if delete_error else "")
+        )
+
+    def _purge_cs_volume_record(self, vol, label):
+        """Remove a CS volume record the forced pool delete may have left.
+
+        The backing LUN is already gone at this point, so a failure here only
+        affects tidiness — the volume stays in the volume2 slot for
+        tearDownClass to retry and no exception is raised.
+        """
+        if vol is None:
+            return
+        if self._volume_exists_in_cs(vol.id):
+            try:
+                cmd = deleteVolumeAPI.deleteVolumeCmd()
+                cmd.id = vol.id
+                self.apiClient.deleteVolume(cmd)
+                logger.info("[%s] deleted leftover CS volume record %s",
+                            label, vol.id)
+            except Exception as exc:
+                logger.warning("[%s] could not delete leftover CS volume %s: %s",
+                               label, vol.id, exc)
+        else:
+            logger.info("[%s] CS volume %s was removed along with the pool",
+                        label, vol.id)
+        if not self._volume_exists_in_cs(vol.id):
+            self.__class__.volume2 = None
+
+    def _exit_maintenance(self, pool, label):
+        """Bring a pool out of Maintenance so its volumes can be deleted."""
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except CloudstackAPIException:
+            return False
+        if not listed:
+            return False
+        if listed[0].state != "Maintenance":
+            return True
+        try:
+            cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
+            cmd.id = pool.id
+            self.apiClient.cancelStorageMaintenance(cmd)
+            self._poll_pool_state(pool.id, "Up", timeout=120)
+            return True
+        except Exception as exc:
+            logger.warning("[%s] could not cancel maintenance on '%s': %s",
+                           label, pool.name, exc)
+            return False
+
+    def _enter_maintenance_quietly(self, pool, label):
+        """Enter Maintenance, tolerating a pool whose backend is already gone."""
+        try:
+            self._enter_maintenance(pool)
+        except Exception as exc:
+            logger.warning("[%s] could not enter maintenance on '%s': %s",
+                           label, pool.name, exc)
+
+    DESTROYED_VOLUME_STATES = ("destroy", "destroyed", "expunging", "expunged")
+
+    def _cs_volume_state(self, vol_id):
+        """Return the CloudStack volume state, or None when it is not listed."""
+        vol = self._get_cs_volume(vol_id)
+        return getattr(vol, "state", None) if vol is not None else None
+
+    def _volume_cleared_for_pool_delete(self, vol_id):
+        """True once the volume no longer blocks deleteStoragePool(forced)."""
+        state = self._cs_volume_state(vol_id)
+        return state is None or state.lower() in self.DESTROYED_VOLUME_STATES
+
+    def _remove_cs_volume(self, pool, vol, label):
+        """Clear the CloudStack volume so the pool can be force-deleted.
+
+        deleteStoragePool(forced=True) refuses while any volume on the pool is
+        in a state other than Destroy.  deleteVolume is tried first because it
+        also reclaims the backing storage, but it expunges through libvirt and
+        fails when the FlexVol is already gone.  destroyVolume(expunge=False)
+        is the fallback: it only moves the record to Destroy, which is all the
+        forced pool delete requires - it expunges the leftovers itself.
+        """
+        if vol is None or not self._volume_exists_in_cs(vol.id):
+            self.__class__.volume2 = None
+            return True
+        self._exit_maintenance(pool, label)
+        try:
+            cmd = deleteVolumeAPI.deleteVolumeCmd()
+            cmd.id = vol.id
+            self.apiClient.deleteVolume(cmd)
+        except Exception as exc:
+            logger.warning("[%s] deleteVolume failed for %s (%s); falling back "
+                           "to destroyVolume without expunge",
+                           label, vol.id, exc)
+            try:
+                cmd = destroyVolumeAPI.destroyVolumeCmd()
+                cmd.id = vol.id
+                cmd.expunge = False
+                self.apiClient.destroyVolume(cmd)
+            except Exception as destroy_exc:
+                logger.warning("[%s] destroyVolume also failed for %s: %s",
+                               label, vol.id, destroy_exc)
+        if not self._volume_cleared_for_pool_delete(vol.id):
+            return False
+        if not self._volume_exists_in_cs(vol.id):
+            self.__class__.volume2 = None
+        return True
+
+    def _cleanup_isolated_pool(self, pool, label):
+        """Best-effort teardown of one isolated pool and its ONTAP FlexVol.
+
+        Igroups are intentionally left alone: their names carry no pool
+        identity, so the pool delete owns their removal.
+        """
+        if pool is None:
+            return
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            listed = None
+        if listed:
+            self._remove_cs_volume(pool, self.__class__.volume2, label)
+            try:
+                listed = list_storage_pools(self.apiClient, id=pool.id) or listed
+                if listed[0].state != "Maintenance":
+                    self._enter_maintenance(pool)
+                self._delete_pool(pool.id, forced=True)
+            except Exception as exc:
+                logger.warning("[%s] could not force-delete pool '%s': %s",
+                               label, pool.name, exc)
+        try:
+            self.ontap.offline_and_delete_volume(pool.name)
+        except Exception as exc:
+            logger.warning("[%s] ONTAP FlexVol cleanup for '%s' failed: %s",
+                           label, pool.name, exc)
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            listed = None
+        if not listed:
+            self.__class__.pool2 = None
+
+    # ------------------------------------------------------------------
+    # Step 08 — FlexVol deleted on ONTAP before the pool delete (negative)
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_08_delete_pool_with_volume_flexvol_missing(self):
+        """
+        Force-delete a pool that still owns a CloudStack volume after its
+        ONTAP FlexVol — and with it the volume's LUN — has been removed behind
+        CloudStack's back.
+
+        Uses its own pool and volume, so the pool is known to be healthy up to
+        the point the FlexVol is destroyed.  Verifies:
+          - deleteStoragePool is rejected while the CS volume still exists
+          - deleteStoragePool(forced=True) tolerates the missing FlexVol
+          - the CloudStack pool record is removed
+          - the leftover CS volume record can still be cleaned up
+        """
+        label = "flexvol-missing"
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        try:
+            self._enter_maintenance(pool)
+
+            self.ontap.offline_and_delete_volume(pool.name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "[%s] ONTAP FlexVol '%s' should be gone before the pool delete"
+                % (label, pool.name)
+            )
+            self.assertEqual(
+                len(self.ontap.list_luns_in_volume(self.svm_name, pool.name)), 0,
+                "[%s] LUNs should have gone with the FlexVol '%s'"
+                % (label, pool.name)
+            )
+
+            # CloudStack rejects deleteStoragePool while the pool still owns
+            # a volume, even with forced=True, so the volume goes first.
+            with self.assertRaises(CloudstackAPIException):
+                self._delete_pool(pool.id, forced=True)
+            self.assertTrue(
+                self._remove_cs_volume(pool, vol, label),
+                "[%s] CloudStack volume could not be deleted before the pool "
+                "delete" % label
+            )
+            self._enter_maintenance_quietly(pool, label)
+
+            delete_error = None
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except CloudstackAPIException as exc:
+                delete_error = exc
+
+            self._assert_pool_absent(pool, label, delete_error)
+            self.assertIsNone(
+                delete_error,
+                "[%s] deleteStoragePool(forced=True) should tolerate a missing "
+                "FlexVol, but raised: %s" % (label, delete_error)
+            )
+
+            self._assert_igroup_baseline_unchanged(
+                "[%s] after pool delete with missing FlexVol" % label
+            )
+
+            self._purge_cs_volume_record(vol, label)
+        finally:
+            self._cleanup_isolated_pool(pool, label)
+
+    # ------------------------------------------------------------------
+    # Step 09 — Host igroups deleted on ONTAP before the delete (negative)
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_09_delete_pool_with_volume_igroups_missing(self):
+        """
+        Force-delete a pool that still owns a CloudStack volume after the host
+        igroups have been removed behind CloudStack's back.
+
+        Uses its own pool and volume.  The volume is not attached to any VM, so
+        no LUN maps reference the igroups and they delete cleanly.  Unlike
+        test_08 the FlexVol is still present, so the plugin is expected to
+        remove it as part of the delete.  Verifies:
+          - deleteStoragePool is rejected while the CS volume still exists
+          - deleteStoragePool(forced=True) tolerates the missing igroups
+          - the CloudStack pool record is removed
+          - the ONTAP FlexVol is deleted and no igroup is left behind
+        """
+        other_pools = self._other_ontap_pools_on_svm(None)
+        if other_pools:
+            self.skipTest(
+                "Pre-deleting SVM-wide igroups requires exclusive SVM use; "
+                "found other ONTAP pool(s): %s"
+                % ", ".join(str(getattr(p, "name", p)) for p in other_pools)
+            )
+        label = "igroups-missing"
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        seeded = []
+        try:
+            igroup_specs = self._host_igroup_specs()
+            self.assertTrue(
+                igroup_specs,
+                "[%s] no cluster host reports an IQN, so there is no igroup "
+                "to remove" % label
+            )
+            igroup_names = [name for name, _ in igroup_specs]
+
+            # The volume is not attached to a VM, so the plugin has never
+            # granted a host access and created no igroups.  Seed them under
+            # the plugin's own names so the pre-deletion is a real one.
+            for name, iqn in igroup_specs:
+                if self.ontap.get_igroup(self.svm_name, name) is None:
+                    logger.info("[%s] seeding igroup '%s' with initiator '%s'",
+                                label, name, iqn)
+                    self.ontap.create_igroup(self.svm_name, name, iqn)
+                    seeded.append(name)
+
+            self._enter_maintenance(pool)
+
+            deleted = []
+            for name in igroup_names:
+                if self.ontap.get_igroup(self.svm_name, name) is None:
+                    continue
+                self.ontap.delete_igroup(self.svm_name, name)
+                deleted.append(name)
+            logger.info("[%s] deleted %d of %d host igroup(s): %s",
+                        label, len(deleted), len(igroup_names), deleted)
+
+            for name in igroup_names:
+                self.assertIsNone(
+                    self.ontap.get_igroup(self.svm_name, name),
+                    "[%s] igroup '%s' should be gone before the pool delete"
+                    % (label, name)
+                )
+
+            # CloudStack rejects deleteStoragePool while the pool still owns
+            # a volume, even with forced=True, so the volume goes first.
+            with self.assertRaises(CloudstackAPIException):
+                self._delete_pool(pool.id, forced=True)
+            self.assertTrue(
+                self._remove_cs_volume(pool, vol, label),
+                "[%s] CloudStack volume could not be deleted before the pool "
+                "delete" % label
+            )
+            self._enter_maintenance_quietly(pool, label)
+
+            delete_error = None
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except CloudstackAPIException as exc:
+                delete_error = exc
+
+            self._assert_pool_absent(pool, label, delete_error)
+            self.assertIsNone(
+                delete_error,
+                "[%s] deleteStoragePool(forced=True) should tolerate missing "
+                "igroups, but raised: %s" % (label, delete_error)
+            )
+
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "[%s] ONTAP FlexVol '%s' should have been deleted with the pool"
+                % (label, pool.name)
+            )
+            for name in igroup_names:
+                self.assertIsNone(
+                    self.ontap.get_igroup(self.svm_name, name),
+                    "[%s] igroup '%s' reappeared during the pool delete"
+                    % (label, name)
+                )
+
+            self._purge_cs_volume_record(vol, label)
+        finally:
+            for name in seeded:
+                try:
+                    self.ontap.delete_igroup(self.svm_name, name)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] cleanup: could not delete seeded igroup '%s': %s",
+                        label, name, exc)
+            self._cleanup_isolated_pool(pool, label)
+
+    # ------------------------------------------------------------------
+    # Step 10 — Enter maintenance after LUN maps are pre-deleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_10_enter_maintenance_lun_maps_predeleted(self):
+        """
+        Enter maintenance with a CloudStack volume after its ONTAP LUN maps
+        have been deleted behind CloudStack's back. Verifies:
+          - enableStorageMaintenance tolerates already-absent LUN maps
+          - the pool reaches Maintenance and the CS volume remains present
+          - the LUN remains online and its maps remain absent
+        """
+        label = "maintenance-lun-maps-missing"
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        seeded_igroup = None
+        try:
+            luns = self.ontap.list_luns_in_volume(self.svm_name, pool.name)
+            self.assertTrue(
+                luns,
+                "[%s] no LUN found in FlexVol '%s'" % (label, pool.name)
+            )
+            lun_path = luns[0].get("name")
+
+            igroup_specs = self._host_igroup_specs()
+            self.assertTrue(
+                igroup_specs,
+                "[%s] no cluster host reports an IQN" % label
+            )
+            igroup_name, initiator_iqn = igroup_specs[0]
+            if self.ontap.get_igroup(self.svm_name, igroup_name) is None:
+                self.ontap.create_igroup(
+                    self.svm_name, igroup_name, initiator_iqn
+                )
+                seeded_igroup = igroup_name
+
+            self.ontap.create_lun_map(
+                self.svm_name, lun_path, igroup_name
+            )
+            maps = self.ontap.list_lun_maps_for_volume(
+                self.svm_name, pool.name
+            )
+            self.assertTrue(
+                maps,
+                "[%s] failed to seed a LUN map for '%s'" % (label, lun_path)
+            )
+
+            for lun_map in maps:
+                self.ontap.delete_lun_map(lun_map)
+            self.assertEqual(
+                self.ontap.list_lun_maps_for_volume(
+                    self.svm_name, pool.name
+                ),
+                [],
+                "[%s] LUN maps should be absent before maintenance" % label
+            )
+
+            self._enter_maintenance(pool)
+            self.assertTrue(
+                self._volume_exists_in_cs(vol.id),
+                "[%s] CS volume disappeared after entering maintenance" % label
+            )
+            self._assert_lun_exists(
+                pool.name, "after entering Maintenance with maps pre-deleted"
+            )
+            self.assertEqual(
+                self.ontap.list_lun_maps_for_volume(
+                    self.svm_name, pool.name
+                ),
+                [],
+                "[%s] LUN maps unexpectedly reappeared during maintenance"
+                % label
+            )
+        finally:
+            self._cleanup_isolated_pool(pool, label)
+            if seeded_igroup:
+                try:
+                    self.ontap.delete_igroup(
+                        self.svm_name, seeded_igroup
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] cleanup: could not delete seeded igroup '%s': %s",
+                        label, seeded_igroup, exc
+                    )
+
+    # ------------------------------------------------------------------
+    # Step 11 — Cancel maintenance once the CS volume has been deleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_11_cancel_maintenance_after_volume_deleted(self):
+        """
+        Cancel maintenance on a pool whose CloudStack volume has been deleted.
+
+        Complements test_05, which cancels maintenance with the volume still
+        present.  On iSCSI the volume can be deleted while the pool sits in
+        Maintenance, so that is the order used here.  Verifies:
+          - the LUN is removed when the volume is deleted
+          - the pool returns to Up
+          - the ONTAP FlexVol is still online
+        """
+        label = "cancel-maintenance-no-volume"
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        try:
+            self._enter_maintenance(pool)
+
+            del_cmd = deleteVolumeAPI.deleteVolumeCmd()
+            del_cmd.id = vol.id
+            self.apiClient.deleteVolume(del_cmd)
+            self.assertFalse(
+                self._volume_exists_in_cs(vol.id),
+                "[%s] CS volume %s should be gone before cancel maintenance"
+                % (label, vol.id)
+            )
+            self.__class__.volume2 = None
+            vol = None
+
+            luns_after = self.ontap.list_luns_in_volume(self.svm_name, pool.name)
+            self.assertEqual(
+                len(luns_after), 0,
+                "[%s] expected 0 LUNs in FlexVol '%s' after volume deletion, "
+                "found %d: %s" % (label, pool.name, len(luns_after), luns_after)
+            )
+
+            cancel_cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
+            cancel_cmd.id = pool.id
+            self.apiClient.cancelStorageMaintenance(cancel_cmd)
+
+            result = self._poll_pool_state(pool.id, "Up", timeout=120)
+            self.assertEqual(
+                result.state, "Up",
+                "[%s] pool should be 'Up' after cancel maintenance, got '%s'"
+                % (label, result.state)
+            )
+
+            ontap_vol = self.ontap.get_volume(pool.name)
+            self.assertIsNotNone(
+                ontap_vol,
+                "[%s] ONTAP FlexVol '%s' disappeared after cancel maintenance"
+                % (label, pool.name)
+            )
+            self.assertEqual(
+                ontap_vol.get("state"), "online",
+                "[%s] ONTAP FlexVol should be 'online' after cancel "
+                "maintenance, got '%s'" % (label, ontap_vol.get("state"))
+            )
+        finally:
+            self._purge_cs_volume_record(vol, label)
+            self._cleanup_isolated_pool(pool, label)
