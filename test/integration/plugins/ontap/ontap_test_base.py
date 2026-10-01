@@ -25,9 +25,11 @@ Provides:
                        _poll_pool_state, _create_volume, and _delete_pool
 """
 
+import json
 import logging
 import random
 import requests
+import shlex
 import sys
 import time
 import urllib3
@@ -38,7 +40,8 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
-    listDiskOfferings as listDiskOfferingsAPI,
+    listVolumes as listVolumesAPI,
+    resizeVolume as resizeVolumeAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
@@ -219,7 +222,7 @@ class OntapRestClient:
         """Return the ONTAP LUN record for the given full path, or None."""
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name, "name": lun_path,
-                                 "fields": "name,uuid,enabled,status"})
+                                 "fields": "name,uuid,enabled,status,space.size"})
         records = data.get("records", [])
         return records[0] if records else None
 
@@ -228,7 +231,7 @@ class OntapRestClient:
         prefix = "/vol/%s/" % vol_name
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name,
-                                 "fields": "name,uuid,enabled,status"})
+                                 "fields": "name,uuid,enabled,status,space.size"})
         return [r for r in data.get("records", [])
                 if r.get("name", "").startswith(prefix)]
 
@@ -359,19 +362,21 @@ class OntapTestBase(cloudstackTestCase):
         list_hosts_cmd.type = "Routing"
         cls.cluster_hosts = cls.apiClient.listHosts(list_hosts_cmd) or []
 
-        list_do_cmd = listDiskOfferingsAPI.listDiskOfferingsCmd()
-        list_do_cmd.domainid = cls.domain.id
-        offerings = cls.apiClient.listDiskOfferings(list_do_cmd)
-        if offerings:
-            cls.disk_offering_id = offerings[0].id
-        else:
-            # No disk offerings exist yet — create a minimal one for tests
-            do = DiskOffering.create(
-                cls.apiClient,
-                {"name": "ontap-test-do", "displaytext": "ONTAP test disk offering", "disksize": 2},
-            )
-            cls._cleanup.append(do)
-            cls.disk_offering_id = do.id
+        # Use a deterministic, non-strict 2 GiB offering. Selecting the first
+        # offering in the environment can choose a fixed-size or very large
+        # offering that cannot exercise the resize API on the small test pool.
+        offering_name = "ontap-test-do-%d" % random.randint(0, 99999)
+        do = DiskOffering.create(
+            cls.apiClient,
+            {
+                "name": offering_name,
+                "displaytext": "ONTAP test disk offering",
+                "disksize": 2,
+                "storagetype": "shared",
+            },
+        )
+        cls._cleanup.append(do)
+        cls.disk_offering_id = do.id
 
         # Parse KVM host SSH credentials from zones/pods/clusters/hosts config.
         # Used by _cleanup_kvm_storage_pool_mounts to unmount stale NFS pools.
@@ -611,6 +616,132 @@ class OntapTestBase(cloudstackTestCase):
         cmd.account = self.account.name
         cmd.domainid = self.domain.id
         return self.apiClient.createVolume(cmd)
+
+    def _resize_volume(self, volume_id, size_gib, shrink_ok=False):
+        """Resize a volume to ``size_gib`` through the CloudStack API."""
+        cmd = resizeVolumeAPI.resizeVolumeCmd()
+        cmd.id = volume_id
+        cmd.size = size_gib
+        if shrink_ok:
+            cmd.shrinkok = True
+        return self.apiClient.resizeVolume(cmd)
+
+    def _poll_volume_size(self, volume_id, expected_bytes, timeout=180,
+                          interval=5):
+        """Poll until a volume is Ready with the expected size in bytes."""
+        deadline = time.time() + timeout
+        last_size = None
+        last_state = "not listed"
+        while time.time() < deadline:
+            cmd = listVolumesAPI.listVolumesCmd()
+            cmd.id = volume_id
+            cmd.listall = True
+            volumes = self.apiClient.listVolumes(cmd) or []
+            if volumes:
+                size = int(getattr(volumes[0], "size", 0) or 0)
+                state = getattr(volumes[0], "state", "")
+                last_size = size
+                last_state = state
+                if size == expected_bytes and state == "Ready":
+                    return volumes[0]
+            time.sleep(interval)
+        self.fail(
+            "Volume %s did not reach Ready with size %s within %ds "
+            "(last size=%s, state=%s)"
+            % (volume_id, expected_bytes, timeout, last_size, last_state)
+        )
+
+    def _get_qcow2_virtual_size(self, pool_uuid, volume_path):
+        """Read a qcow2 virtual size from the KVM host mounting the NFS pool."""
+        pool_arg = shlex.quote(str(pool_uuid))
+        volume_arg = shlex.quote(str(volume_path))
+        command = (
+            "path=$(virsh vol-path --pool {pool} {volume} 2>/dev/null || true); "
+            "if [ -z \"$path\" ]; then path=/mnt/{pool}/{volume}; fi; "
+            "qemu_img=$(command -v cloud-qemu-img || command -v qemu-img); "
+            "test -n \"$qemu_img\" || "
+            "{{ echo 'qemu-img executable not found' >&2; exit 1; }}; "
+            "\"$qemu_img\" info -U --output=json \"$path\""
+        ).format(pool=pool_arg, volume=volume_arg)
+
+        errors = []
+        for creds in self.kvm_hosts_ssh_creds:
+            try:
+                ssh = SshClient(
+                    creds["host"], 22, creds["user"], creds["password"],
+                    retries=3, delay=3, timeout=15.0,
+                )
+                output = "\n".join(ssh.execute(command))
+                json_start = output.find("{")
+                if json_start < 0:
+                    raise ValueError(output)
+                info, _ = json.JSONDecoder().raw_decode(output[json_start:])
+                return int(info["virtual-size"])
+            except Exception as exc:
+                errors.append("%s: %s" % (creds.get("host", "?"), exc))
+
+        raise RuntimeError(
+            "Could not read qcow2 virtual size from any KVM host: %s"
+            % "; ".join(errors)
+        )
+
+    def _get_vm_data_disk_capacity(self, instance_name):
+        """Return the libvirt capacity of the VM's first data disk in bytes.
+
+        The ONTAP VM workflow attaches exactly one data disk. The first libvirt
+        disk is therefore the root disk and the second is the resized data
+        disk, independent of whether its source is NFS or iSCSI multipath.
+        """
+        instance_arg = shlex.quote(str(instance_name))
+        command = (
+            "target=$(virsh domblklist {vm} --details | "
+            "awk '$2 == \"disk\" {{ count++; if (count == 2) "
+            "{{ print $3; exit }} }}'); "
+            "test -n \"$target\" || "
+            "{{ echo 'data disk target not found' >&2; exit 1; }}; "
+            "virsh domblkinfo {vm} \"$target\" | "
+            "awk '$1 == \"Capacity:\" {{ print $2; exit }}'"
+        ).format(vm=instance_arg)
+
+        errors = []
+        for creds in self.kvm_hosts_ssh_creds:
+            try:
+                ssh = SshClient(
+                    creds["host"], 22, creds["user"], creds["password"],
+                    retries=3, delay=3, timeout=15.0,
+                )
+                output = "\n".join(ssh.execute(command)).strip()
+                if not output:
+                    raise ValueError("virsh returned no data-disk capacity")
+                return int(output.splitlines()[-1].strip())
+            except Exception as exc:
+                errors.append("%s: %s" % (creds.get("host", "?"), exc))
+
+        raise RuntimeError(
+            "Could not read VM data-disk capacity from any KVM host: %s"
+            % "; ".join(errors)
+        )
+
+    def _get_db_volume_size(self, volume_uuid):
+        """Query the cloud DB directly for the size (bytes) stored in the
+        ``volumes`` table for *volume_uuid*.
+
+        Uses the per-suite ``dbConnection`` set in ``setUpClass`` (consistent
+        with the pattern in all other ONTAP test suites).
+
+        Returns the integer size, or None if the row is not found.
+        This validates that the ONTAP driver's ``volumeDao.update()`` call
+        persisted the new size to the database — independently of the
+        CloudStack API layer.
+        """
+        db = self.__class__.dbConnection
+        rows = db.execute(
+            "SELECT size FROM volumes WHERE uuid = %s AND removed IS NULL",
+            params=(volume_uuid,),
+        )
+        if not rows:
+            return None
+        return int(rows[0][0])
 
     def _delete_pool(self, pool_id, forced=False):
         """Issue deleteStoragePool for the given pool id."""
