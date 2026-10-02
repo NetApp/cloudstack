@@ -76,6 +76,8 @@ ontap:
 
 benchmark:
   pool_name_prefix: "bench_ontap"  # ONTAP volume names disallow "-"; use "_" only
+  # Select any configured protocols without deleting their ontap blocks.
+  enabled_protocols: [nfs3, iscsi]
   # Checkpoints and concurrency levels are the combinations for a run.
   # Change them here.
   sequential_checkpoints: [1, 5, 10, 20, 30]
@@ -108,6 +110,8 @@ vm_bench:
   # Unattached data disks are deleted only from pools with this name prefix,
   # and only when that pool's provider and zone match this config.
   cleanup_pool_name_prefix: "bench_vm"
+  # Select any configured protocols without deleting their offering definitions.
+  enabled_protocols: [nfs3, iscsi]
   sequential_checkpoints: [1, 5, 10, 20]
   concurrency_levels: [2, 5, 10]
   inter_op_delay_sec: 0

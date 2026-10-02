@@ -244,7 +244,16 @@ def load_config(path):
 def resolve_protocols(cfg, requested):
     available = list(cfg.get("ontap", {}).keys())
     if requested == "both":
-        return available
+        enabled = cfg.get("benchmark", {}).get("enabled_protocols", available)
+        unknown = [protocol for protocol in enabled if protocol not in available]
+        if unknown:
+            sys.exit(
+                f"Unknown config.benchmark.enabled_protocols entries: {unknown} "
+                f"(available: {available})"
+            )
+        if not enabled:
+            sys.exit("config.benchmark.enabled_protocols must contain at least one protocol")
+        return enabled
     if requested not in available:
         sys.exit(f"Protocol '{requested}' not found in config.ontap (available: {available})")
     return [requested]

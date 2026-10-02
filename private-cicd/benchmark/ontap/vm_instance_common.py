@@ -88,13 +88,9 @@ _UUID_RE = re.compile(r'"uuid"\s*:\s*"([0-9a-fA-F-]{36})"')
 
 def _extract_vm_id_from_error(error_text):
     """When deployVirtualMachine's async job fails deep in orchestration (for example
-    an ENOSPC-driven "Unable to orchestrate the start of VM instance" failure),
-    CloudStack has ALREADY created the VM (and its ROOT/DATA volume records) before
-    the failure - it just never finished starting it. The job's errortext embeds
-    that VM's uuid (e.g. '...{"instanceName":"i-2-107-VM", "uuid":"b8f4..."}.'),
-    so scrape it out here so the leftover VM/volume can at least be identified and
-    reported for manual inspection (see report_failed_creates()) instead of being
-    silently invisible."""
+    an "Unable to orchestrate the start of VM instance" failure), its errortext
+    can embed the attempted VM's UUID. Preserve that UUID in the raw operation
+    result even if CloudStack subsequently removes the failed VM."""
     if not error_text:
         return None
     m = _UUID_RE.search(error_text)
@@ -240,25 +236,6 @@ def append_summary_csv(path, rows):
         writer.writerows(rows)
 
 
-def report_failed_creates(failed):
-    """Failed deployVirtualMachine calls (for example ENOSPC "Unable to orchestrate
-    the start of VM instance" failures) still leave a real
-    VM + ROOT/DATA volume record behind in CloudStack - they just never finished
-    starting. These are intentionally NOT auto-destroyed here (unlike the
-    `created` list, which the benchmark itself deletes as part of 5.2.2/6.2.2) so
-    the leftover VM/volume artifacts stay inspectable afterwards - e.g. via
-    `listVolumes --state Destroy` on the bench_vm_<protocol> pool - to confirm
-    exactly what got left behind and why. Clean them up manually (or via
-    --cleanup-only) once you're done inspecting them."""
-    log = get_logger()
-    failed_with_id = [(name, vm_id) for name, vm_id in failed if vm_id]
-    if not failed_with_id:
-        return
-    log.info("%s failed-create VM(s) left in place for inspection (not cleaned up)", len(failed_with_id))
-    for name, vm_id in failed_with_id:
-        log.info("left in place: %s (%s)", name, vm_id)
-
-
 def _vm_name_pattern(prefix):
     return re.compile(
         rf"^{re.escape(prefix)}-(?:seq|c\d+)-[A-Za-z0-9]+-[A-Za-z0-9-]+-\d{{3}}$"
@@ -368,7 +345,16 @@ def load_config(path):
 def resolve_protocols(cfg, requested):
     available = list(cfg.get("vm_bench", {}).get("protocols", {}).keys())
     if requested == "both":
-        return available
+        enabled = cfg.get("vm_bench", {}).get("enabled_protocols", available)
+        unknown = [protocol for protocol in enabled if protocol not in available]
+        if unknown:
+            sys.exit(
+                f"Unknown config.vm_bench.enabled_protocols entries: {unknown} "
+                f"(available: {available})"
+            )
+        if not enabled:
+            sys.exit("config.vm_bench.enabled_protocols must contain at least one protocol")
+        return enabled
     if requested not in available:
         sys.exit(f"Protocol '{requested}' not found in config.vm_bench.protocols (available: {available})")
     return [requested]

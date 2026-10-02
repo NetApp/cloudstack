@@ -102,7 +102,8 @@ real lab IPs/credentials or run output.
 
 `run.py` is the entry point. Protocols, checkpoints, and concurrency levels
 come from `config.yaml` (`ontap` / `benchmark` for pools, `vm_bench` for
-VMs). Drop a protocol block to skip it, and edit `sequential_checkpoints` or
+VMs). Set `enabled_protocols` under `benchmark` or `vm_bench` to select
+`[nfs3]`, `[iscsi]`, or `[nfs3, iscsi]`, and edit `sequential_checkpoints` or
 `concurrency_levels` to change the matrix.
 
 Run ids are generated as `RUN_<UTC timestamp>_<4 hex chars>` (for example

@@ -70,7 +70,6 @@ from vm_instance_common import (
     load_config,
     make_cloudstack_client,
     RawLogger,
-    report_failed_creates,
     resolve_protocols,
 )
 
@@ -86,7 +85,6 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
     prefix = vm_cfg["vm_name_prefix"]
 
     created = []
-    failed = []
     create_durations = []
     log.info("[5.2.1] Sequential CREATE protocol=%s up to N=%s", protocol_key, max_n)
     for i in range(1, max_n + 1):
@@ -100,7 +98,6 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
             create_durations.append(result.duration_sec)
         else:
             log.error("%s", result.error)
-            failed.append((name, result.vm_id))
         if i in checkpoints:
             total = sum(create_durations)
             avg = mean_seconds(create_durations)
@@ -116,8 +113,6 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
             )
         if delay:
             time.sleep(delay)
-
-    report_failed_creates(failed)
 
     total_created = len(created)
     log.info("[5.2.2] Sequential DELETE protocol=%s from N=%s remaining", protocol_key, total_created)

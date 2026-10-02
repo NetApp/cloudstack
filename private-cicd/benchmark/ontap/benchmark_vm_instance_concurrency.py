@@ -74,7 +74,6 @@ from vm_instance_common import (
     load_config,
     make_cloudstack_client,
     RawLogger,
-    report_failed_creates,
     resolve_protocols,
 )
 
@@ -122,7 +121,6 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         )
         for r in fail:
             log.error("%s: %s", r.vm_name, r.error)
-        report_failed_creates([(r.vm_name, r.vm_id) for r in fail])
 
         log.info("[6.2.2] Parallel DELETE protocol=%s C=%s", protocol_key, len(succ))
         t0 = time.perf_counter()
