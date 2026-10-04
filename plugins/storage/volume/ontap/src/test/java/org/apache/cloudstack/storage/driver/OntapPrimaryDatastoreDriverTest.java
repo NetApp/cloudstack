@@ -33,14 +33,18 @@ import com.cloud.storage.dao.VMTemplatePoolDao;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
+import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.ObjectInDataStoreStateMachine;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.command.CopyCmdAnswer;
+import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -74,6 +78,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -140,6 +145,9 @@ class OntapPrimaryDatastoreDriverTest {
     private AsyncCompletionCallback<CreateCmdResult> createCallback;
 
     @Mock
+    private AsyncCompletionCallback<CopyCommandResult> copyCallback;
+
+    @Mock
     private AsyncCompletionCallback<CommandResult> commandCallback;
 
     @InjectMocks
@@ -166,6 +174,110 @@ class OntapPrimaryDatastoreDriverTest {
         assertEquals(Boolean.TRUE.toString(), capabilities.get("CAN_CREATE_VOLUME_FROM_SNAPSHOT"));
         assertEquals(Boolean.TRUE.toString(), capabilities.get("CAN_REVERT_VOLUME_TO_SNAPSHOT"));
         assertEquals(Boolean.TRUE.toString(), capabilities.get("CAN_CREATE_VOLUME_FROM_VOLUME"));
+    }
+
+    @Test
+    void canCopyOnlyCompatibleOfflineIscsiVolumes() {
+        VolumeInfo srcVolume = mock(VolumeInfo.class);
+        VolumeInfo destVolume = mock(VolumeInfo.class);
+        StoragePoolVO srcPool = mock(StoragePoolVO.class);
+        StoragePoolVO destPool = mock(StoragePoolVO.class);
+        Map<String, String> srcDetails = new HashMap<>(Map.of(
+                OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name(),
+                OntapStorageConstants.STORAGE_IP, "10.0.0.1",
+                OntapStorageConstants.SVM_UUID, "svm-uuid"));
+        Map<String, String> destDetails = new HashMap<>(srcDetails);
+
+        when(srcVolume.getState()).thenReturn(Volume.State.Migrating);
+        when(srcVolume.getHypervisorType()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(srcVolume.getPoolId()).thenReturn(1L);
+        when(destVolume.getPoolId()).thenReturn(2L);
+        when(storagePoolDao.findById(1L)).thenReturn(srcPool);
+        when(storagePoolDao.findById(2L)).thenReturn(destPool);
+        when(srcPool.getId()).thenReturn(1L);
+        when(destPool.getId()).thenReturn(2L);
+        when(srcPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(destPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(srcPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(destPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(srcDetails);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(2L)).thenReturn(destDetails);
+
+        assertTrue(driver.canCopy(srcVolume, destVolume));
+
+        destDetails.put(OntapStorageConstants.SVM_UUID, "different-svm");
+        assertFalse(driver.canCopy(srcVolume, destVolume));
+
+        destDetails.put(OntapStorageConstants.SVM_UUID, "svm-uuid");
+        when(destPool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        assertFalse(driver.canCopy(srcVolume, destVolume));
+
+        when(srcVolume.getState()).thenReturn(Volume.State.Ready);
+        assertFalse(driver.canCopy(srcVolume, destVolume));
+        assertFalse(driver.canCopy(templateInfo, destVolume));
+    }
+
+    @Test
+    void copyAsyncUsesOntapLunCopyAndPersistsDestinationIdentity() {
+        VolumeInfo srcVolume = mock(VolumeInfo.class);
+        VolumeInfo destVolume = mock(VolumeInfo.class);
+        StoragePoolVO srcPool = mock(StoragePoolVO.class);
+        StoragePoolVO destPool = mock(StoragePoolVO.class);
+        VolumeVO destVolumeVO = mock(VolumeVO.class);
+        VolumeObjectTO destVolumeTO = new VolumeObjectTO();
+        Map<String, String> srcDetails = Map.of(
+                OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name(),
+                OntapStorageConstants.STORAGE_IP, "10.0.0.1",
+                OntapStorageConstants.SVM_NAME, "svm1");
+        Map<String, String> destDetails = new HashMap<>(srcDetails);
+
+        when(srcVolume.getState()).thenReturn(Volume.State.Migrating);
+        when(srcVolume.getHypervisorType()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(srcVolume.getPoolId()).thenReturn(1L);
+        when(destVolume.getPoolId()).thenReturn(2L);
+        when(destVolume.getId()).thenReturn(20L);
+        when(destVolume.getTO()).thenReturn(destVolumeTO);
+        when(storagePoolDao.findById(1L)).thenReturn(srcPool);
+        when(storagePoolDao.findById(2L)).thenReturn(destPool);
+        when(srcPool.getId()).thenReturn(1L);
+        when(destPool.getId()).thenReturn(2L);
+        when(destPool.getHypervisor()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(srcPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(destPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(srcPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(destPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(srcDetails);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(2L)).thenReturn(destDetails);
+        when(volumeDao.findById(20L)).thenReturn(destVolumeVO);
+        when(destVolumeVO.getId()).thenReturn(20L);
+
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/destFlexVol/dest_volume");
+        copiedLun.setUuid("copied-lun-uuid");
+        CloudStackVolume copiedVolume = new CloudStackVolume();
+        copiedVolume.setLun(copiedLun);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(destDetails)).thenReturn(sanStrategy);
+            when(sanStrategy.copyCloudStackVolume(eq(srcVolume), eq(destVolume), eq(destPool), eq(destDetails), anyInt()))
+                    .thenReturn(copiedVolume);
+
+            driver.copyAsync(srcVolume, destVolume, copyCallback);
+
+            verify(sanStrategy).copyCloudStackVolume(eq(srcVolume), eq(destVolume), eq(destPool), eq(destDetails), anyInt());
+            verify(destVolumeVO).setPath(copiedLun.getName());
+            verify(destVolumeVO).setFolder("copied-lun-uuid");
+            verify(destVolumeVO).setFormat(Storage.ImageFormat.RAW);
+            verify(volumeDetailsDao).addDetail(20L, OntapStorageConstants.LUN_DOT_UUID, "copied-lun-uuid", false);
+            verify(volumeDetailsDao).addDetail(20L, OntapStorageConstants.LUN_DOT_NAME, copiedLun.getName(), false);
+            verify(volumeDao).update(20L, destVolumeVO);
+
+            ArgumentCaptor<CopyCommandResult> resultCaptor = ArgumentCaptor.forClass(CopyCommandResult.class);
+            verify(copyCallback).complete(resultCaptor.capture());
+            assertNull(resultCaptor.getValue().getResult());
+            assertTrue(resultCaptor.getValue().getAnswer() instanceof CopyCmdAnswer);
+            assertEquals(copiedLun.getName(), ((VolumeObjectTO)((CopyCmdAnswer)resultCaptor.getValue().getAnswer()).getNewData()).getPath());
+        }
     }
 
     @Test

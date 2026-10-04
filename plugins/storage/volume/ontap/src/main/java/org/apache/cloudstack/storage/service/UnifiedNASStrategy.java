@@ -31,6 +31,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPointSelector;
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.command.CreateObjectCommand;
 import org.apache.cloudstack.storage.command.DeleteCommand;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
@@ -188,6 +189,12 @@ public class UnifiedNASStrategy extends NASStrategy {
             logger.error("Exception occurred while cloning file [{}], Exception: {}", sourcePath, e.getMessage());
             throw new CloudRuntimeException("Failed to clone file: " + e.getMessage());
         }
+    }
+
+    @Override
+    public CloudStackVolume copyCloudStackVolume(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo,
+            StoragePoolVO destStoragePool, Map<String, String> destDetails, int timeoutSeconds) {
+        throw new CloudRuntimeException("ONTAP NFS3 volume copy is not supported yet");
     }
 
     /**

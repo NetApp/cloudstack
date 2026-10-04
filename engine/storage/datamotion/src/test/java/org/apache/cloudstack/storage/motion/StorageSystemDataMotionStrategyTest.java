@@ -277,6 +277,7 @@ public class StorageSystemDataMotionStrategyTest {
     }
 
     @Test
+    // Fallback only. Same-SVM iSCSI is intercepted by OntapPrimaryDatastoreDriver.canCopy before this strategy runs.
     public void offlineMigrationBetweenSupportedOntapIscsiPoolsUsesMigrateVolumeCommand() throws Exception {
         OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "ISCSI", "svm1", null,
                 StoragePoolType.OntapiSCSI, StoragePoolType.OntapiSCSI);

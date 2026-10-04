@@ -220,6 +220,12 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
+    public void testCopyCloudStackVolume_NotSupported() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.copyCloudStackVolume(mock(VolumeInfo.class),
+                mock(VolumeInfo.class), mock(StoragePoolVO.class), new HashMap<>(), 10));
+    }
+
+    @Test
     public void testCreateTemplateCache_IsNoOp() {
         org.apache.cloudstack.storage.datastore.db.StoragePoolVO storagePool =
                 mock(org.apache.cloudstack.storage.datastore.db.StoragePoolVO.class);

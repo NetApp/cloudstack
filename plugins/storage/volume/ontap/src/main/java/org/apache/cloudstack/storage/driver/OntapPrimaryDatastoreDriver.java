@@ -50,6 +50,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.CreateCmdResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreCapabilities;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.ObjectInDataStoreStateMachine;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver;
@@ -59,6 +60,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.command.CopyCmdAnswer;
 import org.apache.cloudstack.storage.command.CreateObjectAnswer;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
@@ -79,6 +81,7 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
+import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -595,17 +598,123 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+        copyAsync(srcData, destData, null, callback);
     }
 
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, Host destHost, AsyncCompletionCallback<CopyCommandResult> callback) {
-        throw new UnsupportedOperationException("Copy operation is not supported for ONTAP primary storage.");
+        String errMsg = null;
+        VolumeObjectTO copiedVolumeTO = null;
+        StorageStrategy storageStrategy = null;
+        CloudStackVolume copiedVolume = null;
+        try {
+            if (!canCopy(srcData, destData)) {
+                throw new CloudRuntimeException("ONTAP datastore driver cannot copy the requested data objects");
+            }
+
+            VolumeInfo srcVolumeInfo = (VolumeInfo)srcData;
+            VolumeInfo destVolumeInfo = (VolumeInfo)destData;
+            StoragePoolVO destStoragePool = storagePoolDao.findById(destVolumeInfo.getPoolId());
+            Map<String, String> destDetails = storagePoolDetailsDao.listDetailsKeyPairs(destStoragePool.getId());
+            storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(destDetails);
+            copiedVolume = storageStrategy.copyCloudStackVolume(srcVolumeInfo, destVolumeInfo, destStoragePool,
+                    destDetails, StorageManager.KvmStorageOfflineMigrationWait.value());
+
+            String copiedPath = persistCopiedVolume(destVolumeInfo, destStoragePool, copiedVolume);
+            copiedVolumeTO = (VolumeObjectTO)destVolumeInfo.getTO();
+            copiedVolumeTO.setPath(copiedPath);
+            copiedVolumeTO.setFormat(getImageFormat(destStoragePool));
+        } catch (Exception e) {
+            errMsg = e.getMessage();
+            if (storageStrategy != null && copiedVolume != null) {
+                try {
+                    storageStrategy.deleteCloudStackVolume(copiedVolume);
+                } catch (Exception cleanupException) {
+                    logger.warn("copyAsync: Failed to clean up copied ONTAP volume for [{}]: {}",
+                            destData != null ? destData.getId() : null, cleanupException.getMessage());
+                }
+            }
+            logger.error("copyAsync: Failed to copy ONTAP volume [{}] to [{}]: {}",
+                    srcData != null ? srcData.getId() : null, destData != null ? destData.getId() : null, errMsg, e);
+        }
+
+        CopyCmdAnswer answer = errMsg == null ? new CopyCmdAnswer(copiedVolumeTO) : new CopyCmdAnswer(errMsg);
+        CopyCommandResult result = new CopyCommandResult(null, answer);
+        result.setResult(errMsg);
+        if (callback != null) {
+            callback.complete(result);
+        }
     }
 
     @Override
     public boolean canCopy(DataObject srcData, DataObject destData) {
-        return false;
+        if (!(srcData instanceof VolumeInfo) || !(destData instanceof VolumeInfo)) {
+            return false;
+        }
+
+        VolumeInfo srcVolumeInfo = (VolumeInfo)srcData;
+        VolumeInfo destVolumeInfo = (VolumeInfo)destData;
+        if (srcVolumeInfo.getState() != Volume.State.Migrating
+                || srcVolumeInfo.getHypervisorType() != HypervisorType.KVM) {
+            return false;
+        }
+
+        StoragePoolVO srcStoragePool = storagePoolDao.findById(srcVolumeInfo.getPoolId());
+        StoragePoolVO destStoragePool = storagePoolDao.findById(destVolumeInfo.getPoolId());
+        if (srcStoragePool == null || destStoragePool == null
+                || srcStoragePool.getId() == destStoragePool.getId()
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(srcStoragePool.getStorageProviderName())
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(destStoragePool.getStorageProviderName())
+                || srcStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI
+                || destStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI) {
+            return false;
+        }
+
+        Map<String, String> srcDetails = storagePoolDetailsDao.listDetailsKeyPairs(srcStoragePool.getId());
+        Map<String, String> destDetails = storagePoolDetailsDao.listDetailsKeyPairs(destStoragePool.getId());
+        return areCompatibleIscsiCopyPools(srcDetails, destDetails);
+    }
+
+    private boolean areCompatibleIscsiCopyPools(Map<String, String> srcDetails, Map<String, String> destDetails) {
+        if (srcDetails == null || destDetails == null
+                || !isIscsi(srcDetails) || !isIscsi(destDetails)
+                || !StringUtils.equals(srcDetails.get(OntapStorageConstants.STORAGE_IP),
+                        destDetails.get(OntapStorageConstants.STORAGE_IP))) {
+            return false;
+        }
+
+        String srcSvmUuid = srcDetails.get(OntapStorageConstants.SVM_UUID);
+        String destSvmUuid = destDetails.get(OntapStorageConstants.SVM_UUID);
+        if (StringUtils.isNotBlank(srcSvmUuid) || StringUtils.isNotBlank(destSvmUuid)) {
+            return StringUtils.isNotBlank(srcSvmUuid) && srcSvmUuid.equals(destSvmUuid);
+        }
+        return StringUtils.isNotBlank(srcDetails.get(OntapStorageConstants.SVM_NAME))
+                && srcDetails.get(OntapStorageConstants.SVM_NAME).equals(destDetails.get(OntapStorageConstants.SVM_NAME));
+    }
+
+    private String persistCopiedVolume(VolumeInfo destVolumeInfo, StoragePoolVO destStoragePool, CloudStackVolume copiedVolume) {
+        VolumeVO destVolumeVO = volumeDao.findById(destVolumeInfo.getId());
+        if (destVolumeVO == null) {
+            throw new CloudRuntimeException("Destination volume [" + destVolumeInfo.getId() + "] was not found");
+        }
+
+        destVolumeVO.setPoolId(destStoragePool.getId());
+        destVolumeVO.setPoolType(destStoragePool.getPoolType());
+        destVolumeVO.setFormat(getImageFormat(destStoragePool));
+        String copiedPath = destVolumeVO.getPath();
+        if (copiedVolume.getLun() != null) {
+            Lun copiedLun = copiedVolume.getLun();
+            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID, copiedLun.getUuid(), false);
+            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, copiedLun.getName(), false);
+            destVolumeVO.setFolder(copiedLun.getUuid());
+            destVolumeVO.set_iScsiName(null);
+            copiedPath = copiedLun.getName();
+        } else if (copiedVolume.getFile() != null && copiedVolume.getFile().getPath() != null) {
+            copiedPath = copiedVolume.getFile().getPath();
+        }
+        destVolumeVO.setPath(copiedPath);
+        volumeDao.update(destVolumeVO.getId(), destVolumeVO);
+        return copiedPath;
     }
 
     @Override

@@ -65,6 +65,7 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
@@ -828,6 +829,26 @@ public abstract class StorageStrategy {
      * @return the created CloudStackVolume, populated with the backend identity of the clone
      */
     abstract public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume);
+
+    /**
+     * Copies an existing volume onto the destination pool's FlexVolume as a full, independent object.
+     * it is going to mimic
+     *     copyLun       for iSCSI, FC protocols (ONTAP {@code copy.source} LUN create)
+     *     copyFile      for NFS3.0 and NFS4.1 protocols
+     *     copyNameSpace for Nvme/TCP and Nvme/FC protocol
+     *
+     * <p>Unlike {@link #cloneCloudStackVolume(CloudStackVolume)}, the copy may cross FlexVolumes on the
+     * same SVM. Each strategy builds its own protocol-specific request from the given volumes.</p>
+     *
+     * @param srcVolumeInfo   volume being copied
+     * @param destVolumeInfo  destination volume row created for the copy
+     * @param destStoragePool destination primary storage pool
+     * @param destDetails     destination pool details (SVM, protocol, etc.)
+     * @param timeoutSeconds  maximum time to wait for the copy to finish
+     * @return the copied CloudStackVolume, populated with the backend identity of the copy
+     */
+    abstract public CloudStackVolume copyCloudStackVolume(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo,
+            StoragePoolVO destStoragePool, Map<String, String> destDetails, int timeoutSeconds);
 
     /**
      * Grows an existing backend object to {@code sizeInBytes}.

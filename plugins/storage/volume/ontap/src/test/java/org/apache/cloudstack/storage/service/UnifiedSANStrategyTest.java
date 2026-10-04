@@ -19,16 +19,21 @@
 package org.apache.cloudstack.storage.service;
 
 import com.cloud.host.HostVO;
+import com.cloud.storage.VolumeDetailVO;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import feign.FeignException;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
+import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -66,6 +71,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -86,6 +92,9 @@ class UnifiedSANStrategyTest {
 
     @Mock
     private StoragePoolDetailsDao storagePoolDetailsDao;
+
+    @Mock
+    private VolumeDetailsDao volumeDetailsDao;
 
     private UnifiedSANStrategy unifiedSANStrategy;
     private String authHeader;
@@ -114,6 +123,10 @@ class UnifiedSANStrategyTest {
             java.lang.reflect.Field storagePoolDetailsDaoField = UnifiedSANStrategy.class.getDeclaredField("storagePoolDetailsDao");
             storagePoolDetailsDaoField.setAccessible(true);
             storagePoolDetailsDaoField.set(unifiedSANStrategy, storagePoolDetailsDao);
+
+            java.lang.reflect.Field volumeDetailsDaoField = UnifiedSANStrategy.class.getDeclaredField("volumeDetailsDao");
+            volumeDetailsDaoField.setAccessible(true);
+            volumeDetailsDaoField.set(unifiedSANStrategy, volumeDetailsDao);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -988,6 +1001,212 @@ class UnifiedSANStrategyTest {
             assertEquals("cloned-lun-uuid", result.getLun().getUuid());
             verify(sanFeignClient).createLun(eq(authHeader), eq(true), any(Lun.class));
         }
+    }
+
+    private CloudStackVolume copyDestLun(int timeoutSeconds) {
+        VolumeInfo srcVolumeInfo = mock(VolumeInfo.class);
+        VolumeInfo destVolumeInfo = mock(VolumeInfo.class);
+        StoragePoolVO destStoragePool = mock(StoragePoolVO.class);
+        when(srcVolumeInfo.getId()).thenReturn(11L);
+        when(destVolumeInfo.getName()).thenReturn("lun");
+        when(destStoragePool.getName()).thenReturn("dest");
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_UUID, "source-lun-uuid", false));
+        return unifiedSANStrategy.copyCloudStackVolume(srcVolumeInfo, destVolumeInfo, destStoragePool,
+                Map.of(OntapStorageConstants.SVM_NAME, "svm1"), timeoutSeconds);
+    }
+
+    @Test
+    void testCopyCloudStackVolume_UsesCopySourceAndWaitsForCompletion() {
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/dest/lun");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(copiedLun));
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+
+        CloudStackVolume result = copyDestLun(10);
+
+        assertEquals("copied-lun-uuid", result.getLun().getUuid());
+        ArgumentCaptor<Lun> requestCaptor = ArgumentCaptor.forClass(Lun.class);
+        verify(sanFeignClient).createLun(eq(authHeader), eq(true), requestCaptor.capture());
+        assertNull(requestCaptor.getValue().getClone());
+        assertEquals("source-lun-uuid", requestCaptor.getValue().getCopy().getSource().getUuid());
+        assertEquals("/vol/dest/lun", requestCaptor.getValue().getName());
+        assertEquals("svm1", requestCaptor.getValue().getSvm().getName());
+        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+    }
+
+    @Test
+    void testCopyCloudStackVolume_RetriesWhenSourceLunIsBusy() {
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/dest/lun");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(copiedLun));
+
+        FeignException sourceBusyException = mock(FeignException.class);
+        when(sourceBusyException.status()).thenReturn(500);
+        when(sourceBusyException.contentUTF8()).thenReturn("{\"error\":{\"code\":\"5375060\"}}");
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
+                .thenThrow(sourceBusyException)
+                .thenReturn(response);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+
+        CloudStackVolume result = copyDestLun(3);
+
+        assertEquals("copied-lun-uuid", result.getLun().getUuid());
+        verify(sanFeignClient, times(2)).createLun(eq(authHeader), eq(true), any(Lun.class));
+    }
+
+    @Test
+    void testCopyCloudStackVolume_ResumesExistingCopyAfterSourceBusyRetry() {
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/dest/lun");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> existingCopyResponse = new OntapResponse<>();
+        existingCopyResponse.setRecords(List.of(copiedLun));
+
+        FeignException sourceBusyException = mock(FeignException.class);
+        when(sourceBusyException.status()).thenReturn(500);
+        when(sourceBusyException.contentUTF8()).thenReturn("{\"error\":{\"code\":\"5375060\"}}");
+        FeignException copyAlreadyExistsException = mock(FeignException.class);
+        when(copyAlreadyExistsException.status()).thenReturn(409);
+        when(copyAlreadyExistsException.contentUTF8()).thenReturn("{\"error\":{\"code\":\"7018919\"}}");
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
+                .thenThrow(sourceBusyException)
+                .thenThrow(copyAlreadyExistsException);
+        when(sanFeignClient.getLunResponse(authHeader, Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1",
+                OntapStorageConstants.NAME, "/vol/dest/lun"))).thenReturn(existingCopyResponse);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+
+        CloudStackVolume result = copyDestLun(3);
+
+        assertEquals("copied-lun-uuid", result.getLun().getUuid());
+        verify(sanFeignClient, times(2)).createLun(eq(authHeader), eq(true), any(Lun.class));
+        verify(sanFeignClient).getLunResponse(authHeader, Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1",
+                OntapStorageConstants.NAME, "/vol/dest/lun"));
+        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+    }
+
+    @Test
+    void testCopyCloudStackVolume_RetriesCreateWhenExistingCopyDestinationIsAbsent() {
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/dest/lun");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> createdCopyResponse = new OntapResponse<>();
+        createdCopyResponse.setRecords(List.of(copiedLun));
+        OntapResponse<Lun> absentDestinationResponse = new OntapResponse<>();
+
+        FeignException sourceBusyException = mock(FeignException.class);
+        when(sourceBusyException.status()).thenReturn(500);
+        when(sourceBusyException.contentUTF8()).thenReturn("{\"error\":{\"code\":\"5375060\"}}");
+        FeignException copyAlreadyExistsException = mock(FeignException.class);
+        when(copyAlreadyExistsException.status()).thenReturn(409);
+        when(copyAlreadyExistsException.contentUTF8()).thenReturn("{\"error\":{\"code\":\"7018919\"}}");
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
+                .thenThrow(sourceBusyException)
+                .thenThrow(copyAlreadyExistsException)
+                .thenReturn(createdCopyResponse);
+        when(sanFeignClient.getLunResponse(authHeader, Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1",
+                OntapStorageConstants.NAME, "/vol/dest/lun"))).thenReturn(absentDestinationResponse);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+
+        CloudStackVolume result = copyDestLun(3);
+
+        assertEquals("copied-lun-uuid", result.getLun().getUuid());
+        verify(sanFeignClient, times(3)).createLun(eq(authHeader), eq(true), any(Lun.class));
+        verify(sanFeignClient).getLunResponse(authHeader, Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1",
+                OntapStorageConstants.NAME, "/vol/dest/lun"));
+        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+    }
+
+    @Test
+    void testCopyCloudStackVolume_DoesNotResumeUnrelatedExistingCopy() {
+        FeignException copyAlreadyExistsException = mock(FeignException.class);
+        when(copyAlreadyExistsException.status()).thenReturn(409);
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenThrow(copyAlreadyExistsException);
+
+        assertThrows(CloudRuntimeException.class, () -> copyDestLun(3));
+
+        verify(sanFeignClient, never()).getLunResponse(eq(authHeader), anyMap());
+    }
+
+    @Test
+    void testCopyCloudStackVolume_TimeoutDeletesPartialLun() {
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/dest/lun");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(copiedLun));
+
+        Lun.Progress progress = new Lun.Progress();
+        progress.setPercentComplete(50);
+        progress.setState("copying");
+        Lun.Source activeSource = new Lun.Source();
+        activeSource.setProgress(progress);
+        Lun.Copy activeCopy = new Lun.Copy();
+        activeCopy.setSource(activeSource);
+        Lun activeLun = new Lun();
+        activeLun.setCopy(activeCopy);
+
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(activeLun);
+
+        assertThrows(CloudRuntimeException.class, () -> copyDestLun(0));
+
+        verify(sanFeignClient).deleteLun(eq(authHeader), eq("copied-lun-uuid"), anyMap());
+    }
+
+    @Test
+    void testCopyCloudStackVolume_BuildsLunCopyRequestFromVolumes() {
+        VolumeInfo srcVolumeInfo = mock(VolumeInfo.class);
+        VolumeInfo destVolumeInfo = mock(VolumeInfo.class);
+        StoragePoolVO destStoragePool = mock(StoragePoolVO.class);
+        when(srcVolumeInfo.getId()).thenReturn(11L);
+        when(destVolumeInfo.getName()).thenReturn("ROOT-12");
+        when(destStoragePool.getName()).thenReturn("destPool");
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_UUID, "source-lun-uuid", false));
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_NAME))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_NAME, "/vol/srcPool/ROOT_11", false));
+
+        Lun copiedLun = new Lun();
+        copiedLun.setName("/vol/destPool/ROOT_12");
+        copiedLun.setUuid("copied-lun-uuid");
+        OntapResponse<Lun> response = new OntapResponse<>();
+        response.setRecords(List.of(copiedLun));
+        when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+
+        CloudStackVolume result = unifiedSANStrategy.copyCloudStackVolume(srcVolumeInfo, destVolumeInfo, destStoragePool,
+                Map.of(OntapStorageConstants.SVM_NAME, "svm1"), 10);
+
+        assertEquals("copied-lun-uuid", result.getLun().getUuid());
+        ArgumentCaptor<Lun> requestCaptor = ArgumentCaptor.forClass(Lun.class);
+        verify(sanFeignClient).createLun(eq(authHeader), eq(true), requestCaptor.capture());
+        Lun request = requestCaptor.getValue();
+        assertEquals("/vol/destPool/ROOT_12", request.getName());
+        assertEquals("svm1", request.getSvm().getName());
+        assertEquals("source-lun-uuid", request.getCopy().getSource().getUuid());
+        assertEquals("/vol/srcPool/ROOT_11", request.getCopy().getSource().getName());
+        assertNull(request.getClone());
+    }
+
+    @Test
+    void testCopyCloudStackVolume_MissingSourceLunUuid_ThrowsException() {
+        VolumeInfo srcVolumeInfo = mock(VolumeInfo.class);
+        when(srcVolumeInfo.getId()).thenReturn(11L);
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(null);
+
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.copyCloudStackVolume(srcVolumeInfo,
+                mock(VolumeInfo.class), mock(StoragePoolVO.class), Map.of(OntapStorageConstants.SVM_NAME, "svm1"), 10));
+        verify(sanFeignClient, never()).createLun(any(), anyBoolean(), any(Lun.class));
     }
 
     @Test
