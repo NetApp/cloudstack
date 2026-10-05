@@ -772,13 +772,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                         callerVolumeVO.setPath(volumeVO.getPath());
                         callerVolumeVO.set_iScsiName(volumeVO.get_iScsiName());
                     }
-                    if (shouldUpdateNfsExportForMigration(volumeVO)
+                    if (shouldConnectHostForMigration(volumeVO)
                             && !storageManager.connectHostToSharedPool(host, storagePool.getId())) {
                         throw new CloudRuntimeException(String.format("Failed to connect host [%s] to iSCSI storage pool [%s]",
                                 host.getName(), storagePool.getName()));
                     }
                 } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                    if (shouldUpdateNfsExportForMigration(volumeVO)) {
+                    if (shouldConnectHostForMigration(volumeVO)) {
                         updateNfsExportPolicyForHost(storagePool, host, details, AccessGroup.HostRuleAction.ADD);
                         if (!storageManager.connectHostToSharedPool(host, storagePool.getId())) {
                             throw new CloudRuntimeException(String.format("Failed to connect host [%s] to NFS storage pool [%s]",
@@ -1002,10 +1002,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
-     * Offline copy grants dest access after createAsync, while the dest volume is still Ready/Allocated
-     * and unattached. Source is already Migrating. Create itself never calls grantAccess.
+     * True when this grant should connect the host for a migration.
+     * The source volume is already Migrating. An offline destination is still Ready, Allocated,
+     * or Creating, and unattached, because createAsync does not call grantAccess.
+     * iSCSI then connects the host to the pool. NFS updates the export policy and connects the host.
      */
-    private boolean shouldUpdateNfsExportForMigration(VolumeVO volumeVO) {
+    private boolean shouldConnectHostForMigration(VolumeVO volumeVO) {
         if (Volume.State.Migrating.equals(volumeVO.getState())) {
             return true;
         }
