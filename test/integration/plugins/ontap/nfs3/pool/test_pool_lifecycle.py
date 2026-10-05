@@ -41,7 +41,7 @@ Workflow:
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
-  - KVM cluster registered in CloudStack with at least one ready user template
+  - KVM cluster registered in CloudStack
   - ONTAP SVM with NFS3 service enabled and at least one NFS data LIF
   - ontap.cfg populated with real values
 
@@ -691,6 +691,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         Grow and shrink the disabled pool and verify:
           - Both capacity updates are accepted
           - CloudStack and ONTAP reach each requested size
+          - KVM hosts report each resized NFS capacity
           - The pool remains Disabled throughout
           - The FlexVol remains online and the export policy is unchanged
         """
@@ -738,6 +739,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 pool.name, target, timeout=120
             )
             self.assertEqual(resized_ontap.get("state"), "online")
+            self._poll_kvm_pool_capacity(
+                pool.id, pool.name, target, timeout=120
+            )
 
         if self.__class__.pool_ep_name:
             self.assertIsNotNone(
