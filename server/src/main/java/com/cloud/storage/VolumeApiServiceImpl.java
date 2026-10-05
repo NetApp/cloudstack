@@ -1127,6 +1127,11 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
             throw new InvalidParameterValueException(String.format("Disk offering: %s is not compatible with the storage pool", diskOffering.getUuid()));
         }
 
+        if (!storageMgr.storagePoolHasEnoughSpace(volume.getSize(), storagePool)) {
+            throw new InvalidParameterValueException(String.format("Storage pool %s does not have enough space to create volume %s.",
+                    storagePool.getName(), volume.getUuid()));
+        }
+
         DataStore dataStore = dataStoreMgr.getDataStore(storageId, DataStoreRole.Primary);
         VolumeInfo volumeInfo = volFactory.getVolume(volumeId, dataStore);
         AsyncCallFuture<VolumeApiResult> createVolumeFuture = volService.createVolumeAsync(volumeInfo, dataStore);
@@ -1446,11 +1451,12 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
             if (currentSize != newSize || !compareEqualsIncludingNullOrZero(newMaxIops, volume.getMaxIops()) || !compareEqualsIncludingNullOrZero(newMinIops, volume.getMinIops())) {
                 volumeResizeRequired = true;
             }
-            if (!volumeMigrateRequired && !volumeResizeRequired && newDiskOffering != null) {
-                _volsDao.updateDiskOffering(volume.getId(), newDiskOffering.getId());
+            if (!volumeMigrateRequired && !volumeResizeRequired) {
                 volume = _volsDao.findById(volume.getId());
-                updateStorageWithTheNewDiskOffering(volume, newDiskOffering);
-
+                if (newDiskOffering != null) {
+                    _volsDao.updateDiskOffering(volume.getId(), newDiskOffering.getId());
+                    updateStorageWithTheNewDiskOffering(volume, newDiskOffering);
+                }
                 return volume;
             }
 

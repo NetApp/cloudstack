@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,28 +16,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Private CI defaults — safe to extend with new repositories or profiles.
-# Jenkins resolves: parameter override > profile overlay > values here.
-#
-# Extension ideas (not all wired in Jenkins yet):
-#   nonoss: { git_url: "...", branch: "..." }
-#
-# Phase 2 (Marvin) — reserved; Jenkinsfile will read when implemented:
-# marvin:
-#   python_version: "3.10"
-#   zone_config: setup/dev/advdualzone.cfg
-#
-# Phase 3 (CD) — reserved:
-# delivery:
-#   artifact_repo_url: https://artifacts.example.com/cloudstack
+"""Run legacy nose on Python versions where collections.Callable was removed."""
 
-cloudstack:
-  git_url: https://github.com/apache/cloudstack.git
-  branch: main
+import collections
+import collections.abc
+import runpy
 
-# Optional named presets. Select via Jenkins parameter CONFIG_PROFILE.
-profiles:
-  example-lts-branch:
-    cloudstack:
-      branch: "4.19"
-      git_url: https://github.com/apache/cloudstack.git
+
+if not hasattr(collections, "Callable"):
+    collections.Callable = collections.abc.Callable
+
+runpy.run_module("nose", run_name="__main__", alter_sys=True)

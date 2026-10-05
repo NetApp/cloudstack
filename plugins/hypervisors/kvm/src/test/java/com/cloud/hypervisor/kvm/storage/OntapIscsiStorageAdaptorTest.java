@@ -72,7 +72,24 @@ public class OntapIscsiStorageAdaptorTest {
 
         StorageAdaptor adaptor = OntapIscsiStorageAdaptor.class.getDeclaredConstructor().newInstance();
         assertEquals(StoragePoolType.OntapiSCSI, adaptor.getStoragePoolType());
-        assertEquals("The superclass must keep serving the other iSCSI vendors",
+        assertFalse("Must implement StorageAdaptor directly, not extend IscsiAdmStorageAdaptor",
+                IscsiAdmStorageAdaptor.class.isAssignableFrom(OntapIscsiStorageAdaptor.class));
+        assertEquals("IscsiAdmStorageAdaptor must keep serving the other iSCSI vendors",
                 StoragePoolType.Iscsi, new IscsiAdmStorageAdaptor().getStoragePoolType());
+    }
+
+    @Test
+    public void ontapAndGenericIscsiAdaptorsDoNotShareThePoolMap() {
+        String uuid = "shared-looking-uuid";
+        OntapIscsiStorageAdaptor ontap = new OntapIscsiStorageAdaptor();
+        IscsiAdmStorageAdaptor generic = new IscsiAdmStorageAdaptor();
+
+        KVMStoragePool ontapPool = ontap.createStoragePool(uuid, "10.0.0.1", 3260, null, null,
+                StoragePoolType.OntapiSCSI, null, true);
+
+        assertSame(ontapPool, ontap.getStoragePool(uuid));
+        assertEquals(null, generic.getStoragePool(uuid));
+        assertTrue(ontap.deleteStoragePool(uuid));
+        assertEquals(null, ontap.getStoragePool(uuid));
     }
 }

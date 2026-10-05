@@ -30,6 +30,8 @@ ONTAP_DIR=test/integration/plugins/ontap
 CFG=${ONTAP_DIR}/ontap.cfg
 RESULTS_BASE=${ONTAP_DIR}/results
 AGGREGATE=${ONTAP_DIR}/aggregate_results.py
+NOSE_RUNNER=${ONTAP_DIR}/nose_compat.py
+ONTAP_PREREQS=${ONTAP_DIR}/check_ontap_prereqs.py
 export PYTHONPATH=${ONTAP_DIR}:${PYTHONPATH:-}
 export PYTHONUNBUFFERED=1
 FILTER="${1:-all}"
@@ -65,6 +67,7 @@ ISCSI_SUITES=(
     "iSCSI volume lifecycle|iscsi_volume|${ONTAP_DIR}/iscsi/volume/test_volume_lifecycle.py"
     "iSCSI zone-scoped pool|iscsi_zone_pool|${ONTAP_DIR}/iscsi/pool/test_zone_scoped_pool.py"
     "iSCSI VM volume workflow|iscsi_vm_workflow|${ONTAP_DIR}/iscsi/instance/test_vm_volume_attach.py"
+    "iSCSI template cache negative|iscsi_template_cache_negative|${ONTAP_DIR}/iscsi/template/test_template_cache_negative.py"
 )
 
 NFS3_SUITES=(
@@ -73,6 +76,7 @@ NFS3_SUITES=(
     "NFS3 volume lifecycle|nfs3_volume|${ONTAP_DIR}/nfs3/volume/test_volume_lifecycle.py"
     "NFS3 zone-scoped pool|zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
     "NFS3 VM volume attach|vm_volume_workflow|${ONTAP_DIR}/nfs3/instance/test_vm_volume_attach.py"
+    "NFS3 template cache negative|nfs3_template_cache_negative|${ONTAP_DIR}/nfs3/template/test_template_cache_negative.py"
 )
 
 record_results() {
@@ -254,7 +258,7 @@ run_group() {
     fi
 
     set +e
-    $PYTHON -m nose --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
+    $PYTHON "$NOSE_RUNNER" --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
     rc=${PIPESTATUS[0]}
     set -e
     out=$(cat "$tmpout")
@@ -312,10 +316,17 @@ run_nfs3_suites() {
     done
 }
 
+check_ontap_prereqs() {
+    local protocol="$1"
+    echo "==> Checking ONTAP ${protocol} prerequisites"
+    $PYTHON "$ONTAP_PREREQS" "$CFG" "$protocol"
+}
+
 run_protocol_batch() {
     local protocol="$1"
     local parent_dir="${2:-}"
 
+    check_ontap_prereqs "$protocol"
     init_batch "$protocol" "$parent_dir"
 
     case "$protocol" in
@@ -336,6 +347,11 @@ run_single_suite_by_tag() {
     for entry in "${ISCSI_SUITES[@]}" "${NFS3_SUITES[@]}"; do
         IFS='|' read -r label tag file <<< "$entry"
         if [[ "$tag" == "$want_tag" ]]; then
+            if [[ "$want_tag" == iscsi_* ]]; then
+                check_ontap_prereqs iscsi
+            else
+                check_ontap_prereqs nfs3
+            fi
             run_group "$label" "$tag" "$file"
             return 0
         fi
