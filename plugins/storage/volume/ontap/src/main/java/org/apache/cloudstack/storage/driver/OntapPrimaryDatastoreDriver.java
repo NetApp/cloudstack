@@ -768,9 +768,23 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 VolumeInfo volumeInfo = (VolumeInfo) data;
                 VolumeDetailVO qosPolicyDetail = volumeDetailsDao.findDetail(
                         volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-                CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
-                storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
+                // NFS file delete leaves the QoS assignment in place unless the file is set to
+                // none first. iSCSI LUN delete already drops object_count.
+                boolean qosCleared = false;
+                if (!isIscsi(details)) {
+                    qosCleared = clearQosPolicyBeforeDelete(storageStrategy, storagePool, details, volumeInfo, qosPolicyDetail);
+                }
+                try {
+                    CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
+                    storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
+                } catch (Exception e) {
+                    if (qosCleared) {
+                        restoreQosPolicyAfterFailedDelete(storageStrategy, storagePool, details, volumeInfo, qosPolicyDetail);
+                    }
+                    throw e;
+                }
                 if (qosPolicyDetail != null) {
+                    volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
                     deleteUnusedQosPolicy(storageStrategy, qosPolicyDetail.getValue());
                 }
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
@@ -1136,6 +1150,47 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         VolumeQosPolicy noPolicy = new VolumeQosPolicy();
         noPolicy.setName(OntapStorageConstants.QOS_POLICY_NONE);
         attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, noPolicy);
+    }
+
+    /**
+     * Sets the NFS file QoS policy to {@code none} before the file is deleted.
+     * Failure must not block volume delete.
+     *
+     * @return true when the file was moved off its policy
+     */
+    private boolean clearQosPolicyBeforeDelete(StorageStrategy storageStrategy, StoragePoolVO storagePool,
+                                               Map<String, String> details, VolumeInfo volumeInfo,
+                                               VolumeDetailVO qosPolicyDetail) {
+        if (qosPolicyDetail == null || qosPolicyDetail.getValue() == null) {
+            return false;
+        }
+        try {
+            detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
+            return true;
+        } catch (Exception e) {
+            logger.warn("Could not clear QoS policy [{}] on volume [{}] before delete: {}",
+                    qosPolicyDetail.getValue(), volumeInfo.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Puts the previous QoS policy back on an NFS file when delete fails after the policy was cleared.
+     */
+    private void restoreQosPolicyAfterFailedDelete(StorageStrategy storageStrategy, StoragePoolVO storagePool,
+                                                   Map<String, String> details, VolumeInfo volumeInfo,
+                                                   VolumeDetailVO qosPolicyDetail) {
+        if (qosPolicyDetail == null || qosPolicyDetail.getValue() == null) {
+            return;
+        }
+        VolumeQosPolicy previousPolicy = new VolumeQosPolicy();
+        previousPolicy.setUuid(qosPolicyDetail.getValue());
+        try {
+            attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, previousPolicy);
+        } catch (Exception e) {
+            logger.warn("Could not restore QoS policy [{}] on volume [{}] after delete failed: {}",
+                    qosPolicyDetail.getValue(), volumeInfo.getId(), e.getMessage());
+        }
     }
 
     @Override
