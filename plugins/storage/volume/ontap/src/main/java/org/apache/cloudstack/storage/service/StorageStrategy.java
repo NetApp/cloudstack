@@ -31,12 +31,12 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.ClusterFeignClient;
+import org.apache.cloudstack.storage.feign.client.EmsFeignClient;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
-import org.apache.cloudstack.storage.feign.client.EmsFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.model.Aggregate;
@@ -539,14 +539,6 @@ public abstract class StorageStrategy {
             pollJobIfPresent(jobResponse, "resize FlexVolume [" + volume.getUuid() + "]",
                     OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES, OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
             logger.info("FlexVolume '{}' (UUID: {}) resized successfully to {} bytes", volume.getName(), volume.getUuid(), volume.getSize());
-            Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
-            Volume resized = getStorageVolume(volume.getUuid(), queryParams);
-            if (resized == null) {
-                throw new CloudRuntimeException(String.format(
-                        "FlexVolume '%s' (UUID: %s) was resized but could not be read back from ONTAP",
-                        volume.getName(), volume.getUuid()));
-            }
-            return resized;
         } catch (FeignException e) {
             if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                 String msg = String.format("Cannot resize FlexVolume '%s' (UUID: %s): volume not found on ONTAP (404). ", volume.getName(), volume.getUuid());
@@ -556,6 +548,7 @@ public abstract class StorageStrategy {
             logger.error("Exception while resizing FlexVolume '{}' (UUID: {}): {}", volume.getName(), volume.getUuid(), e.getMessage(), e);
             throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume: " + e.getMessage(), e);
         }
+        return volume;
     }
 
     /**

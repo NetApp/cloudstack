@@ -52,6 +52,7 @@ import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
@@ -1471,21 +1472,15 @@ public class StorageStrategyTest {
         completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
         when(jobFeignClient.getJobByUUID(anyString(), eq("resize-job-uuid")))
                 .thenReturn(completedJob);
-        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
-        Volume resized = new Volume();
-        resized.setUuid("vol-uuid-resize");
-        resized.setSize(5368709120L);
-        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("vol-uuid-resize"), eq(queryParams)))
-                .thenReturn(resized);
 
         // Execute
         Volume result = storageStrategy.updateStorageVolume(volume);
 
         // Verify
-        assertNotNull(result);
+        assertSame(volume, result);
         assertEquals(5368709120L, result.getSize());
         verify(volumeFeignClient, times(1)).updateVolume(anyString(), eq("vol-uuid-resize"), any());
-        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("vol-uuid-resize"), eq(queryParams));
+        verify(volumeFeignClient, never()).getVolumeByUUID(anyString(), anyString(), any());
         verify(jobFeignClient, atLeastOnce()).getJobByUUID(anyString(), eq("resize-job-uuid"));
     }
 
