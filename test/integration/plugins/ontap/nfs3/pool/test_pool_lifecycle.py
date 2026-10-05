@@ -526,6 +526,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             pool.name, requested_size, timeout=120
         )
         self.assertEqual(resized_ontap_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, requested_size, timeout=120
+        )
         self.assertIsNotNone(
             self.ontap.get_export_policy(self.__class__.pool_ep_name),
             "Export policy disappeared after capacity increase",
@@ -633,6 +636,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             pool.name, target_size, timeout=120
         )
         self.assertEqual(shrunk_ontap_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, target_size, timeout=120
+        )
         self.assertIsNotNone(
             self.ontap.get_export_policy(self.__class__.pool_ep_name),
             "Export policy disappeared after safe shrink",
@@ -1322,6 +1328,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             pool.name, grow_target, timeout=120
         )
         self.assertEqual(grown_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, grow_target, timeout=120
+        )
         self._assert_vm_running_with_volume(vm.id, vol.id, "grow-with-vm")
         self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
 
@@ -1345,6 +1354,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             pool.name, original_size, timeout=120
         )
         self.assertEqual(shrunk_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, original_size, timeout=120
+        )
         self._assert_vm_running_with_volume(vm.id, vol.id, "shrink-with-vm")
         self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
 
