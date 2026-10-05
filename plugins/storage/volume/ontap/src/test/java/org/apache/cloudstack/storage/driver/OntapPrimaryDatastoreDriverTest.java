@@ -1877,7 +1877,7 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123", any()))
+            when(sanStrategy.getStorageVolume(eq("flexvol-uuid-123"), any()))
                     .thenThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP unreachable"));
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
