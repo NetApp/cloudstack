@@ -235,7 +235,7 @@ public abstract class StorageStrategy {
 
     /**
      * True when every cluster node reports {@code is_all_flash_optimized} (AFF, including C-series).
-     * Any FAS node makes this false. Used for min-throughput QoS support.
+     * A FAS node, or a node that omits the flag, makes this false. Used for min-throughput QoS support.
      */
     public boolean isAff() {
         Map<String, Object> query = new HashMap<>();
@@ -247,7 +247,7 @@ public abstract class StorageStrategy {
                     "Unable to determine whether the ONTAP cluster is AFF or FAS");
         }
         for (ClusterNode node : response.getRecords()) {
-            if (node != null && Boolean.FALSE.equals(node.getAllFlashOptimized())) {
+            if (node == null || !Boolean.TRUE.equals(node.getAllFlashOptimized())) {
                 return false;
             }
         }

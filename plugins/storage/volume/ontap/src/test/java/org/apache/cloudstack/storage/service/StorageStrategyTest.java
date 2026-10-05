@@ -401,6 +401,16 @@ public class StorageStrategyTest {
     }
 
     @Test
+    public void testIsAff_nullAllFlashOptimized_returnsFalse() {
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("unknown", null, null, null))));
+
+        assertFalse(storageStrategy.isAff());
+    }
+
+    @Test
     public void testIsAff_noNodes_throws() {
         when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
                 .thenReturn(new OntapResponse<>(List.of()));
