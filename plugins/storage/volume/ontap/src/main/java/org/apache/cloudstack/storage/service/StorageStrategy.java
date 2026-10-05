@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.service;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -396,6 +397,14 @@ public abstract class StorageStrategy {
             pollJobIfPresent(jobResponse, "resize FlexVolume [" + volume.getUuid() + "]",
                     OntapStorageConstants.ONTAP_VOLUME_JOB_MAX_RETRIES, OntapStorageConstants.ONTAP_VOLUME_JOB_POLL_INTERVAL_MS);
             logger.info("FlexVolume '{}' (UUID: {}) resized successfully to {} bytes", volume.getName(), volume.getUuid(), volume.getSize());
+            Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+            Volume resized = getStorageVolume(volume.getUuid(), queryParams);
+            if (resized == null) {
+                throw new CloudRuntimeException(String.format(
+                        "FlexVolume '%s' (UUID: %s) was resized but could not be read back from ONTAP",
+                        volume.getName(), volume.getUuid()));
+            }
+            return resized;
         } catch (FeignException e) {
             if (OntapStorageUtils.isOntapObjectNotFoundError(e)) {
                 String msg = String.format("Cannot resize FlexVolume '%s' (UUID: %s): volume not found on ONTAP (404). ", volume.getName(), volume.getUuid());
@@ -405,7 +414,6 @@ public abstract class StorageStrategy {
             logger.error("Exception while resizing FlexVolume '{}' (UUID: {}): {}", volume.getName(), volume.getUuid(), e.getMessage(), e);
             throw new CloudRuntimeException("Failed to resize ONTAP FlexVolume: " + e.getMessage(), e);
         }
-        return volume;
     }
 
     /**
@@ -438,21 +446,28 @@ public abstract class StorageStrategy {
     }
 
     /**
-     * Gets ONTAP Flex-Volume by UUID.
+     * Gets an ONTAP FlexVolume by UUID.
      * Eligible only for Unified ONTAP storage.
      * Throws exception in case of disaggregated ONTAP storage.
      *
+     * <p>Callers pass ONTAP query parameters when they need a partial record. For example,
+     * {@code fields=space.used} returns only used space instead of the full volume.
+     * A null or empty map returns the default volume representation.</p>
+     *
      * @param uuid the UUID of the volume to retrieve
+     * @param queryParams ONTAP query parameters applied to {@code GET /storage/volumes/{uuid}};
+     *                    may be null
      * @return the retrieved Volume object, or null if not found
      */
-    public Volume getStorageVolume(String uuid) {
+    public Volume getStorageVolume(String uuid, Map<String, Object> queryParams) {
         if (StringUtils.isBlank(uuid)) {
             throw new CloudRuntimeException("Cannot fetch ONTAP volume: UUID is null or empty");
         }
-        logger.info("getStorageVolume: Fetching ONTAP volume by UUID: {}", uuid);
+        Map<String, Object> params = queryParams != null ? queryParams : Collections.emptyMap();
+        logger.info("getStorageVolume: Fetching ONTAP volume [{}] with query params {}", uuid, params);
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         try {
-            Volume fetchedVolume = volumeFeignClient.getVolumeByUUID(authHeader, uuid);
+            Volume fetchedVolume = volumeFeignClient.getVolumeByUUID(authHeader, uuid, params);
             logger.info("getStorageVolume: Volume [{}] fetched successfully", uuid);
             return fetchedVolume;
         } catch (FeignException e) {

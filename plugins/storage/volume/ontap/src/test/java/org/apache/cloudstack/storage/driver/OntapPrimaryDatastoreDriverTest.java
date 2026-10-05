@@ -1562,6 +1562,21 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testResize_VolumeTypeWithoutVolumeDetails_FailsWithoutInternalTypeName() {
+        DataObject data = mock(DataObject.class);
+        when(data.getType()).thenReturn(VOLUME);
+
+        driver.resize(data, createCallback);
+
+        ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+        verify(createCallback, times(1)).complete(resultCaptor.capture());
+        assertFalse(resultCaptor.getValue().isSuccess());
+        String message = resultCaptor.getValue().getResult();
+        assertTrue(message.contains("Invalid DataObjectType (VOLUME) passed to resize"));
+        assertFalse(message.contains("VolumeInfo"));
+    }
+
+    @Test
     void testResize_NullNewSize_Fails() {
         // payload.newSize is null
         ResizeVolumePayload payload = new ResizeVolumePayload(null, null, null, null, false, "i-2-VM", null, false);
@@ -1808,9 +1823,11 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(flexVol);
+            Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+            when(sanStrategy.getStorageVolume(eq("flexvol-uuid-123"), eq(queryParams))).thenReturn(flexVol);
 
             assertEquals(10737418240L, driver.getUsedBytes(storagePool));
+            verify(sanStrategy).getStorageVolume(eq("flexvol-uuid-123"), eq(queryParams));
         }
     }
 
@@ -1823,7 +1840,7 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(null);
+            when(sanStrategy.getStorageVolume(eq("flexvol-uuid-123"), any())).thenReturn(null);
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> driver.getUsedBytes(storagePool));
@@ -1843,7 +1860,7 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123")).thenReturn(flexVol);
+            when(sanStrategy.getStorageVolume(eq("flexvol-uuid-123"), any())).thenReturn(flexVol);
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> driver.getUsedBytes(storagePool));
@@ -1860,7 +1877,7 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
+            when(sanStrategy.getStorageVolume("flexvol-uuid-123", any()))
                     .thenThrow(new com.cloud.utils.exception.CloudRuntimeException("ONTAP unreachable"));
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
@@ -1878,7 +1895,7 @@ class OntapPrimaryDatastoreDriverTest {
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.getStorageVolume("flexvol-uuid-123"))
+            when(sanStrategy.getStorageVolume(eq("flexvol-uuid-123"), any()))
                     .thenThrow(new IllegalStateException("invalid ONTAP response"));
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,

@@ -603,39 +603,36 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         CreateCmdResult result = null;
         try {
             if (data != null && data.getType() == DataObjectType.VOLUME) {
-                if (!(data instanceof VolumeInfo)) {
-                    throw new CloudRuntimeException("Expected VolumeInfo but received " +
-                            data.getClass().getSimpleName());
-                }
-                VolumeInfo volumeInfo = (VolumeInfo) data;
-                Object rawPayload = volumeInfo.getpayload();
-                ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
-                        ? (ResizeVolumePayload) rawPayload : null;
-                if (payload == null || payload.newSize == null) {
-                    throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
-                }
-                if (volumeInfo.getDataStore() == null) {
-                    throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
-                }
+                if (data instanceof VolumeInfo) {
+                    VolumeInfo volumeInfo = (VolumeInfo) data;
+                    Object rawPayload = volumeInfo.getpayload();
+                    ResizeVolumePayload payload = (rawPayload instanceof ResizeVolumePayload)
+                            ? (ResizeVolumePayload) rawPayload : null;
+                    if (payload == null || payload.newSize == null) {
+                        throw new CloudRuntimeException("Invalid resize payload for volume " + volumeInfo.getId());
+                    }
+                    if (volumeInfo.getDataStore() == null) {
+                        throw new CloudRuntimeException("Data store not found for volume " + volumeInfo.getId());
+                    }
 
-                StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
-                if (storagePool == null) {
-                    throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
-                }
-                Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+                    StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getDataStore().getId());
+                    if (storagePool == null) {
+                        throw new CloudRuntimeException("Storage pool not found for volume " + volumeInfo.getId());
+                    }
+                    Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
 
-                VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
-                if (volumeVO == null) {
-                    throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
-                }
-                if (payload.newSize < volumeVO.getSize()) {
-                    throw new CloudRuntimeException("Unable to shrink volume.");
-                }
+                    VolumeVO volumeVO = volumeDao.findById(volumeInfo.getId());
+                    if (volumeVO == null) {
+                        throw new CloudRuntimeException("Volume not found for id " + volumeInfo.getId());
+                    }
+                    if (payload.newSize < volumeVO.getSize()) {
+                        throw new CloudRuntimeException("Unable to shrink volume.");
+                    }
 
-                StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
-                CloudStackVolume cloudStackVolume = new CloudStackVolume();
-                cloudStackVolume.setVolumeInfo(volumeInfo);
-                storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
+                    StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+                    CloudStackVolume cloudStackVolume = new CloudStackVolume();
+                    cloudStackVolume.setVolumeInfo(volumeInfo);
+                    storageStrategy.resizeCloudStackVolume(cloudStackVolume, payload.newSize);
 
                 volumeVO.setSize(payload.newSize);
                 if (!volumeDao.update(volumeVO.getId(), volumeVO)) {
@@ -644,6 +641,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 }
                 result = new CreateCmdResult(volumeVO.getPath(), new Answer(null, true, null));
                 logger.info("resize: Successfully resized volume [{}] to [{}] bytes", volumeInfo.getId(), payload.newSize);
+                }else{
+                    String errorMessage = "Invalid DataObjectType (" + data.getType() + ") passed to resize";
+                    result = new CreateCmdResult(null, new Answer(null, false, errorMessage));
+                    result.setResult(errorMessage);
+                    return;
+                }
             } else {
                 throw new CloudRuntimeException("Expected a VOLUME DataObject but received " +
                         (data != null ? data.getType() : "null"));
@@ -1105,7 +1108,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         try {
             StorageStrategy strategy = OntapStorageUtils.getStrategyByStoragePoolDetails(poolDetails);
-            var flexVol = strategy.getStorageVolume(flexVolUuid);
+            Map<String, Object> queryParams = new HashMap<>();
+            queryParams.put(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+            var flexVol = strategy.getStorageVolume(flexVolUuid, queryParams);
 
             if (flexVol == null) {
                 throw new CloudRuntimeException(String.format(

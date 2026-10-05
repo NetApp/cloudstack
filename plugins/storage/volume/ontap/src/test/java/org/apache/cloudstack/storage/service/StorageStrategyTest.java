@@ -48,6 +48,7 @@ import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +60,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.Mock;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -1271,6 +1273,57 @@ public class StorageStrategyTest {
                 verify(jobFeignClient, never()).getJobByUUID(anyString(), anyString());
         }
 
+    @Test
+    void testGetStorageVolume_ByUuid_Success() {
+        Volume expected = new Volume();
+        expected.setUuid("flexvol-uuid-123");
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("flexvol-uuid-123"), eq(queryParams))).thenReturn(expected);
+
+        Volume result = storageStrategy.getStorageVolume("flexvol-uuid-123", queryParams);
+
+        assertNotNull(result);
+        assertEquals("flexvol-uuid-123", result.getUuid());
+        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-123"), eq(queryParams));
+    }
+
+    @Test
+    void testGetStorageVolume_ByUuid_NotFound_ReturnsNull() {
+        FeignException notFound = mock(FeignException.class);
+        when(notFound.status()).thenReturn(404);
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+        doThrow(notFound).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("missing-uuid"), eq(queryParams));
+
+        Volume result = storageStrategy.getStorageVolume("missing-uuid", queryParams);
+
+        assertNull(result);
+    }
+
+    @Test
+    void testGetStorageVolume_ByUuid_ServerError_Throws() {
+        FeignException serverError = mock(FeignException.class);
+        when(serverError.status()).thenReturn(500);
+        when(serverError.getMessage()).thenReturn("Internal Server Error");
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+        doThrow(serverError).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-999"), eq(queryParams));
+
+        assertThrows(CloudRuntimeException.class, () -> storageStrategy.getStorageVolume("flexvol-uuid-999", queryParams));
+    }
+
+    @Test
+    void testGetStorageVolume_ByUuid_ForwardsQueryParams() {
+        Volume expected = new Volume();
+        expected.setUuid("flexvol-uuid-123");
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("flexvol-uuid-123"), eq(queryParams))).thenReturn(expected);
+
+        Volume result = storageStrategy.getStorageVolume("flexvol-uuid-123", queryParams);
+
+        assertNotNull(result);
+        assertEquals("flexvol-uuid-123", result.getUuid());
+        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-123"), eq(queryParams));
+    }
+
     // ========== updateStorageVolume() Tests ==========
 
     @Test
@@ -1294,6 +1347,12 @@ public class StorageStrategyTest {
         completedJob.setState(OntapStorageConstants.JOB_SUCCESS);
         when(jobFeignClient.getJobByUUID(anyString(), eq("resize-job-uuid")))
                 .thenReturn(completedJob);
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS, OntapStorageConstants.SPACE_USED);
+        Volume resized = new Volume();
+        resized.setUuid("vol-uuid-resize");
+        resized.setSize(5368709120L);
+        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("vol-uuid-resize"), eq(queryParams)))
+                .thenReturn(resized);
 
         // Execute
         Volume result = storageStrategy.updateStorageVolume(volume);
@@ -1302,6 +1361,7 @@ public class StorageStrategyTest {
         assertNotNull(result);
         assertEquals(5368709120L, result.getSize());
         verify(volumeFeignClient, times(1)).updateVolume(anyString(), eq("vol-uuid-resize"), any());
+        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("vol-uuid-resize"), eq(queryParams));
         verify(jobFeignClient, atLeastOnce()).getJobByUUID(anyString(), eq("resize-job-uuid"));
     }
 

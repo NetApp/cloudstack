@@ -64,6 +64,8 @@ public class OntapStorageConstants {
     // Query params
     public static final String NAME = "name";
     public static final String FIELDS = "fields";
+    /** ONTAP volume field: bytes consumed, {@code space.used}. */
+    public static final String SPACE_USED = "space.used";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
     public static final String STATE = "state";

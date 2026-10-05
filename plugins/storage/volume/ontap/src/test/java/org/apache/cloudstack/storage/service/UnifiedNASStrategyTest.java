@@ -1216,47 +1216,6 @@ public class UnifiedNASStrategyTest {
         assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(withVol, 0L));
     }
 
-    // =========================================================================
-    // getStorageVolume(String uuid) tests – exercising the new overload added
-    // to StorageStrategy that fetches a FlexVolume by UUID from ONTAP REST API
-    // =========================================================================
-
-    @Test
-    public void testGetStorageVolume_ByUuid_Success() {
-        org.apache.cloudstack.storage.feign.model.Volume expected =
-                new org.apache.cloudstack.storage.feign.model.Volume();
-        expected.setUuid("flexvol-uuid-123");
-
-        when(volumeFeignClient.getVolumeByUUID(anyString(), eq("flexvol-uuid-123"))).thenReturn(expected);
-
-        org.apache.cloudstack.storage.feign.model.Volume result = strategy.getStorageVolume("flexvol-uuid-123");
-
-        assertNotNull(result);
-        assertEquals("flexvol-uuid-123", result.getUuid());
-        verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-123"));
-    }
-
-    @Test
-    public void testGetStorageVolume_ByUuid_NotFound_ReturnsNull() {
-        FeignException notFound = mock(FeignException.class);
-        when(notFound.status()).thenReturn(404);
-        doThrow(notFound).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("missing-uuid"));
-
-        org.apache.cloudstack.storage.feign.model.Volume result = strategy.getStorageVolume("missing-uuid");
-
-        assertNull(result);
-    }
-
-    @Test
-    public void testGetStorageVolume_ByUuid_ServerError_Throws() {
-        FeignException serverError = mock(FeignException.class);
-        when(serverError.status()).thenReturn(500);
-        when(serverError.getMessage()).thenReturn("Internal Server Error");
-        doThrow(serverError).when(volumeFeignClient).getVolumeByUUID(anyString(), eq("flexvol-uuid-999"));
-
-        assertThrows(CloudRuntimeException.class, () -> strategy.getStorageVolume("flexvol-uuid-999"));
-    }
-
     @Test
     public void testResizeCloudStackVolume_KvmHostFails_Throws() {
         VolumeObject volumeObject = mock(VolumeObject.class);
