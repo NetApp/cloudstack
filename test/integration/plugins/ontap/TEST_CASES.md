@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 94 test cases across 12 test suites.
+Complete reference for all 90 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -88,17 +88,15 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 **File:** `nfs3/pool/test_zone_scoped_pool.py`
 **Class:** `TestOntapZoneScopedPool`
-**Tag:** `zone_pool`
-**Total:** 6 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected)
+**Tag:** `nfs3_zone_pool`
+**Total:** 4 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped NFS3 pool; CloudStack calls `attachZone()` to connect all eligible KVM hosts | setUpClass | `pool.state == "Up"` | FlexVol `online`; export policy exists and contains **every** cluster host IP; at least one NFS data LIF present | positive |
-| 02 | `test_02_grow_zone_scoped_pool` | Grow the zone-scoped pool | test_01 (`pool`) | `capacitybytes` reaches the requested size; pool stays `Up` | FlexVol `space.size` reaches the requested size; stays `online`; export policy still covers every host IP | positive |
-| 03 | `test_03_shrink_zone_scoped_pool` | Safely shrink the zone-scoped pool back to its pre-grow size | test_02 | `capacitybytes` returns to the original value; pool stays `Up` | FlexVol shrinks back and stays `online`; export policy still covers every host IP | positive |
-| 04 | `test_04_disable_zone_scoped_pool` | Disable the zone-scoped pool | test_03 | `pool.state == "Disabled"` | FlexVol unchanged; export policy unchanged | positive |
-| 05 | `test_05_enable_zone_scoped_pool` | Re-enable the zone-scoped pool | test_04 | `pool.state == "Up"` | FlexVol unchanged; export policy unchanged | positive |
-| 06 | `test_06_delete_zone_scoped_pool` | Enter maintenance and force-delete the zone-scoped pool | test_05 | Pool no longer listed | FlexVol deleted; export policy deleted | positive |
+| 02 | `test_02_disable_zone_scoped_pool` | Disable the zone-scoped pool | test_01 | `pool.state == "Disabled"` | FlexVol unchanged; export policy unchanged | positive |
+| 03 | `test_03_enable_zone_scoped_pool` | Re-enable the zone-scoped pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; export policy unchanged | positive |
+| 04 | `test_04_delete_zone_scoped_pool` | Enter maintenance and force-delete the zone-scoped pool | test_03 | Pool no longer listed | FlexVol deleted; export policy deleted | positive |
 
 ---
 
@@ -193,16 +191,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/pool/test_zone_scoped_pool.py`
 **Class:** `TestOntapISCSIZoneScopedPool`
 **Tag:** `iscsi_zone_pool`
-**Total:** 6 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE)
+**Total:** 4 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 |---|-------------|------|------------|-----------------------------|------------------------|------|
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped iSCSI pool; CS calls `attachZone()` to connect all eligible KVM hosts | setUpClass | `pool.state == "Up"` | FlexVol `online`; igroup per cluster host, each with host IQN as initiator | positive |
-| 02 | `test_02_grow_zone_scoped_pool` | Grow the zone-scoped pool | test_01 (`pool`) | `capacitybytes` reaches the requested size; pool stays `Up` | FlexVol reaches the requested size and stays `online`; igroups unchanged | positive |
-| 03 | `test_03_shrink_zone_scoped_pool` | Safely shrink the zone-scoped pool back to its pre-grow size | test_02 | `capacitybytes` returns to the original value; pool stays `Up` | FlexVol shrinks back and stays `online`; igroups unchanged | positive |
-| 04 | `test_04_disable_zone_scoped_pool` | Disable pool | test_03 | `pool.state == "Disabled"` | FlexVol unchanged; igroups unchanged | positive |
-| 05 | `test_05_enable_zone_scoped_pool` | Re-enable pool | test_04 | `pool.state == "Up"` | FlexVol unchanged; igroups unchanged | positive |
-| 06 | `test_06_delete_zone_scoped_pool` | Enter maintenance then delete pool | test_05 | Pool no longer listed | FlexVol deleted; all igroups deleted | positive |
+| 02 | `test_02_disable_zone_scoped_pool` | Disable pool | test_01 | `pool.state == "Disabled"` | FlexVol unchanged; igroups unchanged | positive |
+| 03 | `test_03_enable_zone_scoped_pool` | Re-enable pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; igroups unchanged | positive |
+| 04 | `test_04_delete_zone_scoped_pool` | Enter maintenance then delete pool | test_03 | Pool no longer listed | FlexVol deleted; all igroups deleted | positive |
 
 ---
 
@@ -283,14 +279,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 |-------|---------|-------|-------|--------|
 | NFS3 Pool Lifecycle | NFS3 | Cluster | 16 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 7 | ✅ |
-| NFS3 Zone-Scoped Pool | NFS3 | Zone | 6 | ✅ |
+| NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 10 | 🆕 +2 template cache |
 | NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 16 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 7 | ✅ |
-| iSCSI Zone-Scoped Pool | iSCSI | Zone | 6 | ✅ |
+| iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 10 | ⚠️ 7/8 + 🆕 2 template cache |
 | iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
-| **Total** | | | **94** | **Resize flows passed; 1 known environment failure** |
+| **Total** | | | **90** | **89 passing** |

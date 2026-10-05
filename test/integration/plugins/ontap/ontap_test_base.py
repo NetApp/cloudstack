@@ -259,7 +259,12 @@ class OntapRestClient:
         uuid = records[0].get("uuid")
         if uuid:
             return self._get("/storage/volumes/%s" % uuid,
-                             params={"fields": "name,uuid,state,space"})
+                             params={
+                                 "fields": (
+                                     "name,uuid,state,space.size,space.used,"
+                                     "space.snapshot.reserve_percent"
+                                 )
+                             })
         return records[0]
 
     # -- NFS helpers ---------------------------------------------------------
@@ -1224,6 +1229,86 @@ class OntapTestBase(cloudstackTestCase):
         self.fail(
             "Pool %s did not report capacitybytes=%d within %ds (last: %d)"
             % (pool_id, expected_bytes, timeout, current)
+        )
+
+    def _poll_kvm_pool_capacity(self, pool_id, volume_name, expected_bytes,
+                                timeout=120, interval=5):
+        """Poll the KVM NFS mount until it reports the resized capacity."""
+        self.assertTrue(
+            self.kvm_hosts_ssh_creds,
+            "No KVM host SSH credentials are configured for host-side "
+            "capacity verification",
+        )
+        volume = self.ontap.get_volume(volume_name)
+        self.assertIsNotNone(
+            volume,
+            "ONTAP FlexVol '%s' was not found for host-side capacity "
+            "verification" % volume_name,
+        )
+        reserve_percent = (
+            volume.get("space", {}).get("snapshot", {}).get("reserve_percent")
+        )
+        self.assertIsNotNone(
+            reserve_percent,
+            "ONTAP FlexVol '%s' did not report "
+            "space.snapshot.reserve_percent" % volume_name,
+        )
+        reserve_percent = int(reserve_percent)
+        self.assertGreaterEqual(reserve_percent, 0)
+        self.assertLessEqual(reserve_percent, 100)
+        # CloudStack and ONTAP report provisioned size, while statvfs reports
+        # capacity after the FlexVol's configurable snapshot reserve.
+        expected_host_bytes = (
+            expected_bytes * (100 - reserve_percent) // 100
+        )
+        tolerance = max(1024 * 1024 * 1024, expected_host_bytes // 10000)
+        deadline = time.time() + timeout
+        observed = {}
+        errors = {}
+
+        while time.time() < deadline:
+            observed = {}
+            errors = {}
+            for creds in self.kvm_hosts_ssh_creds:
+                host_ip = creds["host"]
+                try:
+                    ssh = SshClient(
+                        host_ip, 22,
+                        creds["user"], creds["password"],
+                        retries=3, delay=3, timeout=15.0,
+                    )
+                    output = ssh.execute(
+                        "df -B1 --output=size '/mnt/%s' 2>/dev/null | "
+                        "awk 'NR == 2 {print $1}'" % pool_id
+                    )
+                    values = [
+                        line.strip() for line in output if line.strip().isdigit()
+                    ]
+                    if values:
+                        observed[host_ip] = int(values[-1])
+                    else:
+                        errors[host_ip] = "NFS pool is not mounted or has no capacity"
+                except Exception as ex:
+                    errors[host_ip] = str(ex)
+
+            if observed and all(
+                    abs(size - expected_host_bytes) <= tolerance
+                    for size in observed.values()):
+                logger.info(
+                    "KVM hosts report resized pool %s usable capacity near "
+                    "%d B (%d%% snapshot reserve on %d B provisioned): %s",
+                    pool_id, expected_host_bytes, reserve_percent,
+                    expected_bytes, observed,
+                )
+                return observed
+            time.sleep(interval)
+
+        self.fail(
+            "KVM hosts did not report pool %s usable capacity near %d B "
+            "(%d%% snapshot reserve on %d B provisioned) within %ds "
+            "(tolerance=%d B, observed=%s, errors=%s)"
+            % (pool_id, expected_host_bytes, reserve_percent, expected_bytes,
+               timeout, tolerance, observed, errors)
         )
 
     def _poll_ontap_volume_size(self, volume_name, expected_bytes,
