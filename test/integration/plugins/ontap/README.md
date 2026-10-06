@@ -21,8 +21,19 @@
 This folder contains end-to-end integration tests for the NetApp ONTAP primary storage plugin in Apache CloudStack. The tests use the **Marvin** framework to drive real CloudStack API calls against a live management server and verify outcomes on a real ONTAP storage system.
 
 CI wiring:
-- Bundles: `private-cicd/marvin/bundles.txt`
-- Zone config: `private-cicd/marvin/zones/` (downstream only)
+- Pipeline: `private-cicd/Jenkinsfile` (downstream only)
+- Inventory schema: `private-cicd/config/vm-inventory.yaml.example`
+- Runtime config: generated from a populated Jenkins Secret file and separate
+  Jenkins credentials; populated inventory and real credentials are never
+  committed
+- Test order: `setup_zone`, `iscsi`, then `nfs3`
+- Archived results: `presubmit-results/phase2/marvin/`
+
+The pipeline installs the version-matched Marvin archive produced by the
+CloudStack package build, stages this directory on a reverted lab VM, and runs
+the protocol batches sequentially. See
+[`private-cicd/docs/PRIVATE-CICD-GUIDE.md`](../../../../private-cicd/docs/PRIVATE-CICD-GUIDE.md)
+for the deployment, health-gate, and artifact contracts.
 
 ---
 
@@ -32,7 +43,7 @@ CI wiring:
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (87 tests)
+├── TEST_CASES.md                 # Full test case reference table (97 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -42,8 +53,10 @@ test/integration/plugins/ontap/
 │   │   └── test_zone_scoped_pool.py      # Zone-scoped pool (attachZone)
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
-│   └── instance/
-│       └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach
+│   ├── instance/
+│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach + template cache
+│   └── template/
+│       └── test_template_cache_negative.py  # Template-cache boundary cases
 │
 └── iscsi/
     ├── pool/
@@ -52,8 +65,10 @@ test/integration/plugins/ontap/
     │   └── test_zone_scoped_pool.py      # Zone-scoped iSCSI pool
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
-    └── instance/
-        └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle
+    ├── instance/
+    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle + template cache
+    └── template/
+        └── test_template_cache_negative.py  # Template-cache boundary cases
 ```
 
 ---
@@ -136,29 +151,36 @@ The test classes read `storageIP`, `svmName`, `username`, and `password` from th
 Run all suites for one protocol in a single batch, then inspect consolidated results:
 
 ```bash
-# iSCSI only — 5 suites, ~30–45 min
+# iSCSI only — 6 suites, ~40–60 min
 bash test/integration/plugins/ontap/run_tests.sh iscsi
 
-# NFS3 only — 5 suites, ~30–45 min
+# NFS3 only — 6 suites, ~40–60 min
 bash test/integration/plugins/ontap/run_tests.sh nfs3
 
-# Full plugin validation: iSCSI batch, then NFS3 batch (~60–90 min)
+# Full plugin validation: iSCSI batch, then NFS3 batch
 bash test/integration/plugins/ontap/run_tests.sh both
 
 # Default (setup_zone + iscsi + nfs3; excludes cleanup_zone)
 bash test/integration/plugins/ontap/run_tests.sh
 bash test/integration/plugins/ontap/run_tests.sh all
+
+# Template-cache negative / boundary suites only
+# (the template-cache happy path runs inside the VM attach suites)
+bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache_negative
+bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
 ```
 
-Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (last).
+Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
 
 | Command | What it runs |
 |---------|--------------|
-| `run_tests.sh iscsi` | All 5 iSCSI suites + unified iSCSI report |
-| `run_tests.sh nfs3` | All 5 NFS3 suites + unified NFS3 report |
+| `run_tests.sh iscsi` | All 6 iSCSI suites + unified iSCSI report |
+| `run_tests.sh nfs3` | All 6 NFS3 suites + unified NFS3 report |
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
 | `run_tests.sh all` | `setup_zone`, then `both` (iSCSI before NFS3) |
 | `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
+| `run_tests.sh nfs3_template_cache_negative` | NFS3 template-cache boundary/negative suite |
+| `run_tests.sh iscsi_template_cache_negative` | iSCSI template-cache boundary/negative suite |
 | `run_tests.sh setup_zone` | Zone setup only |
 | `run_tests.sh cleanup_zone` | Zone teardown (manual; destructive) |
 
@@ -191,19 +213,23 @@ Marvin also writes raw logs to `/tmp/MarvinLogs/<run>/` during execution.
 ```bash
 # Single suite (e.g. NFS3 pool lifecycle)
 PYTHONPATH=test/integration/plugins/ontap \
-test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python \
+    test/integration/plugins/ontap/nose_compat.py --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     test/integration/plugins/ontap/nfs3/pool/test_pool_lifecycle.py -v
 
 # By tag
 PYTHONPATH=test/integration/plugins/ontap \
-test/integration/plugins/ontap/.venv/bin/python -m nose --with-marvin \
+test/integration/plugins/ontap/.venv/bin/python \
+    test/integration/plugins/ontap/nose_compat.py --with-marvin \
     --marvin-config=test/integration/plugins/ontap/ontap.cfg \
     -a tags=iscsi_workflow \
     test/integration/plugins/ontap/iscsi/pool/test_pool_lifecycle.py -v
 ```
 
 > **Important:** `PYTHONPATH=test/integration/plugins/ontap` is always required. Test files import `ontap_test_base` from the parent directory.
+
+> **Python 3.10+:** Always invoke legacy nose through `nose_compat.py`. The wrapper restores the `collections.Callable` alias that nose test discovery requires.
 
 > **Single-host lab:** Suites within a batch run **sequentially** (not in parallel). iSCSI completes before NFS3 starts in `both`/`all` so the one KVM host is not shared across protocol operations simultaneously.
 
@@ -319,12 +345,14 @@ another ONTAP pool is present.
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 10 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy and cancel-maintenance after CS volume deletion |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/export policy deletes |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
+| NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 11 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and cancel-maintenance after CS volume deletion |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/igroup deletes |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle; LUN-maps on VM start/stop/detach |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
+| iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
 
@@ -341,6 +369,7 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
 | iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
+| `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
 | `setup_zone` steps 11–12 slow on first run | System VMs and template download after zone enable | Normal — first run may take up to ~60 min; re-runs pass quickly when already ready |
 | `cleanup_zone` pool delete fails | Pool stuck in Maintenance or KVM NFS mount stale | Re-run cleanup; check host connectivity; manually `umount /mnt/<pool-uuid>` on KVM if needed |
