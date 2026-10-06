@@ -23,9 +23,9 @@ Tests are numbered test_01 ... test_12 and must run in that order.  Each step
 builds on the shared state established by the previous step.
 
 Workflow:
-  01  Reject create when a FlexVol of that name already exists on ONTAP
-  02  Reject create when no online assigned aggregate has enough free space
-  03  Create primary storage pool
+  01  Reject create when no online assigned aggregate has enough free space
+  02  Create primary storage pool
+  03  Reject create when a FlexVol of that name already exists on ONTAP
   04  Disable storage pool
   05  Enable storage pool
   06  Enter maintenance mode
@@ -59,10 +59,8 @@ import unittest
 from nose.plugins.attrib import attr
 
 from marvin.cloudstackAPI import (
-    cancelStorageMaintenance,
     createStoragePool as createStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
-    enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackException import CloudstackAPIException
@@ -279,59 +277,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 01 - Create primary storage pool
+    # Step 01 - Reject create when no aggregate has enough free space
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_01_reject_create_when_flexvol_name_exists(self):
-        """
-        Pre-create a FlexVol on ONTAP, then ask CloudStack for a pool of the
-        same name.  ONTAP refuses the duplicate, so the create must fail.
-
-        Verifies:
-          - createStoragePool raises CloudstackAPIException
-          - no pool of that name is left in CloudStack
-          - the pre-existing FlexVol is untouched (the plugin must not
-            adopt or delete a volume it did not create)
-        """
-        self._sweep_tracked_pool2()
-        pool_name = self._throwaway_pool_name("Dup")
-        try:
-            self.ontap.create_flexvol(
-                self.svm_name, pool_name, TestData.ONTAP_MIN_VOLUME_SIZE,
-                nas_path=False,
-            )
-            self.assertIsNotNone(
-                self.ontap.get_volume(pool_name),
-                "Pre-created ONTAP FlexVol '%s' not found; cannot test the "
-                "duplicate-name rejection" % pool_name,
-            )
-            log_progress(
-                logger, "info",
-                "Pre-created FlexVol '%s'; requesting a pool of the same name "
-                "(expect reject)", pool_name,
-            )
-            with self.assertRaises(CloudstackAPIException) as caught:
-                self.__class__.pool2 = self._create_pool(pool_name=pool_name)
-            log_progress(
-                logger, "info",
-                "Rejected duplicate-name create for '%s': %s",
-                pool_name, caught.exception,
-            )
-            self._assert_no_pool_named(pool_name)
-            self.assertIsNotNone(
-                self.ontap.get_volume(pool_name),
-                "Pre-existing ONTAP FlexVol '%s' was removed by the failed "
-                "pool create" % pool_name,
-            )
-        finally:
-            self._cleanup_throwaway_pool(
-                self.__class__.pool2, flexvol_name=pool_name
-            )
-
-
-    @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_02_reject_create_when_no_aggregate_space(self):
+    def test_01_reject_create_when_no_aggregate_space(self):
         """
         Ask for 1 GiB more than the largest online aggregate assigned to the
         SVM can provide, so no aggregate qualifies and the plugin refuses
@@ -395,8 +345,12 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                 self.__class__.pool2, flexvol_name=pool_name
             )
 
+    # ------------------------------------------------------------------
+    # Step 02 - Create primary storage pool
+    # ------------------------------------------------------------------
+
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_03_create_primary_storage_pool(self):
+    def test_02_create_primary_storage_pool(self):
         """
         Create an iSCSI primary storage pool and verify:
           - CloudStack state is Up, type is OntapiSCSI
@@ -450,7 +404,59 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self._assert_pool_capacity(pool, "pool-created")
 
     # ------------------------------------------------------------------
-    # Step 02 - Disable storage pool
+    # Step 03 - Reject create when that FlexVol name already exists
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_workflow"], required_hardware=True)
+    def test_03_reject_create_when_flexvol_name_exists(self):
+        """
+        The pool from test_02 already has a FlexVol of that name on ONTAP.
+        A second createStoragePool with the same name must be rejected, and
+        the existing pool and FlexVol must be left untouched.
+
+        Verifies:
+          - createStoragePool raises CloudstackAPIException
+          - CloudStack still lists only the pool from test_02
+          - the existing ONTAP FlexVol is still online
+        """
+        pool = self.__class__.pool
+        self.assertIsNotNone(pool, "Pool absent - test_02 must pass first")
+        pool_name = pool.name
+        self.assertIsNotNone(
+            self.ontap.get_volume(pool_name),
+            "ONTAP FlexVol '%s' from test_02 is missing" % pool_name,
+        )
+        log_progress(
+            logger, "info",
+            "Pool '%s' already owns a FlexVol; requesting another pool of "
+            "the same name (expect reject)", pool_name,
+        )
+        duplicate = None
+        try:
+            with self.assertRaises(CloudstackAPIException) as caught:
+                duplicate = self._create_pool(pool_name=pool_name)
+            log_progress(
+                logger, "info",
+                "Rejected duplicate-name create for '%s': %s",
+                pool_name, caught.exception,
+            )
+            self._assert_only_original_pool(pool)
+            ontap_vol = self.ontap.get_volume(pool_name)
+            self.assertIsNotNone(
+                ontap_vol,
+                "Existing ONTAP FlexVol '%s' was removed by the failed "
+                "pool create" % pool_name,
+            )
+            self.assertEqual(
+                ontap_vol.get("state"), "online",
+                "Existing ONTAP FlexVol '%s' should still be online, got '%s'"
+                % (pool_name, ontap_vol.get("state")),
+            )
+        finally:
+            self._warn_if_duplicate_pool(duplicate, pool)
+
+    # ------------------------------------------------------------------
+    # Step 04 - Disable storage pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
@@ -460,7 +466,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - CloudStack reports Disabled
           - ONTAP: FlexVol is still online (disable is a CS-only state change)
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -490,7 +496,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - CloudStack reports Up
           - ONTAP: FlexVol is still online (enable is a CS-only state change)
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -520,13 +526,9 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - CloudStack reports Maintenance
           - ONTAP: FlexVol is still online (maintenance is a CS-only state change)
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
-        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        result = self._enter_maintenance(self.__class__.pool.id)
         self.assertEqual(result.state, "Maintenance")
 
         # ONTAP: maintenance must not touch the FlexVol
@@ -549,13 +551,9 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - CloudStack reports Up
           - ONTAP: FlexVol is still online
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
-        cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.cancelStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Up", timeout=120)
+        result = self._exit_maintenance(self.__class__.pool.id)
         self.assertEqual(result.state, "Up")
 
         ontap_vol = self.ontap.get_volume(self.__class__.pool.name)
@@ -577,14 +575,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         Verifies the pool is removed from CloudStack and the backing ONTAP
         FlexVol is deleted.
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
         pool = self.__class__.pool
         pool_name = pool.name
 
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(pool.id)
 
         self._delete_pool(pool.id)
         self.__class__.pool = None
@@ -733,10 +728,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self._assert_pool_capacity(pool, "volume-deleted")
 
         # Enter maintenance then force-delete the pool
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(pool.id)
 
         self._delete_pool(pool.id, forced=True)
         self.__class__.pool = None
@@ -785,15 +777,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             if listed:
                 try:
                     if listed[0].state != "Maintenance":
-                        maint_cmd = (
-                            enableStorageMaintenance
-                            .enableStorageMaintenanceCmd()
-                        )
-                        maint_cmd.id = pool.id
-                        self.apiClient.enableStorageMaintenance(maint_cmd)
-                        self._poll_pool_state(
-                            pool.id, "Maintenance", timeout=120
-                        )
+                        self._enter_maintenance(pool.id)
                 except Exception as exc:
                     logger.warning(
                         "cleanup: could not put pool '%s' into Maintenance: %s",
@@ -826,6 +810,48 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         if not remaining:
             self.__class__.pool2 = None
 
+
+    def _assert_only_original_pool(self, pool):
+        """Assert the rejected create did not add a second pool of this name."""
+        try:
+            listed = list_storage_pools(self.apiClient, name=pool.name) or []
+        except CloudstackAPIException:
+            listed = []
+        same_name = [
+            item for item in listed if getattr(item, "name", None) == pool.name
+        ]
+        self.assertEqual(
+            [item.id for item in same_name],
+            [pool.id],
+            "CloudStack should still list only pool '%s' after the rejected "
+            "create, found: %s" % (pool.name, same_name),
+        )
+        current = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(
+            current,
+            "Original pool '%s' disappeared after the rejected create"
+            % pool.name,
+        )
+        self.assertEqual(
+            current[0].state, "Up",
+            "Original pool '%s' should still be Up, got '%s'"
+            % (pool.name, current[0].state),
+        )
+
+    def _warn_if_duplicate_pool(self, duplicate, pool):
+        """Leave a stray duplicate in place.
+
+        Deleting it would remove the FlexVol that the rest of the suite
+        still uses.
+        """
+        if duplicate is None or getattr(duplicate, "id", None) == pool.id:
+            return
+        logger.warning(
+            "Duplicate pool '%s' (id=%s) was created against the shared "
+            "FlexVol; leaving it in place so cleanup does not delete the "
+            "pool the rest of the suite uses",
+            pool.name, duplicate.id,
+        )
 
     def _assert_no_pool_named(self, pool_name):
         """Assert CloudStack holds no storage pool with this name."""
@@ -877,13 +903,6 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         return pool
 
 
-    def _enter_maintenance(self, pool):
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
-
-
     @attr(tags=["iscsi_workflow"], required_hardware=True)
     def test_11_delete_pool_with_flexvol_predeleted(self):
         """
@@ -897,7 +916,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         """
         pool = self._create_throwaway_pool("PreDelVol")
         try:
-            self._enter_maintenance(pool)
+            self._enter_maintenance(pool.id)
             log_progress(
                 logger, "info",
                 "Deleting ONTAP FlexVol '%s' behind CloudStack's back",
@@ -980,7 +999,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                     % igroup_name,
                 )
 
-            self._enter_maintenance(pool)
+            self._enter_maintenance(pool.id)
             log_progress(
                 logger, "info",
                 "Deleting ONTAP igroups %s behind CloudStack's back", present,

@@ -54,7 +54,9 @@ ONTAP object behind CloudStack's back, and force-deletes the pool:
   08  FlexVol pre-deleted on ONTAP, then force-delete pool with CS volume
   09  Host igroups pre-deleted on ONTAP, then force-delete pool with CS volume
   10  Enter maintenance with CS volume after LUN maps are pre-deleted
-  11  Cancel maintenance once the CS volume has been deleted
+  11  Log out only the isolated test iSCSI session, then enter maintenance
+  12  Delete the test volume while that session is already logged in
+  13  Replace the test LUN by-path with a regular file, then delete the volume
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -76,11 +78,8 @@ import unittest
 from nose.plugins.attrib import attr
 
 from marvin.cloudstackAPI import (
-    cancelStorageMaintenance,
     createStoragePool as createStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
-    destroyVolume as destroyVolumeAPI,
-    enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackException import CloudstackAPIException
@@ -229,15 +228,6 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
 
         response = self.apiClient.createStoragePool(cmd)
         return StoragePool(response.__dict__)
-
-    def _volume_exists_in_cs(self, vol_id):
-        """Return True if the volume is still listed by CloudStack."""
-        from marvin.cloudstackAPI import listVolumes as listVolumesAPI
-        cmd = listVolumesAPI.listVolumesCmd()
-        cmd.id = vol_id
-        cmd.listall = True
-        vols = self.apiClient.listVolumes(cmd) or []
-        return len(vols) > 0
 
     def _assert_lun_exists(self, pool_name, msg_context=""):
         """Assert that at least one LUN exists in the pool's ONTAP FlexVol."""
@@ -474,11 +464,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_01 must pass first")
 
-        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        result = self._enter_maintenance(self.__class__.pool.id)
         self.assertEqual(
             result.state, "Maintenance",
             "Pool should be 'Maintenance', got '%s'" % result.state
@@ -526,11 +512,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_01 must pass first")
 
-        cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.cancelStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Up", timeout=120)
+        result = self._exit_maintenance(self.__class__.pool.id)
         self.assertEqual(
             result.state, "Up",
             "Pool should be 'Up' after cancel maintenance, got '%s'" % result.state
@@ -575,10 +557,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                              "Volume absent — test_01 must pass first")
 
         # Re-enter Maintenance (pool is Up from test_05)
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(self.__class__.pool.id)
 
         # Attempt forced=False delete — must raise
         with self.assertRaises(Exception,
@@ -713,13 +692,6 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         """(igroup name, initiator IQN) per cluster host that reports an IQN."""
         return self._iscsi_host_specs()
 
-    def _enter_maintenance(self, pool):
-        """Put the pool into Maintenance and wait for the state to settle."""
-        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(cmd)
-        return self._poll_pool_state(pool.id, "Maintenance", timeout=120)
-
     def _create_isolated_pool_with_volume(self, label):
         """Build a fresh pool plus CS volume for one isolated scenario.
 
@@ -755,7 +727,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
     def _assert_pool_absent(self, pool, label, delete_error=None):
         """Assert CloudStack no longer lists the pool."""
         try:
-            remaining = list_storage_pools(self.apiClient, id=pool.id)
+            remaining = list_storage_pools(self.apiClient, name=pool.name)
         except Exception:
             remaining = None
         self.assertFalse(
@@ -764,108 +736,6 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
             % (label, pool.name,
                "; the API raised: %s" % delete_error if delete_error else "")
         )
-
-    def _purge_cs_volume_record(self, vol, label):
-        """Remove a CS volume record the forced pool delete may have left.
-
-        The backing LUN is already gone at this point, so a failure here only
-        affects tidiness — the volume stays in the volume2 slot for
-        tearDownClass to retry and no exception is raised.
-        """
-        if vol is None:
-            return
-        if self._volume_exists_in_cs(vol.id):
-            try:
-                cmd = deleteVolumeAPI.deleteVolumeCmd()
-                cmd.id = vol.id
-                self.apiClient.deleteVolume(cmd)
-                logger.info("[%s] deleted leftover CS volume record %s",
-                            label, vol.id)
-            except Exception as exc:
-                logger.warning("[%s] could not delete leftover CS volume %s: %s",
-                               label, vol.id, exc)
-        else:
-            logger.info("[%s] CS volume %s was removed along with the pool",
-                        label, vol.id)
-        if not self._volume_exists_in_cs(vol.id):
-            self.__class__.volume2 = None
-
-    def _exit_maintenance(self, pool, label):
-        """Bring a pool out of Maintenance so its volumes can be deleted."""
-        try:
-            listed = list_storage_pools(self.apiClient, id=pool.id)
-        except CloudstackAPIException:
-            return False
-        if not listed:
-            return False
-        if listed[0].state != "Maintenance":
-            return True
-        try:
-            cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-            cmd.id = pool.id
-            self.apiClient.cancelStorageMaintenance(cmd)
-            self._poll_pool_state(pool.id, "Up", timeout=120)
-            return True
-        except Exception as exc:
-            logger.warning("[%s] could not cancel maintenance on '%s': %s",
-                           label, pool.name, exc)
-            return False
-
-    def _enter_maintenance_quietly(self, pool, label):
-        """Enter Maintenance, tolerating a pool whose backend is already gone."""
-        try:
-            self._enter_maintenance(pool)
-        except Exception as exc:
-            logger.warning("[%s] could not enter maintenance on '%s': %s",
-                           label, pool.name, exc)
-
-    DESTROYED_VOLUME_STATES = ("destroy", "destroyed", "expunging", "expunged")
-
-    def _cs_volume_state(self, vol_id):
-        """Return the CloudStack volume state, or None when it is not listed."""
-        vol = self._get_cs_volume(vol_id)
-        return getattr(vol, "state", None) if vol is not None else None
-
-    def _volume_cleared_for_pool_delete(self, vol_id):
-        """True once the volume no longer blocks deleteStoragePool(forced)."""
-        state = self._cs_volume_state(vol_id)
-        return state is None or state.lower() in self.DESTROYED_VOLUME_STATES
-
-    def _remove_cs_volume(self, pool, vol, label):
-        """Clear the CloudStack volume so the pool can be force-deleted.
-
-        deleteStoragePool(forced=True) refuses while any volume on the pool is
-        in a state other than Destroy.  deleteVolume is tried first because it
-        also reclaims the backing storage, but it expunges through libvirt and
-        fails when the FlexVol is already gone.  destroyVolume(expunge=False)
-        is the fallback: it only moves the record to Destroy, which is all the
-        forced pool delete requires - it expunges the leftovers itself.
-        """
-        if vol is None or not self._volume_exists_in_cs(vol.id):
-            self.__class__.volume2 = None
-            return True
-        self._exit_maintenance(pool, label)
-        try:
-            cmd = deleteVolumeAPI.deleteVolumeCmd()
-            cmd.id = vol.id
-            self.apiClient.deleteVolume(cmd)
-        except Exception as exc:
-            logger.warning("[%s] deleteVolume failed for %s (%s); falling back "
-                           "to destroyVolume without expunge",
-                           label, vol.id, exc)
-            try:
-                cmd = destroyVolumeAPI.destroyVolumeCmd()
-                cmd.id = vol.id
-                cmd.expunge = False
-                self.apiClient.destroyVolume(cmd)
-            except Exception as destroy_exc:
-                logger.warning("[%s] destroyVolume also failed for %s: %s",
-                               label, vol.id, destroy_exc)
-        if not self._volume_cleared_for_pool_delete(vol.id):
-            return False
-        if not self._volume_exists_in_cs(vol.id):
-            self.__class__.volume2 = None
-        return True
 
     def _cleanup_isolated_pool(self, pool, label):
         """Best-effort teardown of one isolated pool and its ONTAP FlexVol.
@@ -876,15 +746,17 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         if pool is None:
             return
         try:
-            listed = list_storage_pools(self.apiClient, id=pool.id)
+            listed = list_storage_pools(self.apiClient, name=pool.name)
         except Exception:
             listed = None
         if listed:
             self._remove_cs_volume(pool, self.__class__.volume2, label)
             try:
-                listed = list_storage_pools(self.apiClient, id=pool.id) or listed
+                listed = list_storage_pools(
+                    self.apiClient, name=pool.name
+                ) or listed
                 if listed[0].state != "Maintenance":
-                    self._enter_maintenance(pool)
+                    self._enter_maintenance(pool.id)
                 self._delete_pool(pool.id, forced=True)
             except Exception as exc:
                 logger.warning("[%s] could not force-delete pool '%s': %s",
@@ -895,7 +767,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
             logger.warning("[%s] ONTAP FlexVol cleanup for '%s' failed: %s",
                            label, pool.name, exc)
         try:
-            listed = list_storage_pools(self.apiClient, id=pool.id)
+            listed = list_storage_pools(self.apiClient, name=pool.name)
         except Exception:
             listed = None
         if not listed:
@@ -922,7 +794,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
         label = "flexvol-missing"
         pool, vol = self._create_isolated_pool_with_volume(label)
         try:
-            self._enter_maintenance(pool)
+            self._enter_maintenance(pool.id)
 
             self.ontap.offline_and_delete_volume(pool.name)
             self.assertIsNone(
@@ -945,7 +817,11 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                 "[%s] CloudStack volume could not be deleted before the pool "
                 "delete" % label
             )
-            self._enter_maintenance_quietly(pool, label)
+            try:
+                self._enter_maintenance(pool.id)
+            except Exception as exc:
+                logger.warning("[%s] could not enter maintenance on '%s': %s",
+                               label, pool.name, exc)
 
             delete_error = None
             try:
@@ -1016,7 +892,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                     self.ontap.create_igroup(self.svm_name, name, iqn)
                     seeded.append(name)
 
-            self._enter_maintenance(pool)
+            self._enter_maintenance(pool.id)
 
             deleted = []
             for name in igroup_names:
@@ -1043,7 +919,11 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                 "[%s] CloudStack volume could not be deleted before the pool "
                 "delete" % label
             )
-            self._enter_maintenance_quietly(pool, label)
+            try:
+                self._enter_maintenance(pool.id)
+            except Exception as exc:
+                logger.warning("[%s] could not enter maintenance on '%s': %s",
+                               label, pool.name, exc)
 
             delete_error = None
             try:
@@ -1138,7 +1018,7 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                 "[%s] LUN maps should be absent before maintenance" % label
             )
 
-            self._enter_maintenance(pool)
+            self._enter_maintenance(pool.id)
             self.assertTrue(
                 self._volume_exists_in_cs(vol.id),
                 "[%s] CS volume disappeared after entering maintenance" % label
@@ -1167,67 +1047,308 @@ class TestOntapISCSIPoolWithVolumes(OntapTestBase):
                         label, seeded_igroup, exc
                     )
 
+    def _test_iscsi_endpoint(self, host_ip=None):
+        """Return a reachable data LIF and target IQN for the suite SVM."""
+        lifs = self.ontap.get_iscsi_data_lifs(self.svm_name)
+        target = self.ontap.get_iscsi_target_iqn(self.svm_name)
+        if not lifs or not target:
+            self.skipTest(
+                "SVM '%s' has no iSCSI data LIF or target IQN" % self.svm_name
+            )
+        if host_ip:
+            for lif in lifs:
+                quoted_lif = lif.replace("'", "'\"'\"'")
+                reachable = self._kvm_run(
+                    host_ip,
+                    "timeout 3 bash -c "
+                    "'exec 3<>/dev/tcp/%s/3260' >/dev/null 2>&1 "
+                    "&& echo OPEN || true" % quoted_lif
+                )
+                if any(line.strip() == "OPEN" for line in reachable):
+                    return lif, target
+            self.skipTest(
+                "No iSCSI data LIF for SVM '%s' is reachable from %s"
+                % (self.svm_name, host_ip)
+            )
+        return lifs[0], target
+
+    def _iscsi_session_lines(self, host_ip, target):
+        quoted = target.replace("'", "'\"'\"'")
+        return self._kvm_run(
+            host_ip,
+            "iscsiadm -m session 2>/dev/null | grep -F '%s' || true" % quoted
+        )
+
+    def _login_test_iscsi_session(self, host_ip, portal, target):
+        """Log in only this target. Skip when the target is already in use."""
+        if self._iscsi_session_lines(host_ip, target):
+            self.skipTest(
+                "iSCSI target '%s' is already logged in on %s; logging it "
+                "out would drop other LUNs" % (target, host_ip)
+            )
+        portal_port = "%s:3260" % portal
+        quoted_target = target.replace("'", "'\"'\"'")
+        quoted_portal = portal_port.replace("'", "'\"'\"'")
+        self._kvm_run(
+            host_ip,
+            "iscsiadm -m node -T '%s' -p '%s' -o new >/dev/null 2>&1 || true; "
+            "timeout 30 iscsiadm -m node -T '%s' -p '%s' "
+            "--login >/dev/null 2>&1 || true"
+            % (quoted_target, quoted_portal, quoted_target, quoted_portal)
+        )
+        if not self._iscsi_session_lines(host_ip, target):
+            self.skipTest(
+                "Could not log in test iSCSI target '%s' on %s"
+                % (target, host_ip)
+            )
+
+    def _logout_test_iscsi_session(self, host_ip, portal, target):
+        portal_port = "%s:3260" % portal
+        quoted_target = target.replace("'", "'\"'\"'")
+        quoted_portal = portal_port.replace("'", "'\"'\"'")
+        self._kvm_run(
+            host_ip,
+            "iscsiadm -m node -T '%s' -p '%s' --logout >/dev/null 2>&1 || true"
+            % (quoted_target, quoted_portal)
+        )
+
+    def _map_isolated_lun(self, pool, label):
+        """Map the isolated pool's LUN and return path, igroup and LUN id."""
+        luns = self.ontap.list_luns_in_volume(self.svm_name, pool.name)
+        self.assertTrue(luns, "[%s] no LUN found in '%s'" % (label, pool.name))
+        lun_path = luns[0].get("name")
+        specs = self._host_igroup_specs()
+        self.assertTrue(specs, "[%s] no host IQN is available" % label)
+        igroup_name, initiator = specs[0]
+        seeded = None
+        if self.ontap.get_igroup(self.svm_name, igroup_name) is None:
+            self.ontap.create_igroup(self.svm_name, igroup_name, initiator)
+            seeded = igroup_name
+        self.ontap.create_lun_map(self.svm_name, lun_path, igroup_name)
+        maps = self.ontap.list_lun_maps_for_volume(self.svm_name, pool.name)
+        self.assertTrue(maps, "[%s] LUN map was not created" % label)
+        lun_id = maps[0].get("logical_unit_number")
+        return lun_path, igroup_name, lun_id, seeded
+
     # ------------------------------------------------------------------
-    # Step 11 — Cancel maintenance once the CS volume has been deleted
+    # Step 11 — Test iSCSI session logged out on one host
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_with_volumes"], required_hardware=True)
-    def test_11_cancel_maintenance_after_volume_deleted(self):
+    def test_11_iscsi_session_logged_out(self):
         """
-        Cancel maintenance on a pool whose CloudStack volume has been deleted.
-
-        Complements test_05, which cancels maintenance with the volume still
-        present.  On iSCSI the volume can be deleted while the pool sits in
-        Maintenance, so that is the order used here.  Verifies:
-          - the LUN is removed when the volume is deleted
-          - the pool returns to Up
-          - the ONTAP FlexVol is still online
+        Log out only the isolated test target on one KVM host, then enter
+        maintenance.  The session is restored before the pool is deleted.
         """
-        label = "cancel-maintenance-no-volume"
+        label = "iscsi-session-logout"
+        host_ip = self._kvm_host_ip()
+        portal, target = self._test_iscsi_endpoint(host_ip)
         pool, vol = self._create_isolated_pool_with_volume(label)
+        seeded = None
+        logged_in = False
         try:
-            self._enter_maintenance(pool)
+            _, _, _, seeded = self._map_isolated_lun(pool, label)
+            self._login_test_iscsi_session(host_ip, portal, target)
+            logged_in = True
+            self._logout_test_iscsi_session(host_ip, portal, target)
+            logged_in = False
+            self.assertFalse(
+                self._iscsi_session_lines(host_ip, target),
+                "[%s] test iSCSI session still present after logout" % label
+            )
 
-            del_cmd = deleteVolumeAPI.deleteVolumeCmd()
-            del_cmd.id = vol.id
-            self.apiClient.deleteVolume(del_cmd)
+            self._enter_maintenance(pool.id)
+            self.assertTrue(
+                self._volume_exists_in_cs(vol.id),
+                "[%s] volume disappeared after maintenance" % label
+            )
+            self._assert_lun_exists(pool.name, label)
+        finally:
+            if logged_in:
+                try:
+                    self._logout_test_iscsi_session(host_ip, portal, target)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not log out test session: %s", label, exc
+                    )
+            self._cleanup_isolated_pool(pool, label)
+            if seeded:
+                try:
+                    self.ontap.delete_igroup(self.svm_name, seeded)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not delete seeded igroup: %s", label, exc
+                    )
+
+    # ------------------------------------------------------------------
+    # Step 12 — Volume delete while the test session already exists
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_12_delete_volume_with_existing_iscsi_session(self):
+        """
+        Use the existing target session while CloudStack deletes the volume.
+        Delete must still remove the LUN and must not create another session.
+        """
+        label = "iscsi-session-exists"
+        host_ip = self._kvm_host_ip()
+        portal, target = self._test_iscsi_endpoint(host_ip)
+        existing_sessions = self._iscsi_session_lines(host_ip, target)
+        created_session = False
+        if not existing_sessions:
+            self._login_test_iscsi_session(host_ip, portal, target)
+            created_session = True
+            existing_sessions = self._iscsi_session_lines(host_ip, target)
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        seeded = None
+        try:
+            _, _, _, seeded = self._map_isolated_lun(pool, label)
+            before = len(existing_sessions)
+
+            cmd = deleteVolumeAPI.deleteVolumeCmd()
+            cmd.id = vol.id
+            self.apiClient.deleteVolume(cmd)
+            self.__class__.volume2 = None
             self.assertFalse(
                 self._volume_exists_in_cs(vol.id),
-                "[%s] CS volume %s should be gone before cancel maintenance"
-                % (label, vol.id)
-            )
-            self.__class__.volume2 = None
-            vol = None
-
-            luns_after = self.ontap.list_luns_in_volume(self.svm_name, pool.name)
-            self.assertEqual(
-                len(luns_after), 0,
-                "[%s] expected 0 LUNs in FlexVol '%s' after volume deletion, "
-                "found %d: %s" % (label, pool.name, len(luns_after), luns_after)
-            )
-
-            cancel_cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-            cancel_cmd.id = pool.id
-            self.apiClient.cancelStorageMaintenance(cancel_cmd)
-
-            result = self._poll_pool_state(pool.id, "Up", timeout=120)
-            self.assertEqual(
-                result.state, "Up",
-                "[%s] pool should be 'Up' after cancel maintenance, got '%s'"
-                % (label, result.state)
-            )
-
-            ontap_vol = self.ontap.get_volume(pool.name)
-            self.assertIsNotNone(
-                ontap_vol,
-                "[%s] ONTAP FlexVol '%s' disappeared after cancel maintenance"
-                % (label, pool.name)
+                "[%s] volume remained after deleteVolume" % label
             )
             self.assertEqual(
-                ontap_vol.get("state"), "online",
-                "[%s] ONTAP FlexVol should be 'online' after cancel "
-                "maintenance, got '%s'" % (label, ontap_vol.get("state"))
+                self.ontap.list_luns_in_volume(self.svm_name, pool.name),
+                [],
+                "[%s] LUN remained after deleteVolume" % label
+            )
+            after = len(self._iscsi_session_lines(host_ip, target))
+            self.assertLessEqual(
+                after, before,
+                "[%s] deleteVolume created an extra iSCSI session" % label
             )
         finally:
-            self._purge_cs_volume_record(vol, label)
             self._cleanup_isolated_pool(pool, label)
+            if seeded:
+                try:
+                    self.ontap.delete_igroup(self.svm_name, seeded)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not delete seeded igroup: %s", label, exc
+                    )
+            if created_session:
+                try:
+                    self._logout_test_iscsi_session(host_ip, portal, target)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not log out test session: %s", label, exc
+                    )
+
+    # ------------------------------------------------------------------
+    # Step 13 — Regular file planted at the test LUN by-path
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_with_volumes"], required_hardware=True)
+    def test_13_corrupt_iscsi_by_path(self):
+        """
+        Replace only the isolated LUN's by-path symlink with a regular file.
+        Deleting the unattached volume must still remove the ONTAP LUN and
+        must leave that regular file in place.
+        """
+        label = "iscsi-by-path-file"
+        host_ip = self._kvm_host_ip()
+        portal, target = self._test_iscsi_endpoint(host_ip)
+        existing_sessions = self._iscsi_session_lines(host_ip, target)
+        created_session = False
+        if not existing_sessions:
+            self._login_test_iscsi_session(host_ip, portal, target)
+            created_session = True
+            existing_sessions = self._iscsi_session_lines(host_ip, target)
+        portal_field = existing_sessions[0].split()[2]
+        portal = portal_field.rsplit(":3260,", 1)[0]
+        if portal == portal_field:
+            self.skipTest(
+                "[%s] could not parse portal from session: %s"
+                % (label, existing_sessions[0])
+            )
+        pool, vol = self._create_isolated_pool_with_volume(label)
+        seeded = None
+        by_path = None
+        try:
+            _, _, lun_id, seeded = self._map_isolated_lun(pool, label)
+            if lun_id is None:
+                self.skipTest("[%s] ONTAP did not report a LUN number" % label)
+            by_path = (
+                "/dev/disk/by-path/ip-%s:3260-iscsi-%s-lun-%s"
+                % (portal, target, lun_id)
+            )
+            quoted = by_path.replace("'", "'\"'\"'")
+            quoted_target = target.replace("'", "'\"'\"'")
+            quoted_portal = ("%s:3260" % portal).replace("'", "'\"'\"'")
+            self._kvm_run(
+                host_ip,
+                "iscsiadm -m node -T '%s' -p '%s' --rescan"
+                % (quoted_target, quoted_portal)
+            )
+            self.assertTrue(
+                self._kvm_run(
+                    host_ip,
+                    "if [ -L '%s' ]; then echo SYMLINK; fi" % quoted
+                ),
+                "[%s] expected iSCSI by-path symlink was not found at %s"
+                % (label, by_path)
+            )
+            planted = self._kvm_run(
+                host_ip,
+                "if [ -L '%s' ]; then mv '%s' '%s.bak'; fi; "
+                "rm -f '%s'; : > '%s'; "
+                "if [ -f '%s' ] && [ ! -L '%s' ]; then echo FILE; fi"
+                % (quoted, quoted, quoted, quoted, quoted, quoted, quoted)
+            )
+            self.assertTrue(
+                any(line.strip() == "FILE" for line in planted),
+                "[%s] could not plant a regular file at %s" % (label, by_path)
+            )
+
+            cmd = deleteVolumeAPI.deleteVolumeCmd()
+            cmd.id = vol.id
+            self.apiClient.deleteVolume(cmd)
+            self.__class__.volume2 = None
+            self.assertEqual(
+                self.ontap.list_luns_in_volume(self.svm_name, pool.name),
+                [],
+                "[%s] LUN remained after deleteVolume" % label
+            )
+            still_file = self._kvm_run(
+                host_ip,
+                "if [ -f '%s' ] && [ ! -L '%s' ]; then echo FILE; fi"
+                % (quoted, quoted)
+            )
+            self.assertTrue(
+                any(line.strip() == "FILE" for line in still_file),
+                "[%s] CloudStack replaced the planted file at %s"
+                % (label, by_path)
+            )
+        finally:
+            if by_path:
+                quoted = by_path.replace("'", "'\"'\"'")
+                try:
+                    self._kvm_run(
+                        host_ip,
+                        "rm -f '%s' '%s.bak'" % (quoted, quoted)
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not clean up %s: %s", label, by_path, exc
+                    )
+            self._cleanup_isolated_pool(pool, label)
+            if seeded:
+                try:
+                    self.ontap.delete_igroup(self.svm_name, seeded)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not delete seeded igroup: %s", label, exc
+                    )
+            if created_session:
+                try:
+                    self._logout_test_iscsi_session(host_ip, portal, target)
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not log out test session: %s", label, exc
+                    )
