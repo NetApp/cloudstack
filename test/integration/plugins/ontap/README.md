@@ -43,7 +43,7 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (97 tests)
+├── TEST_CASES.md                 # Full test case reference table (93 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -342,14 +342,14 @@ another ONTAP pool is present.
 | Suite | File | Tests | What it covers |
 |-------|------|-------|---------------|
 | NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/export policy |
-| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 10 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy and cancel-maintenance after CS volume deletion |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/export policy deletes |
+| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/igroups |
-| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 11 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and cancel-maintenance after CS volume deletion |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 8 | Zone lifecycle plus duplicate-name/aggregate-space create rejects and pre-deleted FlexVol/igroup deletes |
+| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |

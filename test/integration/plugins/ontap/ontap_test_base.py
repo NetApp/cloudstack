@@ -42,6 +42,7 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    destroyVolume as destroyVolumeAPI,
     enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
     listVirtualMachines as listVirtualMachinesAPI,
@@ -49,6 +50,7 @@ from marvin.cloudstackAPI import (
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
+from marvin.cloudstackException import CloudstackAPIException
 from marvin.cloudstackTestCase import cloudstackTestCase
 from marvin.jsonHelper import jsonDump
 from marvin.lib.base import Account, DiskOffering
@@ -469,6 +471,29 @@ class OntapRestClient:
         return [r.get("ip", {}).get("address")
                 for r in records if r.get("ip", {}).get("address")]
 
+    def get_iscsi_data_lifs(self, svm_name):
+        """Return iSCSI data LIF addresses for the given SVM."""
+        data = self._get(
+            "/network/ip/interfaces",
+            params={"svm.name": svm_name, "services": "data-iscsi",
+                    "fields": "ip,name"}
+        )
+        return [r.get("ip", {}).get("address")
+                for r in data.get("records", [])
+                if r.get("ip", {}).get("address")]
+
+    def get_iscsi_target_iqn(self, svm_name):
+        """Return the SVM iSCSI target IQN, or None when the service is absent."""
+        data = self._get(
+            "/protocols/san/iscsi/services",
+            params={"svm.name": svm_name, "fields": "target",
+                    "max_records": 1}
+        )
+        records = data.get("records", [])
+        if not records:
+            return None
+        return (records[0].get("target") or {}).get("name")
+
     # -- iSCSI helpers -------------------------------------------------------
 
     def get_igroup(self, svm_name, igroup_name):
@@ -501,7 +526,8 @@ class OntapRestClient:
         prefix = "/vol/%s/" % vol_name
         data = self._get("/protocols/san/lun-maps",
                          params={"svm.name": svm_name,
-                                 "fields": "lun.name,lun.uuid,igroup.name,igroup.uuid"})
+                                 "fields": "lun.name,lun.uuid,igroup.name,"
+                                           "igroup.uuid,logical_unit_number"})
         return [r for r in data.get("records", [])
                 if r.get("lun", {}).get("name", "").startswith(prefix)]
 
@@ -995,6 +1021,42 @@ class OntapTestBase(cloudstackTestCase):
             % (pool_id, target_state, timeout, current_state)
         )
 
+    def _enter_maintenance(self, pool_id, timeout=120):
+        """Put a pool into Maintenance and wait for CloudStack to report it."""
+        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
+        cmd.id = pool_id
+        self.apiClient.enableStorageMaintenance(cmd)
+        return self._poll_pool_state(pool_id, "Maintenance", timeout=timeout)
+
+    def _exit_maintenance(self, pool_id, timeout=120):
+        """Cancel Maintenance on a pool and wait for CloudStack to report Up."""
+        cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
+        cmd.id = pool_id
+        self.apiClient.cancelStorageMaintenance(cmd)
+        return self._poll_pool_state(pool_id, "Up", timeout=timeout)
+
+    def _exit_maintenance_quietly(self, pool, label):
+        """Bring a pool out of Maintenance without failing the test.
+
+        Returns True when the pool is no longer in Maintenance, False when
+        it is not listed or the cancel did not take effect.
+        """
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except CloudstackAPIException:
+            return False
+        if not listed:
+            return False
+        if listed[0].state != "Maintenance":
+            return True
+        try:
+            self._exit_maintenance(pool.id)
+            return True
+        except Exception as exc:
+            logger.warning("[%s] could not cancel maintenance on '%s': %s",
+                           label, pool.name, exc)
+            return False
+
     @classmethod
     def host_iqn(cls, host):
         """The iSCSI initiator IQN for a cluster host, or None."""
@@ -1024,6 +1086,26 @@ class OntapTestBase(cloudstackTestCase):
                 logger.warning("host_iqn: SSH to %s failed: %s", host_ip, ex)
         cls._host_iqn_cache[host_ip] = iqn
         return iqn
+
+    def _kvm_host_ip(self):
+        """Return one KVM host that this suite can reach over SSH."""
+        if not self.kvm_hosts_ssh_creds:
+            self.skipTest("KVM SSH credentials are not configured")
+        return self.kvm_hosts_ssh_creds[0]["host"]
+
+    def _kvm_run(self, host_ip, command):
+        """Run one command on a KVM host and return its output lines."""
+        creds = next(
+            (c for c in self.kvm_hosts_ssh_creds if c["host"] == host_ip),
+            None
+        )
+        if creds is None:
+            self.skipTest("No SSH credentials for KVM host %s" % host_ip)
+        ssh = SshClient(
+            host_ip, 22, creds["user"], creds["password"],
+            retries=3, delay=3, timeout=20.0
+        )
+        return ssh.execute(command) or []
 
     @classmethod
     def _igroup_name(cls, host_uuid):
@@ -1098,6 +1180,76 @@ class OntapTestBase(cloudstackTestCase):
         cmd.listall = True
         vols = self.apiClient.listVolumes(cmd) or []
         return vols[0] if vols else None
+
+    def _volume_exists_in_cs(self, vol_id):
+        """Return True if the volume is still listed by CloudStack."""
+        return self._get_cs_volume(vol_id) is not None
+
+    def _purge_cs_volume_record(self, vol, label):
+        """Remove a CS volume record the forced pool delete may have left.
+
+        The backing storage is already gone at this point, so a failure here
+        only affects tidiness — the volume stays in the volume2 slot for
+        tearDownClass to retry and no exception is raised.
+        """
+        if vol is None:
+            return
+        if self._volume_exists_in_cs(vol.id):
+            try:
+                cmd = deleteVolumeAPI.deleteVolumeCmd()
+                cmd.id = vol.id
+                self.apiClient.deleteVolume(cmd)
+                logger.info("[%s] deleted leftover CS volume record %s",
+                            label, vol.id)
+            except Exception as exc:
+                logger.warning("[%s] could not delete leftover CS volume %s: %s",
+                               label, vol.id, exc)
+        else:
+            logger.info("[%s] CS volume %s was removed along with the pool",
+                        label, vol.id)
+        if not self._volume_exists_in_cs(vol.id):
+            self.__class__.volume2 = None
+
+    def _remove_cs_volume(self, pool, vol, label):
+        """Clear the CloudStack volume so the pool can be force-deleted.
+
+        deleteStoragePool(forced=True) refuses while any volume on the pool is
+        in a state other than Destroy.  deleteVolume is tried first because it
+        also reclaims the backing storage, but it expunges through libvirt and
+        fails when the FlexVol is already gone.  destroyVolume(expunge=False)
+        is the fallback: it only moves the record to Destroy, which is all the
+        forced pool delete requires - it expunges the leftovers itself.
+
+        Returns True once the volume no longer blocks the forced pool delete.
+        """
+        if vol is None or not self._volume_exists_in_cs(vol.id):
+            self.__class__.volume2 = None
+            return True
+        self._exit_maintenance_quietly(pool, label)
+        try:
+            cmd = deleteVolumeAPI.deleteVolumeCmd()
+            cmd.id = vol.id
+            self.apiClient.deleteVolume(cmd)
+        except Exception as exc:
+            logger.warning("[%s] deleteVolume failed for %s (%s); falling back "
+                           "to destroyVolume without expunge",
+                           label, vol.id, exc)
+            try:
+                cmd = destroyVolumeAPI.destroyVolumeCmd()
+                cmd.id = vol.id
+                cmd.expunge = False
+                self.apiClient.destroyVolume(cmd)
+            except Exception as destroy_exc:
+                logger.warning("[%s] destroyVolume also failed for %s: %s",
+                               label, vol.id, destroy_exc)
+        remaining = self._get_cs_volume(vol.id)
+        if remaining is None:
+            self.__class__.volume2 = None
+            return True
+        state = getattr(remaining, "state", None)
+        return state is None or state.lower() in (
+            "destroy", "destroyed", "expunging", "expunged"
+        )
 
     def _other_ontap_pools_on_svm(self, current_pool_id):
         """Return other CloudStack ONTAP pools that use this suite's SVM."""
