@@ -27,52 +27,30 @@ import static org.mockito.MockitoAnnotations.initMocks;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.DataObject;
-import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
-import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStore;
-import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreDriver;
-import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
 import org.apache.cloudstack.engine.subsystem.api.storage.StrategyPriority;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeDataFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeService;
-import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
-import org.apache.cloudstack.storage.command.CopyCmdAnswer;
-import org.apache.cloudstack.storage.command.CopyCommand;
 import org.apache.cloudstack.storage.datastore.PrimaryDataStoreImpl;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.image.store.ImageStoreImpl;
-import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.volume.VolumeObject;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnitRunner;
 
-import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.MigrateCommand;
-import com.cloud.agent.api.ModifyTargetsAnswer;
-import com.cloud.agent.api.ModifyTargetsCommand;
-import com.cloud.agent.api.storage.MigrateVolumeAnswer;
-import com.cloud.agent.api.storage.MigrateVolumeCommand;
-import com.cloud.agent.api.to.DiskTO;
-import com.cloud.agent.api.to.VirtualMachineTO;
-import com.cloud.host.Host;
 import com.cloud.host.HostVO;
-import com.cloud.host.dao.HostDao;
-import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.ImageStore;
 import com.cloud.storage.ScopeType;
@@ -80,10 +58,6 @@ import com.cloud.storage.Storage;
 import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.exception.CloudRuntimeException;
-import com.cloud.vm.VirtualMachine;
 import java.util.AbstractMap;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -107,21 +81,6 @@ public class StorageSystemDataMotionStrategyTest {
     private ImageStore destinationStore;
     @Mock
     private PrimaryDataStoreDao primaryDataStoreDao;
-    @Mock
-    private VolumeDao volumeDao;
-    @Mock
-    private VolumeDetailsDao volumeDetailsDao;
-    @Mock
-    // The strategy holds two VolumeDataFactory fields, so the mock has to carry the name of the one under test.
-    private VolumeDataFactory _volumeDataFactory;
-    @Mock
-    private VolumeService volumeService;
-    @Mock
-    private DataStoreManager dataStoreManager;
-    @Mock
-    private AgentManager agentManager;
-    @Mock
-    private HostDao hostDao;
 
     @Mock
     StoragePoolVO sourceStoragePoolVoMock, destinationStoragePoolVoMock;
@@ -175,6 +134,48 @@ public class StorageSystemDataMotionStrategyTest {
         configureAndTestInternalCanHandle(false, false, StrategyPriority.CANT_HANDLE);
     }
 
+    @Test
+    public void canHandleDeclinesMigratingVolumeOnOntapPrimary() {
+        PrimaryDataStore srcStore = mock(PrimaryDataStoreImpl.class);
+        PrimaryDataStore destStore = mock(PrimaryDataStoreImpl.class);
+        VolumeObject srcVolume = mock(VolumeObject.class);
+        VolumeObject destVolume = mock(VolumeObject.class);
+        doReturn(Volume.State.Migrating).when(srcVolume).getState();
+        doReturn(srcStore).when(srcVolume).getDataStore();
+        doReturn(destStore).when(destVolume).getDataStore();
+        doReturn(DataStoreRole.Primary).when(srcStore).getRole();
+        doReturn(DataStoreRole.Primary).when(destStore).getRole();
+        doReturn(1L).when(srcStore).getId();
+        doReturn(2L).when(destStore).getId();
+        StoragePoolVO srcPool = Mockito.spy(new StoragePoolVO());
+        StoragePoolVO destPool = Mockito.spy(new StoragePoolVO());
+        lenient().doReturn(true).when(srcPool).isManaged();
+        doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
+        doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
+        doReturn(destPool).when(primaryDataStoreDao).findById(2L);
+
+        Assert.assertEquals(StrategyPriority.CANT_HANDLE, strategy.canHandle(srcVolume, destVolume));
+    }
+
+    @Test
+    public void internalCanHandleDeclinesMapWithOntapPool() {
+        VolumeObject volumeInfo = Mockito.spy(new VolumeObject());
+        Mockito.doReturn(0L).when(volumeInfo).getPoolId();
+        DataStore ds = Mockito.spy(new PrimaryDataStoreImpl());
+        Mockito.doReturn(1L).when(ds).getId();
+        Map<VolumeInfo, DataStore> volumeMap = new HashMap<>();
+        volumeMap.put(volumeInfo, ds);
+        StoragePoolVO srcPool = Mockito.spy(new StoragePoolVO());
+        lenient().doReturn(true).when(srcPool).isManaged();
+        StoragePoolVO destPool = Mockito.spy(new StoragePoolVO());
+        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
+        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(0L);
+        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(1L);
+
+        Assert.assertEquals(StrategyPriority.CANT_HANDLE,
+                strategy.internalCanHandle(volumeMap, new HostVO("srcHostUuid"), new HostVO("destHostUuid")));
+    }
+
     private void configureAndTestInternalCanHandle(boolean sPool0IsManaged, boolean sPool1IsManaged, StrategyPriority expectedStrategyPriority) {
         VolumeObject volumeInfo = Mockito.spy(new VolumeObject());
         Mockito.doReturn(0l).when(volumeInfo).getPoolId();
@@ -196,298 +197,6 @@ public class StorageSystemDataMotionStrategyTest {
         StrategyPriority strategyPriority = strategy.internalCanHandle(volumeMap, new HostVO("srcHostUuid"), new HostVO("destHostUuid"));
 
         Assert.assertEquals(expectedStrategyPriority, strategyPriority);
-    }
-
-    @Test
-    public void supportedOntapMigrationPoolPairRequiresSameSvmAndProtocol() {
-        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
-        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
-        Mockito.doReturn(1L).when(srcPool).getId();
-        Mockito.doReturn(2L).when(destPool).getId();
-        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(srcPool).getPoolType();
-        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(destPool).getPoolType();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(srcPool).getStorageProviderName();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(1L);
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
-
-        Assert.assertTrue(strategy.isSupportedOntapMigrationPoolPair(srcPool, destPool));
-
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm2", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
-        Assert.assertFalse(strategy.isSupportedOntapMigrationPoolPair(srcPool, destPool));
-
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.2", "svmName", "svm1", "protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
-        Assert.assertFalse(strategy.isSupportedOntapMigrationPoolPair(srcPool, destPool));
-
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmUUID", "svm-uuid", "svmName", "old-name", "protocol", "NFS3"))
-                .when(primaryDataStoreDao).getDetails(1L);
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmUUID", "svm-uuid", "svmName", "new-name", "protocol", "NFS3"))
-                .when(primaryDataStoreDao).getDetails(2L);
-        Assert.assertTrue(strategy.isSupportedOntapMigrationPoolPair(srcPool, destPool));
-    }
-
-    @Test
-    public void verifyLiveMigrationAllowsOntapPoolsOnSameSvmAndProtocol() {
-        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
-        DataStore destStore = Mockito.mock(DataStore.class);
-        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
-        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
-        Mockito.doReturn(1L).when(srcVolume).getPoolId();
-        Mockito.doReturn(2L).when(destStore).getId();
-        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
-        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
-        Mockito.doReturn(1L).when(srcPool).getId();
-        Mockito.doReturn(2L).when(destPool).getId();
-        Mockito.doReturn(StoragePoolType.OntapiSCSI).when(srcPool).getPoolType();
-        Mockito.doReturn(StoragePoolType.OntapiSCSI).when(destPool).getPoolType();
-        Mockito.doReturn(true).when(srcPool).isManaged();
-        Mockito.doReturn(true).when(destPool).isManaged();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(srcPool).getStorageProviderName();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(1L);
-        Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(2L);
-
-        strategy.verifyLiveMigrationForKVM(Map.of(srcVolume, destStore));
-    }
-
-    @Test
-    public void offlineMigrationBetweenSupportedOntapPoolsUsesCopyCommand() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm1", null);
-        VolumeObjectTO copiedVolume = new VolumeObjectTO();
-        copiedVolume.setPath("copied-volume-path");
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class)))
-                .thenReturn(new CopyCmdAnswer(copiedVolume));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-        Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
-    }
-
-    @Test
-    public void offlineMigrationFromNonOntapPoolUsesMigrateVolumeCommand() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(false, "NFS3", "svm1", null);
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
-                .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
-        Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-    }
-
-    @Test
-    // Fallback only. Same-SVM iSCSI is intercepted by OntapPrimaryDatastoreDriver.canCopy before this strategy runs.
-    public void offlineMigrationBetweenSupportedOntapIscsiPoolsUsesMigrateVolumeCommand() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "ISCSI", "svm1", null,
-                StoragePoolType.OntapiSCSI, StoragePoolType.OntapiSCSI);
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
-                .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
-        Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-    }
-
-    @Test
-    public void offlineIscsiMigrationReadsSourceIqnAfterGrantAccess() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "ISCSI", "svm1", null,
-                StoragePoolType.OntapiSCSI, StoragePoolType.OntapiSCSI);
-        VolumeVO srcVolumeVO = volumeDao.findById(10L);
-        AtomicBoolean srcGranted = new AtomicBoolean(false);
-        Mockito.doAnswer(invocation -> srcGranted.get() ? "/iqn/2" : "/iqn/0").when(srcVolumeVO).get_iScsiName();
-        Mockito.doAnswer(invocation -> {
-            srcGranted.set(true);
-            return true;
-        }).when(volumeService).grantAccess(Mockito.eq(context.srcVolume), Mockito.any(), Mockito.any());
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
-                .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        ArgumentCaptor<MigrateVolumeCommand> commandCaptor = ArgumentCaptor.forClass(MigrateVolumeCommand.class);
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), commandCaptor.capture());
-        Assert.assertEquals("/iqn/2", commandCaptor.getValue().getSrcDetails().get(DiskTO.IQN));
-    }
-
-    @Test(expected = CloudRuntimeException.class)
-    public void offlineMigrationBetweenOntapPoolsWithDifferentProtocolIsRejected() {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "ISCSI", "svm1", null);
-        try {
-            strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-        } finally {
-            Mockito.verify(context.callback).complete(Mockito.argThat(result ->
-                    result != null && result.isFailed()
-                            && result.getResult() != null
-                            && result.getResult().contains("Cross-protocol")));
-            Mockito.verify(context.destVolume.getDataStore().getDriver(), Mockito.never())
-                    .createAsync(Mockito.any(), Mockito.any(), Mockito.any());
-        }
-    }
-
-    @Test(expected = CloudRuntimeException.class)
-    public void offlineMigrationFromOntapIscsiToNfsIsRejected() {
-        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
-        VolumeInfo destVolume = Mockito.mock(VolumeInfo.class);
-        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
-        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
-        Mockito.doReturn(1L).when(srcVolume).getPoolId();
-        Mockito.doReturn(2L).when(destVolume).getPoolId();
-        Mockito.doReturn(1L).when(srcPool).getId();
-        Mockito.doReturn(2L).when(destPool).getId();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(srcPool).getStorageProviderName();
-        Mockito.doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
-        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
-        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
-        Mockito.doReturn(Map.of("protocol", "ISCSI")).when(primaryDataStoreDao).getDetails(1L);
-        Mockito.doReturn(Map.of("protocol", "NFS3")).when(primaryDataStoreDao).getDetails(2L);
-
-        strategy.checkUnsupportedOntapCrossProtocolMigration(srcVolume, destVolume);
-    }
-
-    @Test
-    public void offlineMigrationBetweenOntapPoolsWithDifferentSvmUsesMigrateVolumeCommand() throws Exception {
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm2", null);
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class)))
-                .thenReturn(new MigrateVolumeAnswer(null, true, null, "migrated-volume-path"));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(MigrateVolumeCommand.class));
-        Mockito.verify(agentManager, Mockito.never()).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-    }
-
-    @Test
-    public void offlineMigrationAttachedToStoppedVmUsesCopyCommand() throws Exception {
-        VirtualMachine vm = Mockito.mock(VirtualMachine.class);
-        Mockito.doReturn(VirtualMachine.State.Stopped).when(vm).getState();
-        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm1", vm);
-        VolumeObjectTO copiedVolume = new VolumeObjectTO();
-        copiedVolume.setPath("copied-volume-path");
-        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class)))
-                .thenReturn(new CopyCmdAnswer(copiedVolume));
-
-        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
-
-        Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
-    }
-
-    @Test(expected = CloudRuntimeException.class)
-    public void offlineMigrationRejectsRunningVm() {
-        VirtualMachine vm = Mockito.mock(VirtualMachine.class);
-        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
-        VolumeInfo destVolume = Mockito.mock(VolumeInfo.class);
-        PrimaryDataStore srcStore = Mockito.mock(PrimaryDataStore.class);
-        PrimaryDataStore destStore = Mockito.mock(PrimaryDataStore.class);
-        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
-        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
-        Mockito.doReturn(VirtualMachine.State.Running).when(vm).getState();
-        Mockito.doReturn(Volume.State.Migrating).when(srcVolume).getState();
-        Mockito.doReturn(HypervisorType.KVM).when(srcVolume).getHypervisorType();
-        Mockito.doReturn(vm).when(srcVolume).getAttachedVM();
-        Mockito.doReturn(srcStore).when(srcVolume).getDataStore();
-        Mockito.doReturn(destStore).when(destVolume).getDataStore();
-        Mockito.doReturn(DataStoreRole.Primary).when(srcStore).getRole();
-        Mockito.doReturn(DataStoreRole.Primary).when(destStore).getRole();
-        Mockito.doReturn(1L).when(srcStore).getId();
-        Mockito.doReturn(2L).when(destStore).getId();
-        Mockito.doReturn(true).when(srcPool).isManaged();
-        Mockito.doReturn(true).when(destPool).isManaged();
-        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
-        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
-
-        strategy.copyAsync(srcVolume, destVolume, (Host) null, Mockito.mock(AsyncCompletionCallback.class));
-    }
-
-    private OfflineMigrationTestContext configureOfflineMigration(boolean isSourceOntap, String destProtocol,
-            String destSvmName, VirtualMachine vm) {
-        return configureOfflineMigration(isSourceOntap, "NFS3", destProtocol, destSvmName, vm,
-                StoragePoolType.NetworkFilesystem, StoragePoolType.NetworkFilesystem);
-    }
-
-    private OfflineMigrationTestContext configureOfflineMigration(boolean isSourceOntap, String srcProtocol,
-            String destProtocol, String destSvmName, VirtualMachine vm, StoragePoolType srcPoolType,
-            StoragePoolType destPoolType) {
-        VolumeInfo srcVolume = Mockito.mock(VolumeInfo.class);
-        VolumeInfo destVolume = Mockito.mock(VolumeInfo.class);
-        PrimaryDataStore srcStore = Mockito.mock(PrimaryDataStore.class);
-        PrimaryDataStore destStore = Mockito.mock(PrimaryDataStore.class);
-        PrimaryDataStoreDriver destDriver = Mockito.mock(PrimaryDataStoreDriver.class);
-        Scope srcScope = Mockito.mock(Scope.class);
-        HostVO host = Mockito.mock(HostVO.class);
-        StoragePoolVO srcPool = Mockito.mock(StoragePoolVO.class);
-        StoragePoolVO destPool = Mockito.mock(StoragePoolVO.class);
-        VolumeVO srcVolumeVO = Mockito.mock(VolumeVO.class);
-        VolumeVO destVolumeVO = Mockito.mock(VolumeVO.class);
-        AsyncCompletionCallback<CopyCommandResult> callback = Mockito.mock(AsyncCompletionCallback.class);
-
-        Mockito.doReturn(3L).when(host).getId();
-        Mockito.doReturn(Volume.State.Migrating).when(srcVolume).getState();
-        Mockito.doReturn(HypervisorType.KVM).when(srcVolume).getHypervisorType();
-        Mockito.doReturn(vm).when(srcVolume).getAttachedVM();
-        Mockito.doReturn(10L).when(srcVolume).getId();
-        Mockito.doReturn(20L).when(destVolume).getId();
-        Mockito.doReturn(1L).when(srcVolume).getPoolId();
-        Mockito.doReturn(2L).when(destVolume).getPoolId();
-        Mockito.doReturn(srcStore).when(srcVolume).getDataStore();
-        Mockito.doReturn(destStore).when(destVolume).getDataStore();
-        Mockito.doReturn(new VolumeObjectTO()).when(srcVolume).getTO();
-        Mockito.doReturn(new VolumeObjectTO()).when(destVolume).getTO();
-
-        Mockito.doReturn(DataStoreRole.Primary).when(srcStore).getRole();
-        Mockito.doReturn(DataStoreRole.Primary).when(destStore).getRole();
-        Mockito.doReturn(1L).when(srcStore).getId();
-        Mockito.doReturn(2L).when(destStore).getId();
-        Mockito.doReturn("dest-store-uuid").when(destStore).getUuid();
-        Mockito.doReturn(destDriver).when(destStore).getDriver();
-        Mockito.doReturn(srcScope).when(srcStore).getScope();
-        Mockito.doReturn(ScopeType.HOST).when(srcScope).getScopeType();
-        Mockito.doReturn(host.getId()).when(srcScope).getScopeId();
-
-        Mockito.doReturn(isSourceOntap).when(srcPool).isManaged();
-        Mockito.doReturn(true).when(destPool).isManaged();
-        Mockito.doReturn(1L).when(srcPool).getId();
-        Mockito.doReturn(2L).when(destPool).getId();
-        Mockito.lenient().doReturn(srcPoolType).when(srcPool).getPoolType();
-        Mockito.lenient().doReturn(destPoolType).when(destPool).getPoolType();
-        Mockito.lenient().doReturn(isSourceOntap ? DataStoreProvider.ONTAP_PLUGIN_NAME : DataStoreProvider.DEFAULT_PRIMARY)
-                .when(srcPool).getStorageProviderName();
-        Mockito.lenient().doReturn(DataStoreProvider.ONTAP_PLUGIN_NAME).when(destPool).getStorageProviderName();
-        Mockito.lenient().doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", srcProtocol))
-                .when(primaryDataStoreDao).getDetails(1L);
-        Mockito.lenient().doReturn(Map.of("storageIP", "10.0.0.1", "svmName", destSvmName, "protocol", destProtocol))
-                .when(primaryDataStoreDao).getDetails(2L);
-        Mockito.doReturn(srcPool).when(primaryDataStoreDao).findById(1L);
-        Mockito.doReturn(destPool).when(primaryDataStoreDao).findById(2L);
-
-        if (isSourceOntap) {
-            Mockito.doReturn(srcPoolType).when(srcVolumeVO).getPoolType();
-            Mockito.doReturn(srcVolumeVO).when(volumeDao).findById(10L);
-        }
-        Mockito.doReturn(destPoolType).when(destVolumeVO).getPoolType();
-        Mockito.doReturn(Storage.ImageFormat.QCOW2).when(destVolumeVO).getFormat();
-        Mockito.doReturn(destVolumeVO).when(volumeDao).findById(20L);
-        Mockito.doReturn(destVolume).when(_volumeDataFactory).getVolume(20L, destStore);
-        Mockito.doReturn(destStore).when(dataStoreManager).getPrimaryDataStore("dest-store-uuid");
-        Mockito.doReturn(host).when(hostDao).findById(3L);
-
-        return new OfflineMigrationTestContext(srcVolume, destVolume, host, callback);
-    }
-
-    private static class OfflineMigrationTestContext {
-        private final VolumeInfo srcVolume;
-        private final VolumeInfo destVolume;
-        private final HostVO host;
-        private final AsyncCompletionCallback<CopyCommandResult> callback;
-
-        OfflineMigrationTestContext(VolumeInfo srcVolume, VolumeInfo destVolume, HostVO host,
-                AsyncCompletionCallback<CopyCommandResult> callback) {
-            this.srcVolume = srcVolume;
-            this.destVolume = destVolume;
-            this.host = host;
-            this.callback = callback;
-        }
     }
 
     @Test
@@ -520,65 +229,6 @@ public class StorageSystemDataMotionStrategyTest {
     }
 
     @Test
-    public void generateDestPathForNfsUsesVolumeUuid() {
-        VolumeObject destVolumeInfo = Mockito.spy(new VolumeObject());
-        StoragePoolVO destStoragePool = Mockito.mock(StoragePoolVO.class);
-        HostVO destHost = new HostVO("guid");
-        Mockito.doReturn(StoragePoolType.NetworkFilesystem).when(destStoragePool).getPoolType();
-        Mockito.doReturn("volume-uuid").when(destVolumeInfo).getUuid();
-        Mockito.doReturn(0L).when(destVolumeInfo).getPoolId();
-        Mockito.doReturn("expected").when(strategy).connectHostToVolume(destHost, 0L, "volume-uuid");
-
-        String result = strategy.generateDestPath(destHost, destStoragePool, destVolumeInfo);
-
-        Assert.assertEquals("expected", result);
-        Mockito.verify(strategy).connectHostToVolume(destHost, 0L, "volume-uuid");
-    }
-
-    @Test
-    public void disconnectSourceVolumeAfterMigrationDisconnectsSourceHost() {
-        VolumeInfo srcVolumeInfo = Mockito.mock(VolumeInfo.class);
-        HostVO srcHost = Mockito.mock(HostVO.class);
-        StoragePoolVO storagePool = Mockito.mock(StoragePoolVO.class);
-        ModifyTargetsAnswer answer = new ModifyTargetsAnswer();
-        answer.setConnectedPaths(List.of());
-
-        Mockito.doReturn(10L).when(srcVolumeInfo).getPoolId();
-        Mockito.doReturn("/iqn/0").when(srcVolumeInfo).get_iScsiName();
-        Mockito.doReturn(20L).when(srcHost).getId();
-        Mockito.doReturn(storagePool).when(primaryDataStoreDao).findById(10L);
-        Mockito.doReturn(StoragePoolType.OntapiSCSI).when(storagePool).getPoolType();
-        Mockito.doReturn("pool-uuid").when(storagePool).getUuid();
-        Mockito.doReturn("10.0.0.1").when(storagePool).getHostAddress();
-        Mockito.doReturn(3260).when(storagePool).getPort();
-        Mockito.doReturn(answer).when(agentManager).easySend(Mockito.anyLong(), Mockito.any(ModifyTargetsCommand.class));
-
-        strategy.disconnectSourceVolumeAfterMigration(srcVolumeInfo, srcHost);
-
-        Mockito.verify(agentManager).easySend(Mockito.eq(20L), Mockito.any(ModifyTargetsCommand.class));
-    }
-
-    @Test
-    public void prepareDiskWithDestinationVolumeUsesDestinationData() {
-        VirtualMachineTO vmTO = Mockito.mock(VirtualMachineTO.class);
-        DiskTO diskTO = Mockito.mock(DiskTO.class);
-        VolumeObjectTO srcVolumeTO = Mockito.mock(VolumeObjectTO.class);
-        VolumeObjectTO destVolumeTO = Mockito.mock(VolumeObjectTO.class);
-        VolumeInfo srcVolumeInfo = Mockito.mock(VolumeInfo.class);
-        VolumeInfo destVolumeInfo = Mockito.mock(VolumeInfo.class);
-
-        Mockito.doReturn(new DiskTO[] {diskTO}).when(vmTO).getDisks();
-        Mockito.doReturn(srcVolumeTO).when(diskTO).getData();
-        Mockito.doReturn(10L).when(srcVolumeTO).getId();
-        Mockito.doReturn(10L).when(srcVolumeInfo).getId();
-        Mockito.doReturn(destVolumeTO).when(destVolumeInfo).getTO();
-
-        strategy.prepareDiskWithDestinationVolume(vmTO, srcVolumeInfo, destVolumeInfo);
-
-        Mockito.verify(diskTO).setData(destVolumeTO);
-    }
-
-    @Test
     public void configureMigrateDiskInfoTest() {
         VolumeObject srcVolumeInfo = Mockito.spy(new VolumeObject());
         Mockito.doReturn("volume path").when(srcVolumeInfo).getPath();
@@ -604,16 +254,6 @@ public class StorageSystemDataMotionStrategyTest {
     }
 
     @Test
-    public void configureMigrateDiskInfoUsesConnectedSourcePath() {
-        VolumeObject srcVolumeInfo = Mockito.spy(new VolumeObject());
-        MigrateCommand.MigrateDiskInfo migrateDiskInfo = strategy.configureMigrateDiskInfo(
-                srcVolumeInfo, "destPath", null, "/dev/disk/by-path/source-lun-2");
-
-        Assert.assertEquals("/dev/disk/by-path/source-lun-2", migrateDiskInfo.getSerialNumber());
-        Assert.assertEquals("destPath", migrateDiskInfo.getSourceText());
-    }
-
-    @Test
     public void setVolumePathTest() {
         VolumeVO volume = new VolumeVO("name", 0l, 0l, 0l, 0l, 0l, "folder", "path", Storage.ProvisioningType.THIN, 0l, Volume.Type.ROOT);
         String volumePath = "iScsiName";
@@ -622,16 +262,6 @@ public class StorageSystemDataMotionStrategyTest {
         strategy.setVolumePath(volume);
 
         Assert.assertEquals(volumePath, volume.getPath());
-    }
-
-    @Test
-    public void setVolumePathPreservesNfsPathWithoutIscsiName() {
-        VolumeVO volume = new VolumeVO("name", 0L, 0L, 0L, 0L, 0L, "folder", "volume-uuid",
-                Storage.ProvisioningType.THIN, 0L, Volume.Type.ROOT);
-
-        strategy.setVolumePath(volume);
-
-        Assert.assertEquals("volume-uuid", volume.getPath());
     }
 
     @Test
@@ -968,6 +598,7 @@ public class StorageSystemDataMotionStrategyTest {
         Mockito.doReturn(0L).when(volumeInfo).getPoolId();
 
         DataStore ds = Mockito.spy(new PrimaryDataStoreImpl());
+        Mockito.lenient().doReturn(1L).when(ds).getId();
 
         Map<VolumeInfo, DataStore> volumeMap = new HashMap<>();
         volumeMap.put(volumeInfo, ds);
@@ -993,6 +624,7 @@ public class StorageSystemDataMotionStrategyTest {
         Mockito.doReturn(0L).when(volumeInfo).getPoolId();
 
         DataStore ds = Mockito.spy(new PrimaryDataStoreImpl());
+        Mockito.lenient().doReturn(1L).when(ds).getId();
 
         Map<VolumeInfo, DataStore> volumeMap = new HashMap<>();
         volumeMap.put(volumeInfo, ds);
@@ -1018,6 +650,7 @@ public class StorageSystemDataMotionStrategyTest {
         Mockito.doReturn(0L).when(volumeInfo).getPoolId();
 
         DataStore ds = Mockito.spy(new PrimaryDataStoreImpl());
+        Mockito.lenient().doReturn(1L).when(ds).getId();
 
         Map<VolumeInfo, DataStore> volumeMap = new HashMap<>();
         volumeMap.put(volumeInfo, ds);
@@ -1046,6 +679,7 @@ public class StorageSystemDataMotionStrategyTest {
         Mockito.doReturn(0L).when(volumeInfo).getPoolId();
 
         DataStore ds = Mockito.spy(new PrimaryDataStoreImpl());
+        Mockito.lenient().doReturn(1L).when(ds).getId();
 
         Map<VolumeInfo, DataStore> volumeMap = new HashMap<>();
         volumeMap.put(volumeInfo, ds);
