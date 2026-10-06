@@ -307,10 +307,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         return storageStrategy.createVolumeQosPolicy(policyName, minIops, maxIops);
     }
 
-    /**
-     * Empty/zero IOPS means no policy. Min greater than max is rejected.
-     * Min IOPS is AFF-only; older pools without {@code isAFF} are probed once and persisted.
-     */
     private boolean validateIops(StorageStrategy storageStrategy, Map<String, String> details,
                                  Long poolId, Long minIops, Long maxIops) {
         long min = minIops == null ? 0 : minIops;
@@ -324,9 +320,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (min > 0) {
             String isAff = details.get(OntapStorageConstants.IS_AFF);
             if (StringUtils.isBlank(isAff)) {
-                isAff = Boolean.toString(storageStrategy.isAff());
-                details.put(OntapStorageConstants.IS_AFF, isAff);
-                storagePoolDetailsDao.addDetail(poolId, OntapStorageConstants.IS_AFF, isAff, false);
+                try {
+                    isAff = Boolean.toString(storageStrategy.isAff());
+                    details.put(OntapStorageConstants.IS_AFF, isAff);
+                    storagePoolDetailsDao.addDetail(poolId, OntapStorageConstants.IS_AFF, isAff, false);
+                } catch (Exception e) {
+                    logger.error("Unable to determine whether storage pool [{}] is AFF or FAS: {}",
+                            poolId, e.getMessage());
+                    return true;
+                }
             }
             if (!Boolean.parseBoolean(isAff)) {
                 throw new CloudRuntimeException(
@@ -768,7 +770,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 if (qosPolicyDetail != null) {
                     volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-                    storageStrategy.deleteVolumeQosPolicy(qosPolicyDetail.getValue());
+                    deleteUnusedQosPolicy(storageStrategy, qosPolicyDetail.getValue());
                 }
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
                 removeTemporarySnapshotCopyRecord(volumeInfo.getId());
@@ -1079,17 +1081,28 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             try {
                 attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
                 persistQosPolicyDetails(volume.getId(), qosPolicy);
-                storageStrategy.deleteVolumeQosPolicy(previousUuid);
             } catch (RuntimeException e) {
-                storageStrategy.deleteVolumeQosPolicy(qosPolicy.getUuid());
+                deleteUnusedQosPolicy(storageStrategy, qosPolicy.getUuid());
                 throw e;
             }
+            deleteUnusedQosPolicy(storageStrategy, previousUuid);
             return;
         }
         if (previousUuid != null) {
             detachQosPolicy(storageStrategy, storagePool, details, volumeInfo);
             persistQosPolicyDetails(volume.getId(), null);
-            storageStrategy.deleteVolumeQosPolicy(previousUuid);
+            deleteUnusedQosPolicy(storageStrategy, previousUuid);
+        }
+    }
+
+    private void deleteUnusedQosPolicy(StorageStrategy storageStrategy, String policyUuid) {
+        if (policyUuid == null || policyUuid.isEmpty()) {
+            return;
+        }
+        try {
+            storageStrategy.deleteVolumeQosPolicy(policyUuid);
+        } catch (Exception e) {
+            logger.error("Unused QoS policy [{}] was not deleted: {}", policyUuid, e.getMessage());
         }
     }
 
