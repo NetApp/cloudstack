@@ -168,6 +168,14 @@ public class StorageStrategyTest {
         }
 
         @Override
+        public CloudStackVolume copyCloudStackVolume(org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo srcVolumeInfo,
+                org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo destVolumeInfo,
+                org.apache.cloudstack.storage.datastore.db.StoragePoolVO destStoragePool,
+                Map<String, String> destDetails, int timeoutSeconds) {
+            return null;
+        }
+
+        @Override
         public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
         }
 

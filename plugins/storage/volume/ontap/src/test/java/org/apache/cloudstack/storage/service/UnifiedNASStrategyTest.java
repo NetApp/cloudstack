@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.service;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.host.HostVO;
+import com.cloud.storage.Storage;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.exception.CloudRuntimeException;
@@ -50,6 +51,7 @@ import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.volume.VolumeObject;
 import org.junit.jupiter.api.BeforeEach;
@@ -196,6 +198,9 @@ public class UnifiedNASStrategyTest {
         when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
+        VolumeObjectTO volumeObjectTO = new VolumeObjectTO();
+        volumeObjectTO.setFormat(Storage.ImageFormat.RAW);
+        when(volumeObject.getTO()).thenReturn(volumeObjectTO);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
         when(epSelector.select(volumeObject)).thenReturn(endPoint);
@@ -208,7 +213,16 @@ public class UnifiedNASStrategyTest {
         assertNotNull(result);
         verify(volumeDao).update(anyLong(), any(VolumeVO.class));
         verify(epSelector).select(volumeObject);
-        verify(endPoint).sendMessage(any(CreateObjectCommand.class));
+        ArgumentCaptor<CreateObjectCommand> cmdCaptor = ArgumentCaptor.forClass(CreateObjectCommand.class);
+        verify(endPoint).sendMessage(cmdCaptor.capture());
+        VolumeObjectTO sentTO = (VolumeObjectTO) cmdCaptor.getValue().getData();
+        assertEquals(Storage.ImageFormat.QCOW2, sentTO.getFormat());
+    }
+
+    @Test
+    public void testCopyCloudStackVolume_NotSupported() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.copyCloudStackVolume(mock(VolumeInfo.class),
+                mock(VolumeInfo.class), mock(StoragePoolVO.class), Map.of(), 0));
     }
 
     @Test
