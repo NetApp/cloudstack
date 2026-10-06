@@ -222,7 +222,7 @@ public class UnifiedNASStrategyTest {
     @Test
     public void testCopyCloudStackVolume_NotSupported() {
         assertThrows(CloudRuntimeException.class, () -> strategy.copyCloudStackVolume(mock(VolumeInfo.class),
-                mock(VolumeInfo.class), mock(StoragePoolVO.class), new HashMap<>(), 10));
+                mock(VolumeInfo.class), mock(StoragePoolVO.class), Map.of(), 0));
     }
 
     @Test
