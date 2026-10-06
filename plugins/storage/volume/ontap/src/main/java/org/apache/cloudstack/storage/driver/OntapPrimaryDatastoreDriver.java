@@ -768,8 +768,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 VolumeInfo volumeInfo = (VolumeInfo) data;
                 VolumeDetailVO qosPolicyDetail = volumeDetailsDao.findDetail(
                         volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
-                // NFS file delete leaves the QoS assignment in place unless the file is set to
-                // none first. iSCSI LUN delete already drops object_count.
+                // NFS file delete leaves the QoS assignment in place unless the file is set to none first.
+                // iSCSI LUN delete already drops object_count.
+                // TODO: revisit this NFS none-policy step when the file is deleted from ONTAP instead of KVM.
                 boolean qosCleared = false;
                 if (!isIscsi(details)) {
                     qosCleared = clearQosPolicyBeforeDelete(storageStrategy, storagePool, details, volumeInfo, qosPolicyDetail);

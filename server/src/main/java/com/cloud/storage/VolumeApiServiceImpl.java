@@ -884,7 +884,7 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
                         minIops = 0L;
                         maxIops = 0L;
                     } else {
-                        if (minIops == null || minIops <= 0) {
+                        if (minIops == null || minIops < 0) {
                             throw new InvalidParameterValueException("The min IOPS must be greater than 0.");
                         }
 
