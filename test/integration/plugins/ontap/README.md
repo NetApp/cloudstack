@@ -83,7 +83,7 @@ The ONTAP plugin (`plugins/storage/volume/ontap/`) integrates CloudStack's prima
 ### NFS3 vs iSCSI — key differences
 
 | Aspect | NFS3 | iSCSI |
-|--------|------|-------|
+| -------- | ------ | ------- |
 | ONTAP object per pool | FlexVol + export policy | FlexVol; igroups are shared per KVM host and SVM |
 | ONTAP object per CS volume | None (FlexVol is shared) | One LUN inside the FlexVol |
 | Host connectivity | NFS mount | iSCSI login (IQN-based) |
@@ -340,12 +340,13 @@ another ONTAP pool is present.
 ## Test suite quick reference
 
 | Suite | File | Tests | What it covers |
-|-------|------|-------|---------------|
+| ------- | ------ | ------- | --------------- |
 | NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/export policy |
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 8 | Full VM lifecycle with hot-plug/detach |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
+| NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 12 | Existing lifecycle plus duplicate-name and aggregate-space create rejects, and empty-pool deletion with pre-deleted FlexVol/igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |

@@ -45,7 +45,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 12 tests | **Scope:** cluster-scoped NFS3 pool, no-volume workflow through test 08. test 01 is isolated; test 03 reuses the pool from test 02; tests 11–12 are isolated
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_reject_create_when_no_aggregate_space` | Reject pool creation when requested capacity exceeds every assigned online aggregate's available space | isolated | `CloudstackAPIException` containing `No suitable aggregates`; no CS pool created | No FlexVol created | negative |
 | 02 | `test_02_create_primary_storage_pool` | Create a cluster-scoped NFS3 primary storage pool | setUpClass (zone, cluster, account) | `pool.state == "Up"`, `pool.type == "NetworkFilesystem"`, `nfsmountopts` contains `vers=3` | FlexVol exists and `state == "online"`, export policy exists with each cluster host IP as a rule, at least one NFS data LIF present on SVM | positive |
 | 03 | `test_03_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 02 already exists on ONTAP | test_02 | `CloudstackAPIException`; only the test_02 pool remains, still `Up` | Existing FlexVol stays `online`; export policy still present | negative |
@@ -82,6 +82,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 10 | `test_10_libvirt_pool_inactive` | Libvirt pool for this storage pool is inactive on the KVM host | isolated | Pool reaches Maintenance; volume remains | FlexVol stays online; export policy remains | negative |
 | 11 | `test_11_nfs_mount_read_only` | NFS mount for this pool is read-only on the KVM host | isolated | Pool reaches Maintenance; writes to the mount fail | FlexVol stays online; export policy remains | negative |
 | 12 | `test_12_nfs_mount_point_deleted` | NFS mount point for this pool is missing on the KVM host | isolated | Pool reaches Maintenance with its mount point absent | FlexVol stays online; export policy remains | negative |
+
 ---
 
 ## Suite 3 — NFS3 Zone-Scoped Pool
@@ -92,7 +93,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 4 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped NFS3 pool; CloudStack calls `attachZone()` to connect all eligible KVM hosts | setUpClass | `pool.state == "Up"` | FlexVol `online`; export policy exists and contains **every** cluster host IP; at least one NFS data LIF present | positive |
 | 02 | `test_02_disable_zone_scoped_pool` | Disable the zone-scoped pool | test_01 | `pool.state == "Disabled"` | FlexVol unchanged; export policy unchanged | positive |
 | 03 | `test_03_enable_zone_scoped_pool` | Re-enable the zone-scoped pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; export policy unchanged | positive |
@@ -135,7 +136,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 05 | `test_05_stop_vm_export_retained` | Stop the running VM with volume attached | test_04 | `vm.state == "Stopped"` | FlexVol still `online`; NFS export policy still present | positive |
 | 06 | `test_06_start_vm_volume_accessible` | Start the stopped VM | test_05 | `vm.state == "Running"` | FlexVol still `online` | positive |
 | 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM no longer listed; volume no longer listed; pool no longer listed | FlexVol deleted; export policy deleted | cleanup |
+| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_07 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
 
 ---
 
@@ -147,7 +148,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 12 tests | **Scope:** cluster-scoped iSCSI pool, no-volume workflow through test 08. test 01 is isolated; test 03 reuses the pool from test 02; tests 11–12 are isolated
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_reject_create_when_no_aggregate_space` | Reject pool creation when requested capacity exceeds every assigned online aggregate's available space | isolated | `CloudstackAPIException` containing `No suitable aggregates`; no CS pool created | No FlexVol created | negative |
 | 02 | `test_02_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "Iscsi"` | FlexVol `online`; shared `cs_{hostUuid}_{svmName}` igroups unchanged from suite-start baseline | positive |
 | 03 | `test_03_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 02 already exists on ONTAP | test_02 | `CloudstackAPIException`; only the test_02 pool remains, still `Up` | Existing FlexVol stays `online` | negative |
@@ -185,6 +186,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 11 | `test_11_iscsi_session_logged_out` | Enter maintenance after only the test iSCSI session is logged out | isolated | Pool reaches Maintenance; volume remains | Test LUN remains | negative |
 | 12 | `test_12_delete_volume_with_existing_iscsi_session` | Delete the test volume while its iSCSI session is already logged in | isolated | Volume is removed; no extra session is created | Test LUN is removed | negative |
 | 13 | `test_13_corrupt_iscsi_by_path` | Delete the test volume after its by-path symlink is replaced with a regular file | isolated | Volume is removed; the planted file remains | Test LUN is removed | negative |
+
 ---
 
 ## Suite 8 — iSCSI Zone-Scoped Pool
@@ -195,7 +197,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 4 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped iSCSI pool | setUpClass | `pool.state == "Up"` | FlexVol `online`; shared host igroups unchanged from suite-start baseline | positive |
 | 02 | `test_02_disable_zone_scoped_pool` | Disable pool | test_01 | `pool.state == "Disabled"` | FlexVol unchanged; igroups unchanged | positive |
 | 03 | `test_03_enable_zone_scoped_pool` | Re-enable pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; igroups unchanged | positive |
@@ -228,15 +230,17 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 10 tests | **Scope:** end-to-end — iSCSI pool, data volume (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach lifecycle
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
-| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
+| 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
-| 03 | `test_03_deploy_vm` | Deploy VM using first ready KVM template; verify 0 LUN-maps exist before attach | test_02 (`volume`) | `vm.state == "Running"`; 0 LUN-maps on ONTAP | 0 LUN-maps (`list_lun_maps_for_volume` returns empty) | positive |
+| 03 | `test_03_deploy_vm` | Deploy VM with the tagged SO — ROOT on ONTAP; seeds `cs_tmpl_*`; verify 0 data-volume LUN-maps before attach | test_02 (`volume`) | `vm.state == "Running"`; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | Exactly one `/vol/<flex>/cs_tmpl_<id>` LUN; 0 data-volume LUN-maps | positive |
+| 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuse cache | test_03 | VM-2 Running; ROOT on pool; still one spool_ref | Still one `cs_tmpl_*`; non-cache LUN count +1 | positive |
+| 03b | `test_03b_expunge_second_vm_template_cache_survives` | Expunge VM-2 — cache LUN remains | test_03a | spool_ref still Ready | VM-2 ROOT LUN gone (non-cache count back to baseline); `cs_tmpl_*` still present | positive |
 | 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created (TDS SN 27) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
 | 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed (TDS VM Stop iSCSI) | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
 | 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
 | 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; volume gone; pool gone | FlexVol deleted; all LUNs and igroups deleted | cleanup |
+| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
 
 > ⚠️ **test_07 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
 
@@ -275,12 +279,13 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 ## Cross-suite summary
 
 | Suite | Protocol | Scope | Tests | Status |
-|-------|---------|-------|-------|--------|
+| ------- | --------- | ------- | ------- | -------- |
 | NFS3 Pool Lifecycle | NFS3 | Cluster | 12 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 12 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
-| NFS3 VM + Volume Attach | NFS3 | Cluster | 8 | ✅ |
+| NFS3 VM + Volume Attach | NFS3 | Cluster | 10 | 🆕 +2 template cache |
+| NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 12 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 13 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
