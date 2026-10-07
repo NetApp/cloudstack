@@ -2358,7 +2358,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CommandResult> resultCaptor = ArgumentCaptor.forClass(CommandResult.class);
             verify(commandCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
-            verify(volumeDetailsDao).removeDetail(100L, OntapStorageConstants.QOS_POLICY_UUID);
+            verify(volumeDetailsDao, never()).removeDetail(100L, OntapStorageConstants.QOS_POLICY_UUID);
             verify(sanStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
     }
@@ -2391,7 +2391,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CommandResult> resultCaptor = ArgumentCaptor.forClass(CommandResult.class);
             verify(commandCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
-            verify(volumeDetailsDao).removeDetail(100L, OntapStorageConstants.QOS_POLICY_UUID);
+            verify(volumeDetailsDao, never()).removeDetail(100L, OntapStorageConstants.QOS_POLICY_UUID);
             verify(sanStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
     }

@@ -769,7 +769,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 CloudStackVolume cloudStackVolumeRequest = createDeleteCloudStackVolumeRequest(storagePool, details, volumeInfo);
                 storageStrategy.deleteCloudStackVolume(cloudStackVolumeRequest);
                 if (qosPolicyDetail != null) {
-                    volumeDetailsDao.removeDetail(volumeInfo.getId(), OntapStorageConstants.QOS_POLICY_UUID);
                     deleteUnusedQosPolicy(storageStrategy, qosPolicyDetail.getValue());
                 }
                 logger.info("deleteAsync: Volume deleted: " + volumeInfo.getId());
