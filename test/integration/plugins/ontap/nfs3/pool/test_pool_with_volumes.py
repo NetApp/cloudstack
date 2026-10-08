@@ -30,6 +30,17 @@ Workflow:
   06  Forced=False delete rejected — pool stays in Maintenance (negative)
   07  Cleanup — cancel maintenance, delete volume, force-delete pool
 
+Isolated tests (test_08 onwards) run after that workflow and share no state
+with it.  Each one builds its own pool plus CloudStack volume.  Tests 08 and
+09 remove one ONTAP object and then force-delete the pool.  Tests 10-12 break
+only that pool's view on the KVM host:
+
+  08  FlexVol already removed on ONTAP
+  09  Export policy already removed on ONTAP
+  10  Libvirt pool for this storage pool inactive on the KVM host
+  11  NFS mount for this pool read-only on the KVM host
+  12  NFS mount point for this pool missing on the KVM host
+
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
   - KVM cluster registered in CloudStack
@@ -69,7 +80,6 @@ from marvin.cloudstackAPI import (
     cancelStorageMaintenance,
     createStoragePool as createStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
-    enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackException import CloudstackAPIException
@@ -150,6 +160,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
     """
 
     pool_ep_name = None    # NFS export policy name extracted at pool creation
+    pool2_ep_name = None   # export policy of the pool an isolated test builds
 
     _vol_name_prefix = "OntapNFS3WV"
 
@@ -229,15 +240,6 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
         if not ep_name:
             ep_name = "cs-%s-%s" % (self.svm_name, pool.name)
         return ep_name
-
-    def _volume_exists_in_cs(self, vol_id):
-        """Return True if the volume is still listed by CloudStack."""
-        from marvin.cloudstackAPI import listVolumes as listVolumesAPI
-        cmd = listVolumesAPI.listVolumesCmd()
-        cmd.id = vol_id
-        cmd.listall = True
-        vols = self.apiClient.listVolumes(cmd) or []
-        return len(vols) > 0
 
     def _assert_pool_capacity(self, pool, label):
         """Assert CloudStack capacity fields and ONTAP FlexVol size are consistent.
@@ -462,11 +464,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_01 must pass first")
 
-        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        result = self._enter_maintenance(self.__class__.pool.id)
         self.assertEqual(
             result.state, "Maintenance",
             "Pool should be 'Maintenance', got '%s'" % result.state
@@ -515,13 +513,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_01 must pass first")
 
-        cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.cancelStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(
-            self.__class__.pool.id, "Up", timeout=120
-        )
+        result = self._exit_maintenance(self.__class__.pool.id)
         self.assertEqual(
             result.state, "Up",
             "Pool should be 'Up' after cancel maintenance, got '%s'" % result.state
@@ -576,10 +568,7 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
 
         # Pool is Up after test_05 (cancel maintenance); re-enter Maintenance
         # before attempting the delete so it reaches the forced=False gate.
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(self.__class__.pool.id)
 
         with self.assertRaises(CloudstackAPIException,
                                msg="deleteStoragePool(forced=False) with a live "
@@ -690,16 +679,8 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
                 self.__class__.volume = None
                 vol = None
             try:
-                mc = enableStorageMaintenance.enableStorageMaintenanceCmd()
-                mc.id = pool.id
-                self.apiClient.enableStorageMaintenance(mc)
-                deadline = time.time() + 60
-                while time.time() < deadline:
-                    ps = list_storage_pools(self.apiClient, id=pool.id)
-                    if ps and ps[0].state == "Maintenance":
-                        pool_state = "Maintenance"
-                        break
-                    time.sleep(5)
+                self._enter_maintenance(pool.id, timeout=60)
+                pool_state = "Maintenance"
             except Exception:
                 pass
 
@@ -749,3 +730,482 @@ class TestOntapNFS3PoolWithVolumes(OntapTestBase):
             policy,
             "NFS export policy '%s' should be removed after cleanup" % ep_name
         )
+
+    # ==================================================================
+    # Isolated tests — appended after the sequential workflow above.
+    #
+    # Each one creates its own pool and CloudStack volume in the pool2 /
+    # volume2 slots (which OntapTestBase.tearDownClass also sweeps), runs a
+    # single scenario, and cleans up in a finally block.  They never reuse a
+    # pool destroyed by another test.
+    # ==================================================================
+
+    def _create_isolated_pool_with_volume(self, label):
+        """Build a fresh pool plus CS volume for one isolated scenario.
+
+        Returns ``(pool, volume, export_policy_name)``.  Any pool a previous
+        isolated test could not clean up is swept first so its ONTAP objects
+        are never orphaned by the overwrite of the pool2 slot.
+        """
+        if self.__class__.pool2 is not None:
+            self._cleanup_isolated_pool(
+                self.__class__.pool2, self.__class__.pool2_ep_name,
+                "leftover-from-previous-isolated-test"
+            )
+
+        pool = self._create_pool()
+        self.__class__.pool2 = pool
+        ep_name = self._get_export_policy_name(pool)
+        self.__class__.pool2_ep_name = ep_name
+        logger.info("[%s] created isolated pool '%s' (ep '%s')",
+                    label, pool.name, ep_name)
+
+        self.assertEqual(
+            pool.state, "Up",
+            "[%s] new pool state should be 'Up', got '%s'" % (label, pool.state)
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol,
+            "[%s] ONTAP FlexVol not found for new pool '%s'" % (label, pool.name)
+        )
+        self.assertIsNotNone(
+            self.ontap.get_export_policy(ep_name),
+            "[%s] export policy '%s' not found for new pool '%s'"
+            % (label, ep_name, pool.name)
+        )
+
+        vol = self._create_volume(pool.id)
+        self.__class__.volume2 = vol
+        self.assertIsNotNone(vol, "[%s] createVolume returned None" % label)
+        return pool, vol, ep_name
+
+    def _assert_pool_absent(self, pool, label, delete_error=None):
+        """Assert CloudStack no longer lists the pool."""
+        try:
+            remaining = list_storage_pools(self.apiClient, id=pool.id)
+        except CloudstackAPIException:
+            remaining = None
+        self.assertFalse(
+            remaining,
+            "[%s] pool '%s' is still listed after deleteStoragePool(forced=True)%s"
+            % (label, pool.name,
+               "; the API raised: %s" % delete_error if delete_error else "")
+        )
+
+    def _cleanup_isolated_pool(self, pool, ep_name, label):
+        """Best-effort teardown of one isolated pool and its ONTAP objects."""
+        if pool is None:
+            return
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except CloudstackAPIException:
+            listed = None
+        backend_cleanup_safe = not listed
+        if listed:
+            self._remove_cs_volume(pool, self.__class__.volume2, label)
+            try:
+                listed = list_storage_pools(self.apiClient, id=pool.id) or listed
+                if listed[0].state != "Maintenance":
+                    self._enter_maintenance(pool.id)
+                self._cleanup_kvm_storage_pool_mounts(pool.id)
+            except Exception as exc:
+                logger.warning("[%s] could not safely unmount pool '%s': %s",
+                               label, pool.name, exc)
+                return
+            backend_cleanup_safe = True
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except Exception as exc:
+                logger.warning("[%s] could not force-delete pool '%s': %s",
+                               label, pool.name, exc)
+        if not backend_cleanup_safe:
+            return
+        try:
+            self.ontap.offline_and_delete_volume(pool.name)
+        except Exception as exc:
+            logger.warning("[%s] ONTAP FlexVol cleanup for '%s' failed: %s",
+                           label, pool.name, exc)
+        if ep_name:
+            try:
+                self.ontap.delete_export_policy(ep_name)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] ONTAP export policy cleanup for '%s' failed: %s",
+                    label, ep_name, exc)
+        try:
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except CloudstackAPIException:
+            listed = None
+        if not listed:
+            self.__class__.pool2 = None
+            self.__class__.pool2_ep_name = None
+
+    # ------------------------------------------------------------------
+    # Step 08 — FlexVol deleted on ONTAP before the pool delete (negative)
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_with_volumes"], required_hardware=True)
+    def test_08_delete_pool_with_volume_flexvol_missing(self):
+        """
+        Force-delete a pool that still owns a CloudStack volume after its
+        ONTAP FlexVol has been removed behind CloudStack's back.
+
+        Uses its own pool and volume, so the pool is known to be healthy up to
+        the point the FlexVol is destroyed.  Verifies:
+          - deleteStoragePool is rejected while the CS volume still exists
+          - deleteStoragePool(forced=True) tolerates the missing FlexVol
+          - the CloudStack pool record is removed
+          - the leftover CS volume record can still be cleaned up
+        """
+        label = "flexvol-missing"
+        pool, vol, ep_name = self._create_isolated_pool_with_volume(label)
+        try:
+            self._enter_maintenance(pool.id)
+
+            # Unmount on every KVM host while the NFS export is still
+            # reachable, before the FlexVol is destroyed underneath it.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+
+            self.ontap.offline_and_delete_volume(pool.name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "[%s] ONTAP FlexVol '%s' should be gone before the pool delete"
+                % (label, pool.name)
+            )
+
+            # CloudStack rejects deleteStoragePool while the pool still owns
+            # a volume, even with forced=True, so the volume goes first.
+            with self.assertRaises(CloudstackAPIException):
+                self._delete_pool(pool.id, forced=True)
+            self.assertTrue(
+                self._remove_cs_volume(pool, vol, label),
+                "[%s] CloudStack volume could not be deleted before the pool "
+                "delete" % label
+            )
+            try:
+                self._enter_maintenance(pool.id)
+            except Exception as exc:
+                logger.warning("[%s] could not enter maintenance on '%s': %s",
+                               label, pool.name, exc)
+
+            delete_error = None
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except CloudstackAPIException as exc:
+                delete_error = exc
+
+            self._assert_pool_absent(pool, label, delete_error)
+            self.assertIsNone(
+                delete_error,
+                "[%s] deleteStoragePool(forced=True) should tolerate a missing "
+                "FlexVol, but raised: %s" % (label, delete_error)
+            )
+
+            self._purge_cs_volume_record(vol, label)
+        finally:
+            self._cleanup_isolated_pool(pool, ep_name, label)
+
+    # ------------------------------------------------------------------
+    # Step 09 — Export policy deleted on ONTAP before the delete (negative)
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_with_volumes"], required_hardware=True)
+    def test_09_delete_pool_with_volume_export_policy_missing(self):
+        """
+        Force-delete a pool that still owns a CloudStack volume after its NFS
+        export policy has been removed behind CloudStack's back.
+
+        Uses its own pool and volume.  Unlike test_08 the FlexVol is still
+        present, so the plugin is expected to remove it as part of the delete.
+        Verifies:
+          - deleteStoragePool is rejected while the CS volume still exists
+          - deleteStoragePool(forced=True) tolerates the missing export policy
+          - the CloudStack pool record is removed
+          - the ONTAP FlexVol is deleted despite the missing policy
+        """
+        label = "export-policy-missing"
+        pool, vol, ep_name = self._create_isolated_pool_with_volume(label)
+        try:
+            self._enter_maintenance(pool.id)
+
+            # Unmount before the export policy goes away, otherwise the KVM
+            # hosts are left holding a mount they can no longer reach.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+
+            self.ontap.reassign_volume_export_policy(pool.name)
+            self.ontap.delete_export_policy(ep_name)
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "[%s] export policy '%s' should be gone before the pool delete"
+                % (label, ep_name)
+            )
+
+            # CloudStack rejects deleteStoragePool while the pool still owns
+            # a volume, even with forced=True, so the volume goes first.
+            with self.assertRaises(CloudstackAPIException):
+                self._delete_pool(pool.id, forced=True)
+            self.assertTrue(
+                self._remove_cs_volume(pool, vol, label),
+                "[%s] CloudStack volume could not be deleted before the pool "
+                "delete" % label
+            )
+            try:
+                self._enter_maintenance(pool.id)
+            except Exception as exc:
+                logger.warning("[%s] could not enter maintenance on '%s': %s",
+                               label, pool.name, exc)
+
+            delete_error = None
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except CloudstackAPIException as exc:
+                delete_error = exc
+
+            self._assert_pool_absent(pool, label, delete_error)
+            self.assertIsNone(
+                delete_error,
+                "[%s] deleteStoragePool(forced=True) should tolerate a missing "
+                "export policy, but raised: %s" % (label, delete_error)
+            )
+
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "[%s] ONTAP FlexVol '%s' should have been deleted with the pool"
+                % (label, pool.name)
+            )
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "[%s] export policy '%s' reappeared during the pool delete"
+                % (label, ep_name)
+            )
+
+            self._purge_cs_volume_record(vol, label)
+        finally:
+            self._cleanup_isolated_pool(pool, ep_name, label)
+
+    def _libvirt_pool_present(self, host_ip, pool_uuid):
+        output = self._kvm_run(
+            host_ip,
+            "virsh pool-info '%s' >/dev/null 2>&1 && echo PRESENT || true"
+            % pool_uuid
+        )
+        return any(line.strip() == "PRESENT" for line in output)
+
+    def _restore_libvirt_pool(self, host_ip, pool_uuid, xml_path, undefined):
+        quoted = pool_uuid.replace("'", "'\"'\"'")
+        quoted_xml = xml_path.replace("'", "'\"'\"'")
+        if undefined and xml_path:
+            self._kvm_run(
+                host_ip,
+                "virsh pool-define '%s' >/dev/null 2>&1 || true" % quoted_xml
+            )
+        cleanup = "rm -f '%s'" % quoted_xml if xml_path else "true"
+        self._kvm_run(
+            host_ip,
+            "virsh pool-start '%s' >/dev/null 2>&1 || true; %s"
+            % (quoted, cleanup)
+        )
+
+    # ------------------------------------------------------------------
+    # Step 10 — Test libvirt pool made inactive
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_with_volumes"], required_hardware=True)
+    def test_10_libvirt_pool_inactive(self):
+        """
+        Destroy only the isolated pool's libvirt definition so it is inactive,
+        then enter maintenance.  The libvirt pool is started again before
+        CloudStack cleanup.
+        """
+        label = "libvirt-pool-inactive"
+        host_ip = self._kvm_host_ip()
+        pool, vol, ep_name = self._create_isolated_pool_with_volume(label)
+        xml_path = "/tmp/cs-ontap-%s.xml" % pool.id
+        destroyed = False
+        temporarily_defined = False
+        try:
+            if not self._libvirt_pool_present(host_ip, pool.id):
+                self.skipTest(
+                    "Libvirt has no storage pool named '%s' on %s"
+                    % (pool.id, host_ip)
+                )
+            self._kvm_run(
+                host_ip,
+                "virsh pool-dumpxml '%s' > '%s' && "
+                "virsh pool-destroy '%s' >/dev/null 2>&1 || true"
+                % (pool.id, xml_path, pool.id)
+            )
+            destroyed = True
+            info = self._kvm_run(
+                host_ip, "virsh pool-info '%s' 2>/dev/null || true" % pool.id
+            )
+            if not any(line.strip() for line in info):
+                self._kvm_run(
+                    host_ip,
+                    "virsh pool-define '%s' >/dev/null" % xml_path
+                )
+                temporarily_defined = True
+                info = self._kvm_run(
+                    host_ip,
+                    "virsh pool-info '%s' 2>/dev/null || true" % pool.id
+                )
+            self.assertTrue(
+                any("inactive" in line.lower() for line in info),
+                "[%s] libvirt pool was not inactive: %s" % (label, info)
+            )
+
+            self._enter_maintenance(pool.id)
+            self.assertTrue(
+                self._volume_exists_in_cs(vol.id),
+                "[%s] volume disappeared after maintenance" % label
+            )
+            ontap_vol = self.ontap.get_volume(pool.name)
+            self.assertIsNotNone(ontap_vol, "[%s] FlexVol disappeared" % label)
+            self.assertEqual(ontap_vol.get("state"), "online")
+            self.assertIsNotNone(
+                self.ontap.get_export_policy(ep_name),
+                "[%s] export policy disappeared" % label
+            )
+        finally:
+            if destroyed:
+                try:
+                    self._kvm_run(
+                        host_ip,
+                        "virsh pool-start '%s' >/dev/null 2>&1 || true; "
+                        "%s; rm -f '%s'"
+                        % (
+                            pool.id,
+                            "virsh pool-undefine '%s' >/dev/null 2>&1 || true"
+                            % pool.id if temporarily_defined else "true",
+                            xml_path,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not restart libvirt pool: %s", label, exc
+                    )
+            self._cleanup_isolated_pool(pool, ep_name, label)
+
+    # ------------------------------------------------------------------
+    # Step 11 — Test NFS mount made read-only
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_with_volumes"], required_hardware=True)
+    def test_11_nfs_mount_read_only(self):
+        """
+        Remount only the isolated test pool read-only, verify writes fail,
+        then verify the pool can still enter maintenance.
+        """
+        label = "nfs-mount-read-only"
+        host_ip = self._kvm_host_ip()
+        pool, vol, ep_name = self._create_isolated_pool_with_volume(label)
+        mount_path = "/mnt/%s" % pool.id
+        quoted_mount = mount_path.replace("'", "'\"'\"'")
+        remounted_read_only = False
+        try:
+            mounted = self._kvm_run(
+                host_ip,
+                "mountpoint -q '%s' && echo MOUNTED || true" % quoted_mount
+            )
+            self.assertTrue(
+                any(line.strip() == "MOUNTED" for line in mounted),
+                "[%s] %s was not mounted before the test"
+                % (label, mount_path)
+            )
+
+            self._kvm_run(
+                host_ip, "mount -o remount,ro '%s'" % quoted_mount
+            )
+            remounted_read_only = True
+            options = self._kvm_run(
+                host_ip,
+                "findmnt -n -o OPTIONS --target '%s'" % quoted_mount
+            )
+            self.assertTrue(
+                any(
+                    "ro" in [item.strip() for item in line.split(",")]
+                    for line in options
+                ),
+                "[%s] %s was not remounted read-only: %s"
+                % (label, mount_path, options)
+            )
+            write_probe = self._kvm_run(
+                host_ip,
+                "if touch '%s/.cloudstack-ro-probe' 2>/dev/null; then "
+                "rm -f '%s/.cloudstack-ro-probe'; echo WRITABLE; "
+                "else echo READ_ONLY; fi" % (quoted_mount, quoted_mount)
+            )
+            self.assertTrue(
+                any(line.strip() == "READ_ONLY" for line in write_probe),
+                "[%s] writes unexpectedly succeeded on %s"
+                % (label, mount_path)
+            )
+
+            self._enter_maintenance(pool.id)
+            self.assertTrue(self._volume_exists_in_cs(vol.id))
+            ontap_vol = self.ontap.get_volume(pool.name)
+            self.assertIsNotNone(ontap_vol, "[%s] FlexVol disappeared" % label)
+            self.assertEqual(ontap_vol.get("state"), "online")
+            self.assertIsNotNone(self.ontap.get_export_policy(ep_name))
+        finally:
+            if remounted_read_only:
+                try:
+                    self._kvm_run(
+                        host_ip,
+                        "if mountpoint -q '%s'; then "
+                        "mount -o remount,rw '%s'; fi"
+                        % (quoted_mount, quoted_mount)
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] could not restore read-write mount: %s",
+                        label, exc
+                    )
+            self._cleanup_isolated_pool(pool, ep_name, label)
+
+    # ------------------------------------------------------------------
+    # Step 12 — Test NFS mount point deleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_with_volumes"], required_hardware=True)
+    def test_12_nfs_mount_point_deleted(self):
+        """
+        Unmount only the isolated test pool and delete its mount-point
+        directory, then verify the pool can still enter maintenance.
+        """
+        label = "nfs-mount-point-deleted"
+        host_ip = self._kvm_host_ip()
+        pool, vol, ep_name = self._create_isolated_pool_with_volume(label)
+        mount_path = "/mnt/%s" % pool.id
+        quoted_mount = mount_path.replace("'", "'\"'\"'")
+        try:
+            mounted = self._kvm_run(
+                host_ip,
+                "mountpoint -q '%s' && echo MOUNTED || true" % quoted_mount
+            )
+            self.assertTrue(
+                any(line.strip() == "MOUNTED" for line in mounted),
+                "[%s] %s was not mounted before the test"
+                % (label, mount_path)
+            )
+
+            removed = self._kvm_run(
+                host_ip,
+                "umount -f -l '%s' && rmdir '%s'; "
+                "if [ ! -e '%s' ]; then echo REMOVED; fi"
+                % (quoted_mount, quoted_mount, quoted_mount)
+            )
+            self.assertTrue(
+                any(line.strip() == "REMOVED" for line in removed),
+                "[%s] could not remove mount point %s" % (label, mount_path)
+            )
+
+            self._enter_maintenance(pool.id)
+            self.assertTrue(self._volume_exists_in_cs(vol.id))
+            ontap_vol = self.ontap.get_volume(pool.name)
+            self.assertIsNotNone(ontap_vol, "[%s] FlexVol disappeared" % label)
+            self.assertEqual(ontap_vol.get("state"), "online")
+            self.assertIsNotNone(self.ontap.get_export_policy(ep_name))
+        finally:
+            self._cleanup_isolated_pool(pool, ep_name, label)
