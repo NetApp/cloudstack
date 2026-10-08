@@ -2895,6 +2895,7 @@ class OntapPrimaryDatastoreDriverTest {
                 .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/cs_tmp_snap_200_100", false));
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
                 .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "tmp-lun-uuid", false));
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(null);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails)).thenReturn(sanStrategy);
