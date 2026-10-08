@@ -1541,7 +1541,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(templatePoolRef.getInstallPath()).thenReturn("template-uuid");
 
         CloudStackVolume cloned = new CloudStackVolume();
-        VolumeQosPolicy qosPolicy = qosPolicy("qos-nfs-root-uuid", "cs_100_to_200_iops_svm1");
+        VolumeQosPolicy qosPolicy = lookedUpQosPolicy("qos-nfs-root-uuid", "cs_100_to_200_iops_svm1");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             stubQosCreateMocks(utilityMock, nasStrategy, cloned, qosPolicy);
@@ -1554,9 +1554,14 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
             verify(nasStrategy).createVolumeQosPolicy(eq("cs_100_to_200_iops_svm1"), eq(100L), eq(200L));
+            verify(nasStrategy, never()).resizeCloudStackVolume(any(), anyLong());
             verify(nasStrategy).updateCloudStackVolume(argThat(request ->
-                    request.getFile() != null && request.getFile().getQosPolicy() != null
-                            && "qos-nfs-root-uuid".equals(request.getFile().getQosPolicy().getUuid())));
+                    "1".equals(request.getDatastoreId())
+                            && "flex-uuid".equals(request.getFlexVolumeUuid())
+                            && request.getVolumeInfo() == volumeInfo
+                            && request.getFile() != null
+                            && isQosPolicyReference(request.getFile().getQosPolicy(),
+                                    "qos-nfs-root-uuid", "cs_100_to_200_iops_svm1")));
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.QOS_POLICY_UUID),
                     eq("qos-nfs-root-uuid"), eq(false));
         }

@@ -448,7 +448,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
 
             if (!iscsi && qosPolicy != null) {
-                attachQosPolicy(storageStrategy, storagePool, details, volumeInfo, qosPolicy);
+                CloudStackVolume cloudStackVolume = createCloudStackVolumeRequestByProtocol(
+                        storagePool, details, volumeInfo, qosPolicy);
+                storageStrategy.updateCloudStackVolume(cloudStackVolume);
             }
             persistQosPolicyDetails(volumeInfo.getId(), qosPolicy);
             return cloned;
@@ -1123,24 +1125,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         } catch (Exception e) {
             logger.error("Unused QoS policy [{}] was not deleted: {}", policyUuid, e.getMessage());
         }
-    }
-
-    private void attachQosPolicy(StorageStrategy storageStrategy, StoragePoolVO storagePool,
-                                 Map<String, String> details, VolumeInfo volumeInfo,
-                                 VolumeQosPolicy qosPolicy) {
-        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
-                storagePool, details, volumeInfo, qosPolicy);
-        if (isIscsi(details)) {
-            VolumeDetailVO lunUuid = volumeDetailsDao.findDetail(volumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID);
-            if (lunUuid == null || lunUuid.getValue() == null) {
-                throw new CloudRuntimeException("LUN UUID is missing for volume " + volumeInfo.getId());
-            }
-            if (request.getLun() == null) {
-                throw new CloudRuntimeException("Missing LUN on QoS update request for volume " + volumeInfo.getId());
-            }
-            request.getLun().setUuid(lunUuid.getValue());
-        }
-        storageStrategy.updateCloudStackVolume(request);
     }
 
     @Override
