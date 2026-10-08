@@ -807,7 +807,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
             // Verify LIF selection completes before FlexVol creation
             InOrder inOrder = inOrder(storageStrategy);
-            inOrder.verify(storageStrategy).chooseAggregate(any());
+            inOrder.verify(storageStrategy).chooseAggregate(any(), any());
             inOrder.verify(storageStrategy).getNetworkInterface(any());
             inOrder.verify(storageStrategy).createStorageVolume(any(), any(), any());
 

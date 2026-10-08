@@ -19,6 +19,7 @@
 
 package org.apache.cloudstack.storage.service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -348,11 +349,23 @@ public abstract class StorageStrategy {
         return resolvedSvmUuid;
     }
 
+    /**
+     * Aggregates eligible for new FlexVol creation, populated by {@link #connect(boolean)} with aggregate validation enabled.
+     */
+    public List<Aggregate> getAggregates() {
+        return aggregates;
+    }
+
+    public void setAggregates(List<Aggregate> aggregates) {
+        this.aggregates = aggregates;
+    }
+
     private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {
         if (aggrs == null || aggrs.isEmpty()) {
             logger.error("No aggregates are assigned to SVM " + svmName);
             throw new CloudRuntimeException("No aggregates are assigned to SVM " + svmName);
         }
+        List<Aggregate> eligibleAggregates = new ArrayList<>();
         for (Aggregate aggr : aggrs) {
             logger.debug("Found aggregate: " + aggr.getName() + " with UUID: " + aggr.getUuid());
             Aggregate aggrResp = aggregateFeignClient.getAggregateByUUID(authHeader, aggr.getUuid(),
@@ -372,27 +385,28 @@ public abstract class StorageStrategy {
                 continue;
             }
             logger.info("Selected aggregate: " + aggr.getName() + " for volume operations.");
-            this.aggregates = List.of(aggr);
+            eligibleAggregates.add(aggr);
         }
-        if (this.aggregates == null || this.aggregates.isEmpty()) {
+        if (eligibleAggregates.isEmpty()) {
             logger.error("No suitable aggregates found on SVM " + svmName + " for volume creation.");
             throw new CloudRuntimeException("No suitable aggregates found on SVM " + svmName + " for volume creation.");
         }
+        setAggregates(eligibleAggregates);
     }
 
     // Common methods like create/delete etc., should be here
 
     /**
-     * Selects the best aggregate for a volume of the given size from candidates populated by
-     * {@link #connect(boolean)} with aggregate validation enabled.
+     * Selects the best aggregate for a volume of the given size from the given candidate aggregates.
      *
      * <p>Picks the online aggregate with the largest available block space that can fit
      * {@code size}. The returned aggregate includes node information for LIF affinity.</p>
      *
+     * @param aggregates candidate aggregates, for example {@link #getAggregates()}
      * @param size requested volume size in bytes
      * @return the chosen aggregate detail response
      */
-    public Aggregate chooseAggregate(Long size) {
+    public Aggregate chooseAggregate(List<Aggregate> aggregates, Long size) {
         String svmName = storage.getSvmName();
         if (aggregates == null || aggregates.isEmpty()) {
             logger.error("No aggregates available to create volume on SVM " + svmName);

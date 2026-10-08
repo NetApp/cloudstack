@@ -260,6 +260,39 @@ public class StorageStrategyTest {
     }
 
     @Test
+    public void testConnect_collectsAllEligibleAggregates() {
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        svm.setState(OntapStorageConstants.RUNNING);
+        svm.setNfsEnabled(true);
+
+        Aggregate aggregate1 = new Aggregate();
+        aggregate1.setName("aggr1");
+        aggregate1.setUuid("aggr-uuid-1");
+        Aggregate aggregate2 = new Aggregate();
+        aggregate2.setName("aggr2");
+        aggregate2.setUuid("aggr-uuid-2");
+        svm.setAggregates(List.of(aggregate1, aggregate2));
+
+        OntapResponse<Svm> svmResponse = new OntapResponse<>();
+        svmResponse.setRecords(List.of(svm));
+
+        when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
+                .thenReturn(buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0));
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-2"), anyMap()))
+                .thenReturn(buildAggregate("aggr2", "aggr-uuid-2", 20000000000.0));
+
+        assertTrue(storageStrategy.connect());
+
+        List<Aggregate> aggregates = storageStrategy.getAggregates();
+        assertNotNull(aggregates);
+        assertEquals(2, aggregates.size());
+        assertEquals("aggr-uuid-1", aggregates.get(0).getUuid());
+        assertEquals("aggr-uuid-2", aggregates.get(1).getUuid());
+    }
+
+    @Test
     public void testConnect_operationsOnly_skipsAggregateValidation() {
         Svm svm = new Svm();
         svm.setName("svm1");
@@ -600,14 +633,11 @@ public class StorageStrategyTest {
 
     @Test
     public void testChooseAggregate_positive() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a");
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
-        Aggregate result = storageStrategy.chooseAggregate(5000000000L);
+        Aggregate result = storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L);
 
         assertNotNull(result);
         assertEquals("aggr1", result.getName());
@@ -616,37 +646,52 @@ public class StorageStrategyTest {
     }
 
     @Test
-    public void testChooseAggregate_invalidSize() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
+    public void testChooseAggregate_picksLargestAvailable() {
+        Aggregate candidate1 = new Aggregate();
+        candidate1.setName("aggr1");
+        candidate1.setUuid("aggr-uuid-1");
+        Aggregate candidate2 = new Aggregate();
+        candidate2.setName("aggr2");
+        candidate2.setUuid("aggr-uuid-2");
 
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
+                .thenReturn(buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a"));
+        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-2"), anyMap()))
+                .thenReturn(buildAggregate("aggr2", "aggr-uuid-2", 20000000000.0, "node-b"));
+
+        Aggregate result = storageStrategy.chooseAggregate(List.of(candidate1, candidate2), 5000000000L);
+
+        assertEquals("aggr-uuid-2", result.getUuid());
+        assertEquals("node-b", result.getNode().getName());
+    }
+
+    @Test
+    public void testChooseAggregate_invalidSize() {
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(-1L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), -1L));
         assertTrue(ex.getMessage().contains("Invalid volume size"));
     }
 
     @Test
     public void testChooseAggregate_nullSize() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(null));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), null));
         assertTrue(ex.getMessage().contains("Invalid volume size"));
     }
 
     @Test
     public void testChooseAggregate_noAggregates() {
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(null, 5000000000L));
+        assertTrue(ex.getMessage().contains("No aggregates available"));
+
+        ex = assertThrows(CloudRuntimeException.class,
+                () -> storageStrategy.chooseAggregate(List.of(), 5000000000L));
         assertTrue(ex.getMessage().contains("No aggregates available"));
     }
 
     @Test
     public void testChooseAggregate_aggregateNotOnline() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = new Aggregate();
         aggregateDetail.setName("aggr1");
         aggregateDetail.setUuid("aggr-uuid-1");
@@ -656,37 +701,38 @@ public class StorageStrategyTest {
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("No suitable aggregates found"));
     }
 
     @Test
     public void testChooseAggregate_insufficientSpace() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 1000000.0, "node-a");
 
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("No suitable aggregates found"));
     }
 
     @Test
     public void testChooseAggregate_missingNode() {
-        setupSuccessfulConnect();
-        storageStrategy.connect();
-
         Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0);
         when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap()))
                 .thenReturn(aggregateDetail);
 
         Exception ex = assertThrows(CloudRuntimeException.class,
-                () -> storageStrategy.chooseAggregate(5000000000L));
+                () -> storageStrategy.chooseAggregate(candidateAggregates(), 5000000000L));
         assertTrue(ex.getMessage().contains("does not have a node name"));
+    }
+
+    private List<Aggregate> candidateAggregates() {
+        Aggregate candidate = new Aggregate();
+        candidate.setName("aggr1");
+        candidate.setUuid("aggr-uuid-1");
+        return List.of(candidate);
     }
 
     // ========== createStorageVolume() Tests ==========
@@ -1274,26 +1320,6 @@ public class StorageStrategyTest {
     }
 
     // ========== Helper Methods ==========
-
-    private void setupSuccessfulConnect() {
-        Svm svm = new Svm();
-        svm.setName("svm1");
-        svm.setState(OntapStorageConstants.RUNNING);
-        svm.setNfsEnabled(true);
-
-        Aggregate aggregate = new Aggregate();
-        aggregate.setName("aggr1");
-        aggregate.setUuid("aggr-uuid-1");
-        svm.setAggregates(List.of(aggregate));
-
-        OntapResponse<Svm> svmResponse = new OntapResponse<>();
-        svmResponse.setRecords(List.of(svm));
-
-        when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(svmResponse);
-
-        Aggregate aggregateDetail = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a");
-        when(aggregateFeignClient.getAggregateByUUID(anyString(), eq("aggr-uuid-1"), anyMap())).thenReturn(aggregateDetail);
-    }
 
     private void setupSuccessfulJobCreation() {
         Job job = new Job();
