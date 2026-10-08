@@ -260,6 +260,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
             CloudStackVolume clonedCloudStackVolume = new CloudStackVolume();
             clonedCloudStackVolume.setLun(lun);
+            clonedCloudStackVolume.setVolumeInfo(cloudstackVolume.getVolumeInfo());
             return clonedCloudStackVolume;
         } catch (FeignException e) {
             logger.error("FeignException occurred while cloning LUN: {}, Status: {}, Exception: {}",

@@ -45,6 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
@@ -1006,8 +1007,10 @@ class UnifiedSANStrategyTest {
         lun.setName("/vol/vol1/cloned");
         lun.setClone(clone);
 
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
+        request.setVolumeInfo(volumeInfo);
 
         Lun clonedLun = new Lun();
         clonedLun.setName("/vol/vol1/cloned");
@@ -1027,6 +1030,7 @@ class UnifiedSANStrategyTest {
 
             assertNotNull(result);
             assertEquals("cloned-lun-uuid", result.getLun().getUuid());
+            assertSame(volumeInfo, result.getVolumeInfo());
             verify(sanFeignClient).createLun(eq(authHeader), eq(true), any(Lun.class));
         }
     }

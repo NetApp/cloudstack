@@ -2144,6 +2144,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lunRequest);
+        request.setVolumeInfo(volumeObject);
         return request;
     }
 
@@ -2205,6 +2206,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lunRequest);
+        request.setVolumeInfo(volumeInfo);
         return request;
     }
 

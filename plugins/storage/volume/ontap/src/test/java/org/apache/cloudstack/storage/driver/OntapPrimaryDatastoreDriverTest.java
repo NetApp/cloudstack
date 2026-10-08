@@ -86,6 +86,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -959,6 +960,7 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).cloneCloudStackVolume(requestCaptor.capture());
             assertEquals("/vol/vol1/cs_tmpl_50", requestCaptor.getValue().getLun().getClone().getSource().getName());
             assertEquals("template-lun-uuid", requestCaptor.getValue().getLun().getClone().getSource().getUuid());
+            assertSame(volumeInfo, requestCaptor.getValue().getVolumeInfo());
             verify(sanStrategy, never()).createCloudStackVolume(any());
             verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
             verify(sanStrategy, never()).updateCloudStackVolume(any());
@@ -1014,6 +1016,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertNull(lunRequest.getClone().getSource().getUuid());
             assertEquals("/vol/vol1/test_volume", lunRequest.getName());
             assertEquals("svm1", lunRequest.getSvm().getName());
+            assertSame(volumeInfo, requestCaptor.getValue().getVolumeInfo());
             verify(sanStrategy, never()).createCloudStackVolume(any());
             verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
             verify(volumeDetailsDao).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), eq("snap-cloned-lun-uuid"), eq(false));
@@ -3101,6 +3104,7 @@ class OntapPrimaryDatastoreDriverTest {
             assertEquals("/vol/vol1/.snapshot/snap_cs200/source_lun",
                     requestCaptor.getValue().getLun().getClone().getSource().getName());
             assertEquals("/vol/vol1/cs_tmp_snap_200_100", requestCaptor.getValue().getLun().getName());
+            assertSame(volumeInfo, requestCaptor.getValue().getVolumeInfo());
 
             assertEquals("cs_tmp_snap_200_100", dbVolume.getName());
             assertEquals("cs_tmp_snap_200_100", inMemoryVolume.getName());
