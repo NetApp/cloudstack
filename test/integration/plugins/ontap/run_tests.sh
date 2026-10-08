@@ -74,7 +74,7 @@ NFS3_SUITES=(
     "NFS3 pool lifecycle|nfs3_workflow|${ONTAP_DIR}/nfs3/pool/test_pool_lifecycle.py"
     "NFS3 pool with volumes|nfs3_with_volumes|${ONTAP_DIR}/nfs3/pool/test_pool_with_volumes.py"
     "NFS3 volume lifecycle|nfs3_volume|${ONTAP_DIR}/nfs3/volume/test_volume_lifecycle.py"
-    "NFS3 zone-scoped pool|zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
+    "NFS3 zone-scoped pool|nfs3_zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
     "NFS3 VM volume attach|vm_volume_workflow|${ONTAP_DIR}/nfs3/instance/test_vm_volume_attach.py"
     "NFS3 template cache negative|nfs3_template_cache_negative|${ONTAP_DIR}/nfs3/template/test_template_cache_negative.py"
 )
@@ -227,7 +227,7 @@ should_run_tag() {
             [[ "$tag" == iscsi_* ]]
             ;;
         nfs3)
-            [[ "$tag" == nfs3_* || "$tag" == "zone_pool" || "$tag" == "vm_volume_workflow" ]]
+            [[ "$tag" == nfs3_* || "$tag" == "vm_volume_workflow" ]]
             ;;
         *)
             [[ "$FILTER" == "$tag" ]]
