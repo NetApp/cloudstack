@@ -23,6 +23,7 @@ import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.storage.DataStoreRole;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
 import com.cloud.storage.SnapshotVO;
@@ -54,7 +55,6 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Lun;
-import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.VolumeSpace;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
@@ -84,19 +84,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -107,25 +100,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import static com.cloud.agent.api.to.DataObjectType.SNAPSHOT;
-import static com.cloud.agent.api.to.DataObjectType.TEMPLATE;
-import static com.cloud.agent.api.to.DataObjectType.VOLUME;
-import com.cloud.exception.InvalidParameterValueException;
-import com.cloud.host.Host;
-import com.cloud.host.HostVO;
-import com.cloud.hypervisor.Hypervisor;
-import com.cloud.storage.ResizeVolumePayload;
-import com.cloud.storage.ScopeType;
-import com.cloud.storage.Storage;
-import com.cloud.storage.VMTemplateStoragePoolVO;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.VolumeVO;
-import com.cloud.storage.dao.VMTemplatePoolDao;
-import com.cloud.storage.dao.VolumeDao;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.exception.CloudRuntimeException;
 
 @ExtendWith(MockitoExtension.class)
 class OntapPrimaryDatastoreDriverTest {
@@ -2077,6 +2051,9 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
             assertTrue(resultCaptor.getValue().getResult().contains("Unable to shrink volume"));
+        }
+    }
+
     private static VolumeVO temporarySnapshotCopyVolume() {
         return new VolumeVO(Volume.Type.DATADISK, "ROOT-5_20260924.TMP", 1L, 1L, 2L, 0L,
                 Storage.ProvisioningType.THIN, 5368709120L, 0L, 0L, "");
@@ -2271,6 +2248,10 @@ class OntapPrimaryDatastoreDriverTest {
             assertTrue(resultCaptor.getValue().getResult().contains("ONTAP resize failed"));
             // volumeVO size must NOT be updated on failure
             verify(volumeVO, never()).setSize(anyLong());
+        }
+    }
+
+    @Test
     void testCopyAsync_NfsTemporarySnapshotCopy_SetsFilePath() {
         VolumeVO dbVolume = temporarySnapshotCopyVolume();
         SnapshotInfo snapshotInfo = stubSnapshotToVolumeCopy(dbVolume);
@@ -2318,6 +2299,10 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
+        }
+    }
+
+    @Test
     void testCopyAsync_CloneFailsWithoutCallback_Throws() {
         SnapshotInfo snapshotInfo = stubSnapshotToVolumeCopy(temporarySnapshotCopyVolume());
         when(volumeInfo.getVolume()).thenReturn(temporarySnapshotCopyVolume());
@@ -2403,7 +2388,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        Volume flexVol = new Volume();
+        var flexVol = new org.apache.cloudstack.storage.feign.model.Volume();
         VolumeSpace space = new VolumeSpace();
         space.setUsed(10737418240L); // 10 GB
         flexVol.setSpace(space);
@@ -2433,6 +2418,10 @@ class OntapPrimaryDatastoreDriverTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> driver.getUsedBytes(storagePool));
             assertTrue(ex.getMessage().contains("was not found on ONTAP"));
+        }
+    }
+
+    @Test
     void testCopyAsync_CloneFailsWithCallback_CompletesWithFailure() {
         SnapshotInfo snapshotInfo = stubSnapshotToVolumeCopy(temporarySnapshotCopyVolume());
         when(volumeInfo.getVolume()).thenReturn(temporarySnapshotCopyVolume());
@@ -2485,7 +2474,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
 
-        Volume flexVol = new Volume();
+        var flexVol = new org.apache.cloudstack.storage.feign.model.Volume();
         // space is intentionally left null
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
@@ -2534,6 +2523,10 @@ class OntapPrimaryDatastoreDriverTest {
             assertTrue(ex.getMessage().contains("Could not read used space"));
             assertTrue(ex.getMessage().contains("invalid ONTAP response"));
             assertTrue(ex.getCause() instanceof IllegalStateException);
+        }
+    }
+
+    @Test
     void testGrantAccess_TemporarySnapshotCopy_SyncsIscsiPathOnInMemoryVolume() {
         String iscsiPath = "/iqn.1992-08.com.netapp:sn.123456/0";
         VolumeVO dbVolume = mock(VolumeVO.class);

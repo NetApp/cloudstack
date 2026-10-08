@@ -28,6 +28,7 @@ import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.storage.DataStoreRole;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.Storage;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
