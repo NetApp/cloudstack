@@ -22,6 +22,7 @@ package org.apache.cloudstack.storage.service;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.storage.ResizeVolumeCommand;
 import com.cloud.host.HostVO;
+import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.exception.CloudRuntimeException;
@@ -308,7 +309,8 @@ public class UnifiedNASStrategyTest {
         when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");
 
         VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
-        qosPolicy.setName("cs_100_to200_iops_svm1");
+        qosPolicy.setName("cs_100_to_200_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
         FileInfo fileInfo = new FileInfo();
         fileInfo.setQosPolicy(qosPolicy);
 
@@ -322,12 +324,14 @@ public class UnifiedNASStrategyTest {
         assertSame(request, result);
         verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid-123"),
                 argThat(file -> file.getQosPolicy() != null
-                        && "cs_100_to200_iops_svm1".equals(file.getQosPolicy().getName())));
+                        && "cs_100_to_200_iops_svm1".equals(file.getQosPolicy().getName())
+                        && "qos-uuid".equals(file.getQosPolicy().getUuid())));
     }
 
     @Test
     public void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
         assertThrows(CloudRuntimeException.class, () -> strategy.updateCloudStackVolume(new CloudStackVolume()));
+        verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
     }
 
     // Test createCloudStackVolume - Volume Not Found
@@ -1169,6 +1173,80 @@ public class UnifiedNASStrategyTest {
         VolumeVO volumeVO = mock(VolumeVO.class);
         StoragePoolVO storagePool = mock(StoragePoolVO.class);
         EndPoint endPoint = mock(EndPoint.class);
+        ResizeVolumePayload payload = new ResizeVolumePayload(
+                21474836480L, null, null, null, false, "i-2-VM", null, false);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeObject.getpayload()).thenReturn(payload);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("volume-uuid");
+        when(volumeVO.getSize()).thenReturn(5368709120L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(new Answer(null, true, "Success"));
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        strategy.resizeCloudStackVolume(request, 21474836480L);
+
+        ArgumentCaptor<ResizeVolumeCommand> commandCaptor = ArgumentCaptor.forClass(ResizeVolumeCommand.class);
+        verify(endPoint).sendMessage(commandCaptor.capture());
+        ResizeVolumeCommand command = commandCaptor.getValue();
+        assertEquals("volume-uuid", command.getPath());
+        assertEquals(5368709120L, command.getCurrentSize());
+        assertEquals(21474836480L, command.getNewSize());
+        assertEquals("i-2-VM", command.getInstanceName());
+        verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_AppliesQosAfterFileGrow() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+        ResizeVolumePayload payload = new ResizeVolumePayload(
+                21474836480L, 100L, 200L, null, false, "i-2-VM", null, false);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeObject.getpayload()).thenReturn(payload);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("volume-uuid");
+        when(volumeVO.getSize()).thenReturn(5368709120L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(new Answer(null, true, "Success"));
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to_200_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+        request.setFlexVolumeUuid("flex-uuid");
+        request.setFile(fileInfo);
+
+        strategy.resizeCloudStackVolume(request, 21474836480L);
+
+        verify(endPoint).sendMessage(any(ResizeVolumeCommand.class));
+        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid"),
+                argThat(file -> file.getQosPolicy() != null
+                        && "cs_100_to_200_iops_svm1".equals(file.getQosPolicy().getName())
+                        && "qos-uuid".equals(file.getQosPolicy().getUuid())));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_WithoutPayloadUsesDetachedInstanceName() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
 
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid");
@@ -1185,7 +1263,54 @@ public class UnifiedNASStrategyTest {
 
         strategy.resizeCloudStackVolume(request, 21474836480L);
 
-        verify(endPoint).sendMessage(any(ResizeVolumeCommand.class));
+        ArgumentCaptor<ResizeVolumeCommand> commandCaptor = ArgumentCaptor.forClass(ResizeVolumeCommand.class);
+        verify(endPoint).sendMessage(commandCaptor.capture());
+        assertEquals("none", commandCaptor.getValue().getInstanceName());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_AgentFailureThrowsException() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class)))
+                .thenReturn(new Answer(null, false, "qemu-img resize failed"));
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+        assertEquals("qemu-img resize failed", exception.getMessage());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_InvalidSizeDoesNotSendCommand() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(request, 0L));
+
+        verify(epSelector, never()).select(any(org.apache.cloudstack.engine.subsystem.api.storage.DataObject.class));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_NegativeSizeDoesNotSendCommand() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(request, -1L));
+
+        verify(epSelector, never()).select(any(org.apache.cloudstack.engine.subsystem.api.storage.DataObject.class));
     }
 
     @Test
@@ -1315,5 +1440,106 @@ public class UnifiedNASStrategyTest {
         request.setVolumeInfo(volumeObject);
 
         assertThrows(CloudRuntimeException.class, () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_VolumeNotFound_Throws() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(null);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+
+        assertTrue(exception.getMessage().contains("Volume not found"));
+        verify(epSelector, never()).select(any(org.apache.cloudstack.engine.subsystem.api.storage.DataObject.class));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_StoragePoolNotFound_Throws() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(null);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+
+        assertTrue(exception.getMessage().contains("Storage Pool not found"));
+        verify(epSelector, never()).select(any(org.apache.cloudstack.engine.subsystem.api.storage.DataObject.class));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_NullAnswer_Throws() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(null);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+
+        assertTrue(exception.getMessage().contains("Failed to resize qcow2 on KVM host"));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_AgentException_Propagates() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class)))
+                .thenThrow(new CloudRuntimeException("KVM agent unreachable"));
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+
+        assertEquals("KVM agent unreachable", exception.getMessage());
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_DeletedFile_ThrowsAgentError() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("deleted-volume.qcow2");
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class)))
+                .thenReturn(new Answer(null, false,
+                        "qemu-img: Could not open 'deleted-volume.qcow2': No such file or directory"));
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
+                () -> strategy.resizeCloudStackVolume(request, 21474836480L));
+
+        assertTrue(exception.getMessage().contains("No such file or directory"));
+        assertTrue(exception.getMessage().contains("deleted-volume.qcow2"));
     }
 }
