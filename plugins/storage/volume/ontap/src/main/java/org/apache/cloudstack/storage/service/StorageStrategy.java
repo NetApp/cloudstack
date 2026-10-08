@@ -67,6 +67,7 @@ import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
 
+import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
  *
@@ -846,6 +847,14 @@ public abstract class StorageStrategy {
      *
      * <p>ONTAP requires the source and the destination to live in the same FlexVolume, which
      * holds because a CloudStack primary storage pool maps one-to-one onto a FlexVolume.</p>
+     *
+     * <p>The source may be an active object or one inside a FlexVolume snapshot:</p>
+     * <ul>
+     *   <li><b>SAN</b> — {@code lun.clone.source.name} set to
+     *       {@code /vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
+     *   <li><b>NAS</b> — {@link CloudStackVolume#getSnapshotName()} set; it is sent as
+     *       {@code snapshot.name} on {@code POST /api/storage/file/clone}</li>
+     * </ul>
      *
      * @param cloudstackVolume describes the clone to create; the source is carried in the
      *                         protocol-specific clone reference (for SAN, {@code lun.clone.source})
