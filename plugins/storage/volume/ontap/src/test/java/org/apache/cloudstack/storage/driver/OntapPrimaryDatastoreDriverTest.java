@@ -2074,7 +2074,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("Minimum IOPS is not supported on FAS"));
+            assertTrue(resultCaptor.getValue().getResult().contains(OntapStorageConstants.MIN_IOPS_NOT_SUPPORTED_ON_FAS));
             verify(sanStrategy, never()).isAff();
             verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());
         }
@@ -2148,7 +2148,7 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
-            assertTrue(resultCaptor.getValue().getResult().contains("Minimum IOPS is not supported on FAS"));
+            assertTrue(resultCaptor.getValue().getResult().contains(OntapStorageConstants.MIN_IOPS_NOT_SUPPORTED_ON_FAS));
             verify(sanStrategy).isAff();
             verify(storagePoolDetailsDao).addDetail(1L, OntapStorageConstants.IS_AFF, "false", false);
             verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());

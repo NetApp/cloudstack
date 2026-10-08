@@ -331,8 +331,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 }
             }
             if (!Boolean.parseBoolean(isAff)) {
-                throw new CloudRuntimeException(
-                        "Minimum IOPS is not supported on FAS/non-AFF ONTAP platforms; only maximum IOPS is supported");
+                throw new CloudRuntimeException(OntapStorageConstants.MIN_IOPS_NOT_SUPPORTED_ON_FAS);
             }
         }
         return true;
