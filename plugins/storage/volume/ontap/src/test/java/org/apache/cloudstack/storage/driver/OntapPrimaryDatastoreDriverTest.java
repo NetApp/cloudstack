@@ -56,6 +56,7 @@ import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.VolumeSpace;
+import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
@@ -1681,34 +1682,30 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_IopsUpdate_AttachesQosPolicy() {
         long currentSize = 4L * 1024 * 1024 * 1024;
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 0L, 5000L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(null);
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false));
 
-        VolumeQosPolicy qosPolicy = qosPolicy("qos-uuid", "cs_0_to_5000_iops_svm1");
-        CloudStackVolume cloudStackVolume = iscsiCloudStackVolume();
+        VolumeQosPolicy qosPolicy = lookedUpQosPolicy("qos-uuid", "cs_0_to_5000_iops_svm1");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            stubQosCreateMocks(utilityMock, sanStrategy, cloudStackVolume, qosPolicy);
-            when(sanStrategy.updateCloudStackVolume(any())).thenReturn(cloudStackVolume);
+            stubQosCreateMocks(utilityMock, sanStrategy, iscsiCloudStackVolume(), qosPolicy);
 
             driver.resize(volumeInfo, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
-            verify(sanStrategy).updateCloudStackVolume(argThat(request ->
-                    request.getLun() != null && "lun-uuid-123".equals(request.getLun().getUuid())));
+            verify(sanStrategy).resizeCloudStackVolume(argThat(request ->
+                    request.getLun() != null
+                            && "lun-uuid-123".equals(request.getLun().getUuid())
+                            && isQosPolicyReference(request.getLun().getQosPolicy(), "qos-uuid", "cs_0_to_5000_iops_svm1")),
+                    eq(currentSize));
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
             verify(volumeDetailsDao).addDetail(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
         }
     }
@@ -1718,31 +1715,28 @@ class OntapPrimaryDatastoreDriverTest {
         long currentSize = 4L * 1024 * 1024 * 1024;
         storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 100L, 200L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
         when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(null);
 
-        VolumeQosPolicy qosPolicy = qosPolicy("qos-uuid", "cs_100_to_200_iops_svm1");
-        CloudStackVolume cloudStackVolume = nfsCloudStackVolume();
+        VolumeQosPolicy qosPolicy = lookedUpQosPolicy("qos-uuid", "cs_100_to_200_iops_svm1");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            stubQosCreateMocks(utilityMock, nasStrategy, cloudStackVolume, qosPolicy);
-            when(nasStrategy.updateCloudStackVolume(any())).thenReturn(cloudStackVolume);
+            stubQosCreateMocks(utilityMock, nasStrategy, nfsCloudStackVolume(), qosPolicy);
 
             driver.resize(volumeInfo, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
-            verify(nasStrategy).updateCloudStackVolume(any());
+            verify(nasStrategy).resizeCloudStackVolume(argThat(request ->
+                    "flex-uuid".equals(request.getFlexVolumeUuid())
+                            && request.getFile() != null
+                            && isQosPolicyReference(request.getFile().getQosPolicy(), "qos-uuid", "cs_100_to_200_iops_svm1")),
+                    eq(currentSize));
+            verify(nasStrategy, never()).updateCloudStackVolume(any());
             verify(volumeDetailsDao).addDetail(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
         }
     }
@@ -1750,30 +1744,24 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_SameQosPolicy_SkipsAttach() {
         long currentSize = 4L * 1024 * 1024 * 1024;
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 0L, 3333L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        VolumeDetailVO qosDetail = new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
 
         VolumeQosPolicy qosPolicy = qosPolicy("qos-uuid", "cs_0_to_3333_iops_svm1");
-        CloudStackVolume cloudStackVolume = iscsiCloudStackVolume();
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            stubQosCreateMocks(utilityMock, sanStrategy, cloudStackVolume, qosPolicy);
+            stubQosCreateMocks(utilityMock, sanStrategy, iscsiCloudStackVolume(), qosPolicy);
 
             driver.resize(volumeInfo, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
+            verify(sanStrategy).resizeCloudStackVolume(argThat(request -> request.getLun() == null), eq(currentSize));
             verify(sanStrategy, never()).updateCloudStackVolume(any());
         }
     }
@@ -1781,35 +1769,29 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_ClearIops_DetachesQosPolicy() {
         long currentSize = 4L * 1024 * 1024 * 1024;
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 0L, 0L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        VolumeDetailVO qosDetail = new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false));
 
-        CloudStackVolume cloudStackVolume = iscsiCloudStackVolume();
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.updateCloudStackVolume(any())).thenReturn(cloudStackVolume);
 
             driver.resize(volumeInfo, createCallback);
 
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
-            verify(sanStrategy).updateCloudStackVolume(argThat(request ->
-                    request.getLun() != null && request.getLun().getQosPolicy() != null
-                            && OntapStorageConstants.QOS_POLICY_NONE.equals(request.getLun().getQosPolicy().getName())));
+            verify(sanStrategy).resizeCloudStackVolume(argThat(request ->
+                    request.getLun() != null
+                            && isQosPolicyReference(request.getLun().getQosPolicy(), null, OntapStorageConstants.QOS_POLICY_NONE)),
+                    eq(currentSize));
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
             verify(sanStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
     }
@@ -1817,27 +1799,19 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_SwitchIops_OldPolicyDeleteFails_StillSucceeds() {
         long currentSize = 4L * 1024 * 1024 * 1024;
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 0L, 5000L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        VolumeDetailVO qosDetail = new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "old-qos-uuid", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "old-qos-uuid", false));
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false));
 
-        VolumeQosPolicy qosPolicy = qosPolicy("new-qos-uuid", "cs_0_to_5000_iops_svm1");
-        CloudStackVolume cloudStackVolume = iscsiCloudStackVolume();
+        VolumeQosPolicy qosPolicy = lookedUpQosPolicy("new-qos-uuid", "cs_0_to_5000_iops_svm1");
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
-            stubQosCreateMocks(utilityMock, sanStrategy, cloudStackVolume, qosPolicy);
-            when(sanStrategy.updateCloudStackVolume(any())).thenReturn(cloudStackVolume);
+            stubQosCreateMocks(utilityMock, sanStrategy, iscsiCloudStackVolume(), qosPolicy);
             doThrow(new CloudRuntimeException("ONTAP QoS delete failed")).when(sanStrategy)
                     .deleteVolumeQosPolicy("old-qos-uuid");
 
@@ -1846,6 +1820,10 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
             verify(createCallback).complete(resultCaptor.capture());
             assertTrue(resultCaptor.getValue().isSuccess());
+            verify(sanStrategy).resizeCloudStackVolume(argThat(request ->
+                    request.getLun() != null
+                            && isQosPolicyReference(request.getLun().getQosPolicy(), "new-qos-uuid", "cs_0_to_5000_iops_svm1")),
+                    eq(currentSize));
             verify(volumeDetailsDao).addDetail(100L, OntapStorageConstants.QOS_POLICY_UUID, "new-qos-uuid", false);
             verify(sanStrategy).deleteVolumeQosPolicy("old-qos-uuid");
             verify(sanStrategy, never()).deleteVolumeQosPolicy("new-qos-uuid");
@@ -1855,26 +1833,18 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testResize_ClearIops_OldPolicyDeleteFails_StillSucceeds() {
         long currentSize = 4L * 1024 * 1024 * 1024;
-        when(volumeInfo.getId()).thenReturn(100L);
+        stubResizeVolumeRecord(currentSize);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 0L, 0L, null, false, null, null, true));
-        when(volumeDao.findById(100L)).thenReturn(volumeVO);
-        when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
-        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
-        when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getCapacityIops()).thenReturn(null);
-        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
-        VolumeDetailVO qosDetail = new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID)).thenReturn(qosDetail);
-        VolumeDetailVO lunUuidDetail = new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false);
-        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(lunUuidDetail);
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.QOS_POLICY_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
+        when(volumeDetailsDao.findDetail(100L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(100L, OntapStorageConstants.LUN_DOT_UUID, "lun-uuid-123", false));
 
-        CloudStackVolume cloudStackVolume = iscsiCloudStackVolume();
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
                     .thenReturn(sanStrategy);
-            when(sanStrategy.updateCloudStackVolume(any())).thenReturn(cloudStackVolume);
             doThrow(new CloudRuntimeException("ONTAP QoS delete failed")).when(sanStrategy)
                     .deleteVolumeQosPolicy("qos-uuid");
 
@@ -1894,12 +1864,15 @@ class OntapPrimaryDatastoreDriverTest {
         when(otherVolume.getId()).thenReturn(50L);
         when(otherVolume.getMinIops()).thenReturn(800L);
 
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        when(dataStore.getId()).thenReturn(1L);
         when(volumeInfo.getId()).thenReturn(100L);
         when(volumeInfo.getpayload()).thenReturn(
                 new ResizeVolumePayload(currentSize, 300L, 1000L, null, false, null, null, true));
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeVO.getId()).thenReturn(100L);
-        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(volumeVO.getSize()).thenReturn(currentSize);
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePool.getName()).thenReturn("ontap-pool");
@@ -1913,6 +1886,7 @@ class OntapPrimaryDatastoreDriverTest {
         assertFalse(resultCaptor.getValue().isSuccess());
         assertTrue(resultCaptor.getValue().getResult().contains(
                 "requested total of 1100 IOPS exceeds the pool IOPS capacity of 1000"));
+        verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
         verify(sanStrategy, never()).updateCloudStackVolume(any());
     }
 
@@ -2439,6 +2413,31 @@ class OntapPrimaryDatastoreDriverTest {
         return policy;
     }
 
+    /**
+     * Policy as returned by an ONTAP lookup: name and uuid plus fields that must not be sent on a resize.
+     */
+    private VolumeQosPolicy lookedUpQosPolicy(String uuid, String name) {
+        VolumeQosPolicy policy = qosPolicy(uuid, name);
+        Svm svm = new Svm();
+        svm.setName("svm1");
+        policy.setSvm(svm);
+        VolumeQosPolicy.Fixed fixed = new VolumeQosPolicy.Fixed();
+        fixed.setMinThroughputIops(100L);
+        fixed.setMaxThroughputIops(5000L);
+        policy.setFixed(fixed);
+        policy.setObjectCount(2);
+        return policy;
+    }
+
+    private boolean isQosPolicyReference(VolumeQosPolicy sent, String uuid, String name) {
+        return sent != null
+                && name.equals(sent.getName())
+                && (uuid == null ? sent.getUuid() == null : uuid.equals(sent.getUuid()))
+                && sent.getSvm() == null
+                && sent.getFixed() == null
+                && sent.getObjectCount() == null;
+    }
+
     private void stubQosCreateMocks(MockedStatic<OntapStorageUtils> utilityMock,
                                     StorageStrategy strategy,
                                     CloudStackVolume cloudStackVolume, VolumeQosPolicy qosPolicy) {
@@ -2643,6 +2642,21 @@ class OntapPrimaryDatastoreDriverTest {
     // =========================================================================
     // resize() tests
     // =========================================================================
+
+    private void stubResizeVolumeRecord(long currentSize) {
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getDataStore()).thenReturn(dataStore);
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getId()).thenReturn(100L);
+        when(volumeVO.getSize()).thenReturn(currentSize);
+        lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
+        when(volumeDao.update(100L, volumeVO)).thenReturn(true);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+    }
 
     private DataObject stubResizeCommon(long currentSize, long newSize) {
         ResizeVolumePayload payload = new ResizeVolumePayload(newSize, null, null, null, false, "i-2-VM", null, false);

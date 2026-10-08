@@ -36,6 +36,7 @@ import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.LunSpace;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
+import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
@@ -195,24 +196,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        if (cloudstackVolume == null || cloudstackVolume.getLun() == null
-                || cloudstackVolume.getLun().getUuid() == null) {
-            throw new CloudRuntimeException("Invalid iSCSI volume QoS update request");
-        }
-        Lun lunUpdate = new Lun();
-        lunUpdate.setQosPolicy(cloudstackVolume.getLun().getQosPolicy());
-        try {
-            JobResponse response = sanFeignClient.updateLun(
-                    getAuthHeader(), cloudstackVolume.getLun().getUuid(), lunUpdate);
-            pollJobIfPresent(response, "update QoS policy on LUN [" + cloudstackVolume.getLun().getUuid() + "]");
-        } catch (FeignException e) {
-            throw new CloudRuntimeException("Failed to apply QoS policy to LUN: " + e.getMessage(), e);
-        }
-        logger.info("Applied QoS policy [{}] to LUN [{}]",
-                cloudstackVolume.getLun().getQosPolicy() != null
-                        ? cloudstackVolume.getLun().getQosPolicy().getName() : null,
-                cloudstackVolume.getLun().getUuid());
-        return cloudstackVolume;
+        return null;
     }
 
     @Override
@@ -317,6 +301,8 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
 
         // Resolve LUN UUID from volume details when not pre-populated on the cloudstackVolume
+        // Keep a QoS policy already set on the request so size and QoS go out in one LUN update.
+        VolumeQosPolicy qosPolicy = cloudstackVolume.getLun() != null ? cloudstackVolume.getLun().getQosPolicy() : null;
         if (cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
             logger.debug("LUN details not present on cloudstackVolume, resolving UUID from volume details");
             long volumeId = cloudstackVolume.getVolumeInfo().getId();
@@ -337,9 +323,10 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             LunSpace lunSpace = new LunSpace();
             lunSpace.setSize(sizeInBytes);
-            Lun patch = new Lun();
-            patch.setSpace(lunSpace);
-            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            Lun lunPatch = new Lun();
+            lunPatch.setSpace(lunSpace);
+            lunPatch.setQosPolicy(qosPolicy);
+            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, lunPatch);
             pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
             logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
         } catch (FeignException e) {

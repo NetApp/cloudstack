@@ -891,6 +891,11 @@ public abstract class StorageStrategy {
      *
      * <p>Needed after cloning a cached template, because a clone inherits the size of its source
      * while the service offering may ask for a larger disk.</p>
+     *
+     * <p>When the request already carries a QoS policy on the LUN or file, that policy is applied
+     * as part of this resize. iSCSI sends one LUN update with the new size and the policy.
+     * NFS grows the file on the host, then updates the file policy. A request with no policy
+     * changes size only.</p>
      */
     abstract public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes);
 

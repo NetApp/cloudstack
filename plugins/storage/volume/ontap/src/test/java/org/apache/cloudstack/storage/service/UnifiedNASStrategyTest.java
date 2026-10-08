@@ -304,12 +304,12 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
-    public void testUpdateCloudStackVolume_AppliesQosPolicy() {
+    public void testUpdateCloudStackVolume_ReturnsNull() {
         VolumeInfo volumeInfo = mock(VolumeInfo.class);
         when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");
 
         VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
-        qosPolicy.setName("cs_100_to200_iops_svm1");
+        qosPolicy.setName("cs_100_to_200_iops_svm1");
         FileInfo fileInfo = new FileInfo();
         fileInfo.setQosPolicy(qosPolicy);
 
@@ -318,17 +318,9 @@ public class UnifiedNASStrategyTest {
         request.setFlexVolumeUuid("flex-uuid");
         request.setFile(fileInfo);
 
-        CloudStackVolume result = strategy.updateCloudStackVolume(request);
-
-        assertSame(request, result);
-        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid-123"),
-                argThat(file -> file.getQosPolicy() != null
-                        && "cs_100_to200_iops_svm1".equals(file.getQosPolicy().getName())));
-    }
-
-    @Test
-    public void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
-        assertThrows(CloudRuntimeException.class, () -> strategy.updateCloudStackVolume(new CloudStackVolume()));
+        assertNull(strategy.updateCloudStackVolume(request));
+        assertNull(strategy.updateCloudStackVolume(new CloudStackVolume()));
+        verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
     }
 
     // Test createCloudStackVolume - Volume Not Found
@@ -1196,6 +1188,46 @@ public class UnifiedNASStrategyTest {
         assertEquals(5368709120L, command.getCurrentSize());
         assertEquals(21474836480L, command.getNewSize());
         assertEquals("i-2-VM", command.getInstanceName());
+        verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
+    }
+
+    @Test
+    public void testResizeCloudStackVolume_AppliesQosAfterFileGrow() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        StoragePoolVO storagePool = mock(StoragePoolVO.class);
+        EndPoint endPoint = mock(EndPoint.class);
+        ResizeVolumePayload payload = new ResizeVolumePayload(
+                21474836480L, 100L, 200L, null, false, "i-2-VM", null, false);
+
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid");
+        when(volumeObject.getpayload()).thenReturn(payload);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getPath()).thenReturn("volume-uuid");
+        when(volumeVO.getSize()).thenReturn(5368709120L);
+        when(volumeVO.getPoolId()).thenReturn(1L);
+        when(primaryDataStoreDao.findById(1L)).thenReturn(storagePool);
+        when(epSelector.select(volumeObject)).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(ResizeVolumeCommand.class))).thenReturn(new Answer(null, true, "Success"));
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to_200_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeObject);
+        request.setFlexVolumeUuid("flex-uuid");
+        request.setFile(fileInfo);
+
+        strategy.resizeCloudStackVolume(request, 21474836480L);
+
+        verify(endPoint).sendMessage(any(ResizeVolumeCommand.class));
+        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid"),
+                argThat(file -> file.getQosPolicy() != null
+                        && "cs_100_to_200_iops_svm1".equals(file.getQosPolicy().getName())
+                        && "qos-uuid".equals(file.getQosPolicy().getUuid())));
     }
 
     @Test

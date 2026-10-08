@@ -45,7 +45,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,7 +54,6 @@ import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -1097,6 +1095,28 @@ class UnifiedSANStrategyTest {
         ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
         verify(sanFeignClient).updateLun(any(), eq("lun-uuid-123"), lunCaptor.capture());
         assertEquals(21474836480L, lunCaptor.getValue().getSpace().getSize());
+        assertNull(lunCaptor.getValue().getQosPolicy());
+    }
+
+    @Test
+    void testResizeCloudStackVolume_PatchesSizeAndQosTogether() {
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_0_to_5000_iops_svm1");
+        qosPolicy.setUuid("qos-uuid");
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        lun.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+        request.setVolumeInfo(mock(VolumeInfo.class));
+
+        unifiedSANStrategy.resizeCloudStackVolume(request, 21474836480L);
+
+        ArgumentCaptor<Lun> lunCaptor = ArgumentCaptor.forClass(Lun.class);
+        verify(sanFeignClient).updateLun(any(), eq("lun-uuid-123"), lunCaptor.capture());
+        assertEquals(21474836480L, lunCaptor.getValue().getSpace().getSize());
+        assertEquals("cs_0_to_5000_iops_svm1", lunCaptor.getValue().getQosPolicy().getName());
+        assertEquals("qos-uuid", lunCaptor.getValue().getQosPolicy().getUuid());
     }
 
     @Test
@@ -1320,35 +1340,18 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
-        CloudStackVolume request = new CloudStackVolume();
-        assertThrows(CloudRuntimeException.class,
-            () -> unifiedSANStrategy.updateCloudStackVolume(request));
-    }
-
-    @Test
-    void testUpdateCloudStackVolume_AppliesQosPolicyToLun() {
+    void testUpdateCloudStackVolume_ReturnsNull() {
         Lun lun = new Lun();
         lun.setUuid("lun-uuid-123");
         VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
-        qosPolicy.setName("cs_0_to5000_iops_svm1");
+        qosPolicy.setName("cs_0_to_5000_iops_svm1");
         lun.setQosPolicy(qosPolicy);
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
 
-        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
-            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
-                    .thenReturn(authHeader);
-            when(sanFeignClient.updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class)))
-                    .thenReturn(null);
-
-            CloudStackVolume result = unifiedSANStrategy.updateCloudStackVolume(request);
-
-            assertSame(request, result);
-            verify(sanFeignClient).updateLun(eq(authHeader), eq("lun-uuid-123"), argThat(update ->
-                    update.getQosPolicy() != null
-                            && "cs_0_to5000_iops_svm1".equals(update.getQosPolicy().getName())));
-        }
+        assertNull(unifiedSANStrategy.updateCloudStackVolume(request));
+        assertNull(unifiedSANStrategy.updateCloudStackVolume(new CloudStackVolume()));
+        verify(sanFeignClient, never()).updateLun(any(), any(), any());
     }
 
     @Test
