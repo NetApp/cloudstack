@@ -18,20 +18,22 @@ package com.cloud.hypervisor.kvm.storage;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.util.regex.Pattern;
 
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImg.PhysicalDiskFormat;
 import org.apache.cloudstack.utils.qemu.QemuImgException;
 import org.apache.cloudstack.utils.qemu.QemuImgFile;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.libvirt.LibvirtException;
 
 import com.cloud.agent.api.to.DiskTO;
@@ -43,30 +45,79 @@ import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
 
 /**
- * Host-side adaptor for {@link StoragePoolType#OntapiSCSI}
- * Must remain in {@code com.cloud.hypervisor.kvm.storage}: {@link KVMStoragePoolManager}
- * discovers adaptors only in that package. An unregistered type falls back to
- * {@link LibvirtStorageAdaptor}.
+ * Serves {@link StoragePoolType#OntapiSCSI} pools: ONTAP FlexVols exposed over iSCSI with one LUN
+ * per CloudStack volume.
+ *
+ * This must stay in the {@code com.cloud.hypervisor.kvm.storage} package: {@link KVMStoragePoolManager}
+ * discovers adaptors by a Reflections scan of that package alone, and an unregistered type silently
+ * falls back to {@link LibvirtStorageAdaptor} rather than failing at startup.
+ *
+ * <h2>Devices are identified by LUN WWID, never by logical unit number</h2>
+ *
+ * {@link IscsiAdmStorageAdaptor}, which serves the other iSCSI vendors, names devices by their
+ * {@code /dev/disk/by-path/...-lun-N} alias. ONTAP exposes every LUN of an SVM through a single
+ * target IQN and assigns the logical unit number per igroup, so one LUN answers at a different
+ * number on each host and that alias is host-specific.
+ *
+ * That breaks live migration. {@code LibvirtMigrateCommandWrapper} only rewrites disk sources when
+ * storage is migrated too; a plain host-to-host migration ships the source domain XML verbatim, so
+ * the destination would open whichever LUN occupied that number there - silently, and possibly
+ * another running instance's disk.
+ *
+ * So {@code OntapPrimaryDatastoreDriver} writes volume paths as {@code /<targetIQN>/<lunWwid>} and
+ * this adaptor reports devices as {@code /dev/disk/by-id/scsi-3<lunWwid>}. The WWID is derived from
+ * the LUN's own inquiry data (VPD page 0x83), so it is identical on every host and the domain XML
+ * needs no rewriting during migration. PowerFlex resolves the same problem the same way, and it is
+ * how vSphere identifies LUNs ({@code naa.<wwid>}).
+ *
+ * Nothing here reads {@code /dev/disk/by-path}. Where the superclass derives the portal, IQN and
+ * logical unit number by parsing that alias, this reads them back from the device's iSCSI session
+ * in sysfs.
+ *
+ * <h2>Why this implements the interface rather than extending the iSCSI adaptor</h2>
+ *
+ * Device naming runs through nearly every method that does real work - connect waits on the device,
+ * disconnect locates and releases it, and the teardown decision depends on enumerating the LUNs of
+ * a session. Inheriting those and overriding each one left the two classes coupled through
+ * behaviour neither could change safely. The genuinely shared part is the iscsiadm session
+ * handling, which is short, and {@link IscsiAdmStoragePool} is reused as-is.
  */
 public class OntapIscsiStorageAdaptor implements StorageAdaptor {
+
     protected Logger logger = LogManager.getLogger(getClass());
 
-    private static final Map<String, KVMStoragePool> MapStorageUuidToStoragePool = new HashMap<>();
+    private static final Map<String, KVMStoragePool> MAP_STORAGE_UUID_TO_STORAGE_POOL = new HashMap<>();
+
+    /**
+     * udev's scsi_id builtin prepends the NAA designator type to the WWID, so a LUN whose WWID is
+     * {@code 600a0980...} is published as {@code scsi-3600a0980...}.
+     */
+    private static final String BY_ID_SCSI_PREFIX = "/dev/disk/by-id/scsi-3";
+
+    /**
+     * A LUN WWID is NetApp's NAA prefix (type 6, OUI 00a098, vendor nibble 0) followed by the hex of
+     * a 12-character serial: 32 hex digits. The prefix must stay in step with NETAPP_NAA_OUI in the
+     * ONTAP storage plugin, which builds every WWID this adaptor sees. Lower case only: udev
+     * publishes lower case, and so does the plugin.
+     *
+     * Anchoring on the prefix is what stops this adaptor claiming another vendor's scsi-3 device
+     * when KVMStoragePoolManager.disconnectPhysicalDiskByPath scans every adaptor.
+     */
+    private static final Pattern LUN_WWID = Pattern.compile("600a0980[0-9a-f]{24}");
+
+    private static final String SYS_BLOCK = "/sys/block";
+    private static final String SYS_ISCSI_SESSION = "/sys/class/iscsi_session";
+    private static final String SESSION_DIR_PREFIX = "session";
 
     /** iscsiadm's ISCSI_ERR_NO_OBJS_FOUND: returned by "-m session" when no session is established. */
     private static final int ISCSI_ERR_NO_OBJS_FOUND = 21;
 
-    /** iscsiadm's ISCSI_ERR_SESS_EXISTS: returned by "--login" when the session is already logged in (e.g. Ubuntu). */
+    /** iscsiadm's ISCSI_ERR_SESS_EXISTS: returned by "--login" when already logged in (e.g. Ubuntu). */
     private static final int ISCSI_SESSION_EXISTS_CODE = 15;
 
-    @Override
-    public KVMStoragePool createStoragePool(String uuid, String host, int port, String path, String userInfo, StoragePoolType storagePoolType, Map<String, String> details, boolean isPrimaryStorage) {
-        IscsiAdmStoragePool storagePool = new IscsiAdmStoragePool(uuid, host, port, storagePoolType, this);
-
-        MapStorageUuidToStoragePool.put(uuid, storagePool);
-
-        return storagePool;
-    }
+    private static final int DEVICE_WAIT_TRIES = 15;
+    private static final int DEVICE_WAIT_INTERVAL_MS = 1000;
+    private static final int DEFAULT_ISCSI_PORT = 3260;
 
     @Override
     public StoragePoolType getStoragePoolType() {
@@ -74,18 +125,28 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
     }
 
     @Override
+    public KVMStoragePool createStoragePool(String uuid, String host, int port, String path, String userInfo,
+                                            StoragePoolType storagePoolType, Map<String, String> details, boolean isPrimaryStorage) {
+        IscsiAdmStoragePool storagePool = new IscsiAdmStoragePool(uuid, host, port, storagePoolType, this);
+
+        MAP_STORAGE_UUID_TO_STORAGE_POOL.put(uuid, storagePool);
+
+        return storagePool;
+    }
+
+    @Override
     public KVMStoragePool getStoragePool(String uuid) {
-        return MapStorageUuidToStoragePool.get(uuid);
+        return MAP_STORAGE_UUID_TO_STORAGE_POOL.get(uuid);
     }
 
     @Override
     public KVMStoragePool getStoragePool(String uuid, boolean refreshInfo) {
-        return MapStorageUuidToStoragePool.get(uuid);
+        return MAP_STORAGE_UUID_TO_STORAGE_POOL.get(uuid);
     }
 
     @Override
     public boolean deleteStoragePool(String uuid) {
-        return MapStorageUuidToStoragePool.remove(uuid) != null;
+        return MAP_STORAGE_UUID_TO_STORAGE_POOL.remove(uuid) != null;
     }
 
     @Override
@@ -93,257 +154,14 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
         return deleteStoragePool(pool.getUuid());
     }
 
-    // called from LibvirtComputingResource.execute(CreateCommand)
-    // does not apply for OntapIscsiStorageAdaptor
-    @Override
-    public KVMPhysicalDisk createPhysicalDisk(String volumeUuid, KVMStoragePool pool, PhysicalDiskFormat format, Storage.ProvisioningType provisioningType, long size, byte[] passphrase) {
-        throw new UnsupportedOperationException("Creating a physical disk is not supported.");
-    }
-
-    @Override
-    public boolean connectPhysicalDisk(String volumeUuid, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
-        final String host = pool.getSourceHost();
-        final int port = pool.getSourcePort();
-        final String iqn = getIqn(volumeUuid);
-
-        // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 -o new
-        Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", iqn);
-        iScsiAdmCmd.add("-p", host + ":" + port);
-        iScsiAdmCmd.add("-o", "new");
-
-        String result = iScsiAdmCmd.execute();
-
-        if (!handleNodeCreateResult(result, volumeUuid)) {
-            return false;
-        }
-
-        String chapInitiatorUsername = details.get(DiskTO.CHAP_INITIATOR_USERNAME);
-        String chapInitiatorSecret = details.get(DiskTO.CHAP_INITIATOR_SECRET);
-
-        if (StringUtils.isNoneBlank(chapInitiatorUsername, chapInitiatorSecret)) {
-            try {
-                // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --op update -n node.session.auth.authmethod -v CHAP
-                executeChapCommand(volumeUuid, pool, "node.session.auth.authmethod", "CHAP", null);
-
-                // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --op update -n node.session.auth.username -v username
-                executeChapCommand(volumeUuid, pool, "node.session.auth.username", chapInitiatorUsername, "username");
-
-                // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --op update -n node.session.auth.password -v password
-                executeChapCommand(volumeUuid, pool, "node.session.auth.password", chapInitiatorSecret, "password");
-            } catch (Exception ex) {
-                return false;
-            }
-        }
-
-        // Login is always attempted (idempotent). Rescan runs only if the session already existed
-        // before login (Oracle re-login exits 0; Ubuntu may return ISCSI_ERR_SESS_EXISTS).
-        if (!loginOrRescanExistingSession(iqn, host, port, volumeUuid)) {
-            return false;
-        }
-
-        // There appears to be a race condition where logging in to the iSCSI volume via iscsiadm
-        // returns success before the device has been added to the OS.
-        // What happens is you get logged in and the device shows up, but the device may not
-        // show up before we invoke Libvirt to attach the device to a VM.
-        // waitForDiskToBecomeAvailable(String, KVMStoragePool) invokes blockdev
-        // via getPhysicalDisk(String, KVMStoragePool) and checks if the size came back greater
-        // than 0.
-        // After a certain number of tries and a certain waiting period in between tries,
-        // this method could still return (it should not block indefinitely) (the race condition
-        // isn't solved here, but made highly unlikely to be a problem).
-        // If the by-path is missing or is a regular file (not the iSCSI block symlink), size
-        // stays 0. Return false so connect does not succeed and a raw file is not created at
-        // that by-path in place of the real LUN device.
-        if (!waitForDiskToBecomeAvailable(volumeUuid, pool)) {
-            logger.warn("iSCSI device not ready for target {} at {}:{} after wait", volumeUuid, host, port);
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * Checks the result of an iscsiadm node-create command.
-     * Returns true if the node was created or already exists, false on failure.
-     */
-    boolean handleNodeCreateResult(String result, String volumeUuid) {
-        if (result == null) {
-            logger.debug("Successfully added iSCSI node for target {}", volumeUuid);
-            return true;
-        }
-        String msg = result.toLowerCase();
-        if (msg.contains("already exists") || msg.contains("database exists") || msg.contains("exists")) {
-            logger.debug("iSCSI node already exists for target {}, proceeding", volumeUuid);
-            return true;
-        }
-        logger.debug("Failed to add iSCSI node for target {}: {}", volumeUuid, result);
-        return false;
-    }
-
-    /**
-     * Checks existing session state, performs login, and rescans only if the session already existed.
-     *
-     * Login is always attempted (idempotent). A pre-login session check is required on Oracle,
-     * where re-login often exits 0; Ubuntu may instead return ISCSI_ERR_SESS_EXISTS (15).
-     * Session-preexisted must be treated as success first: on Ubuntu, re-login exits 15 with a
-     * non-null error message that would otherwise be treated as failure.
-     *
-     * @return true if login succeeded (and rescan ran when needed), false on login failure
-     */
-    private boolean loginOrRescanExistingSession(String iqn, String host, int port, String volumeUuid) {
-        boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host, port);
-        logger.debug("iSCSI session active check for target {} at {}:{}: {}", iqn, host, port, sessionAlreadyActive);
-
-        Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", iqn);
-        iScsiAdmCmd.add("-p", host + ":" + port);
-        iScsiAdmCmd.add("--login");
-
-        String result = iScsiAdmCmd.execute();
-        boolean sessionPreExisted = (iScsiAdmCmd.getExitValue() == ISCSI_SESSION_EXISTS_CODE) || sessionAlreadyActive;
-
-        if (sessionPreExisted) {
-            logger.debug("iSCSI session for target {} at {}:{} pre-existed, performing rescan", iqn, host, port);
-            rescanIscsiSessions(iqn, host, port);
-            return true;
-        }
-        if (result == null) {
-            logger.debug("Successfully logged in to iSCSI target {}", volumeUuid);
-            return true;
-        }
-        logger.debug("Failed to log in to iSCSI target {}: {}", volumeUuid, result);
-        return false;
-    }
-
-    /**
-     * Checks whether a session to the given target and portal is already established.
-     *
-     * "iscsiadm -m session" exits with ISCSI_ERR_NO_OBJS_FOUND when no session exists, which is a
-     * normal outcome here. Any other non-zero exit is logged and treated as not confirmed active.
-     */
-    private boolean isIscsiSessionActive(String iqn, String host, int port) {
-        Script sessionCmd = new Script(true, "iscsiadm", 0, logger);
-        sessionCmd.add("-m", "session");
-
-        OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
-        sessionCmd.executeIgnoreExitValue(parser, ISCSI_ERR_NO_OBJS_FOUND);
-        int exitValue = sessionCmd.getExitValue();
-        if (exitValue != 0 && exitValue != ISCSI_ERR_NO_OBJS_FOUND) {
-            logger.warn("Unable to determine iSCSI session state for target {} at {}:{}: 'iscsiadm -m session' exited with {}",
-                    iqn, host, port, exitValue);
-            return false;
-        }
-
-        String sessions = parser.getLines();
-        if (StringUtils.isBlank(sessions)) {
-            return false;
-        }
-        // AllLinesParser uses BufferedReader.readLine() (strips \n, \r\n, and \r) and then
-        // appends "\n" after each session. split("\n") depends on that separator to walk
-        // one session per line when multiple sessions are listed.
-        for (String line : sessions.split("\n")) {
-            if (line.contains(iqn) && line.contains(host)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void rescanIscsiSessions(String iqn, String host, int port) {
-        Script rescanCmd = new Script(true, "iscsiadm", 0, logger);
-        rescanCmd.add("-m", "node");
-        rescanCmd.add("-T", iqn);
-        rescanCmd.add("-p", host + ":" + port);
-        rescanCmd.add("--rescan");
-        String rescanResult = rescanCmd.execute();
-        if (rescanResult != null) {
-            logger.warn("iSCSI session rescan returned: {}", rescanResult);
-        } else {
-            logger.debug("iSCSI session rescan completed successfully for {}@{}:{}", iqn, host, port);
-        }
-    }
-
-    private boolean waitForDiskToBecomeAvailable(String volumeUuid, KVMStoragePool pool) {
-        int numberOfTries = 10;
-        int timeBetweenTries = 1000;
-        long deviceSize = 0;
-
-        while ((deviceSize = getPhysicalDisk(volumeUuid, pool).getSize()) == 0 && numberOfTries > 0) {
-            numberOfTries--;
-
-            try {
-                Thread.sleep(timeBetweenTries);
-            } catch (InterruptedException ex) {
-                logger.warn("Interrupted while waiting for iSCSI device {} to become available", volumeUuid, ex);
-                return false;
-            }
-        }
-
-        return deviceSize > 0;
-    }
-
-    private void waitForDiskToBecomeUnavailable(String host, int port, String iqn, String lun) {
-        int numberOfTries = 10;
-        int timeBetweenTries = 1000;
-
-        String deviceByPath = getByPath(host, port, "/" + iqn + "/" + lun);
-
-        while (getDeviceSize(deviceByPath) > 0 && numberOfTries > 0) {
-            numberOfTries--;
-
-            try {
-                Thread.sleep(timeBetweenTries);
-            } catch (Exception ex) {
-                // don't do anything
-            }
-        }
-    }
-
-    private void executeChapCommand(String path, KVMStoragePool pool, String nParameter, String vParameter, String detail) throws Exception {
-        Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", getIqn(path));
-        iScsiAdmCmd.add("-p", pool.getSourceHost() + ":" + pool.getSourcePort());
-        iScsiAdmCmd.add("--op", "update");
-        iScsiAdmCmd.add("-n", nParameter);
-        iScsiAdmCmd.add("-v", vParameter);
-
-        String result = iScsiAdmCmd.execute();
-
-        boolean useDetail = detail != null && detail.trim().length() > 0;
-
-        detail = useDetail ? detail.trim() + " " : detail;
-
-        if (result != null) {
-            logger.debug("Failed to execute CHAP " + (useDetail ? detail : "") + "command for iSCSI target " + path + " : message = " + result);
-            System.out.println("Failed to execute CHAP " + (useDetail ? detail : "") + "command for iSCSI target " + path + " : message = " + result);
-
-            throw new Exception("Failed to execute CHAP " + (useDetail ? detail : "") + "command for iSCSI target " + path + " : message = " + result);
-        } else {
-            logger.debug("CHAP " + (useDetail ? detail : "") + "command executed successfully for iSCSI target " + path);
-            System.out.println("CHAP " + (useDetail ? detail : "") + "command executed successfully for iSCSI target " + path);
-        }
-    }
-
-    // example by-path: /dev/disk/by-path/ip-192.168.233.10:3260-iscsi-iqn.2012-03.com.solidfire:storagepool2-lun-0
-    private String getByPath(String host, int port, String path) {
-        return "/dev/disk/by-path/ip-" + host + ":" + port + "-iscsi-" + getIqn(path) + "-lun-" + getLun(path);
-    }
-
     @Override
     public KVMPhysicalDisk getPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
-        String deviceByPath = getByPath(pool.getSourceHost(), pool.getSourcePort(), volumeUuid);
-        KVMPhysicalDisk physicalDisk = new KVMPhysicalDisk(deviceByPath, volumeUuid, pool);
+        String devicePath = getDeviceById(getLunWwid(volumeUuid));
 
+        KVMPhysicalDisk physicalDisk = new KVMPhysicalDisk(devicePath, volumeUuid, pool);
         physicalDisk.setFormat(PhysicalDiskFormat.RAW);
 
-        long deviceSize = getDeviceSize(deviceByPath);
+        long deviceSize = getDeviceSize(devicePath);
 
         physicalDisk.setSize(deviceSize);
         physicalDisk.setVirtualSize(deviceSize);
@@ -351,207 +169,40 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
         return physicalDisk;
     }
 
-    private long getDeviceSize(String deviceByPath) {
-        try {
-            Path devicePath = Paths.get(deviceByPath);
-            if (!Files.exists(devicePath)) {
-                logger.debug("Device by-path does not exist yet: {}", deviceByPath);
-                return 0L;
-            }
-            if (Files.isRegularFile(devicePath)) {
-                logger.warn("Found a corrupt regular file at iSCSI by-path {} (expected block device symlink); it must be removed manually", deviceByPath);
-                return 0L;
-            }
-            if (!Files.isSymbolicLink(devicePath)) {
-                logger.warn("Path {} exists but is not an iSCSI block device symlink", deviceByPath);
-                return 0L;
-            }
-        } catch (Exception ex) {
-            // If FS check fails for any reason, fall back to blockdev call
-            logger.error("Error fetching device size for {}", deviceByPath, ex);
-        }
+    @Override
+    public boolean connectPhysicalDisk(String volumePath, KVMStoragePool pool, Map<String, String> details, boolean isVMMigrate) {
+        final String host = pool.getSourceHost();
+        final int port = pool.getSourcePort();
+        final String iqn = getTargetIqn(volumePath);
 
-        Script iScsiAdmCmd = new Script(true, "blockdev", 0, logger);
-
-        iScsiAdmCmd.add("--getsize64", deviceByPath);
-
-        OutputInterpreter.OneLineParser parser = new OutputInterpreter.OneLineParser();
-
-        String result = iScsiAdmCmd.execute(parser);
-
-        if (result != null) {
-            logger.warn("Unable to retrieve the size of device (resource may have moved to a different host)" + deviceByPath);
-
-            return 0;
-        }
-        else {
-            logger.info("Successfully retrieved the size of device " + deviceByPath);
-        }
-
-        return Long.parseLong(parser.getLine());
-    }
-
-    private String getIqn(String path) {
-        return getComponent(path, 1);
-    }
-
-    private String getLun(String path) {
-        return getComponent(path, 2);
-    }
-
-    private String getComponent(String path, int index) {
-        String[] tmp = path.split("/");
-
-        if (tmp.length != 3) {
-            String msg = "Wrong format for iScsi path: " + path + ". It should be formatted as '/targetIQN/LUN'.";
-
-            logger.warn(msg);
-
-            throw new CloudRuntimeException(msg);
-        }
-
-        return tmp[index].trim();
-    }
-
-    /**
-     * Check if there are other LUNs on the same iSCSI target (IQN) that are still
-     * visible as block devices. This is needed because ONTAP uses a single IQN per
-     * SVM — logging out of the target would kill ALL LUNs, not just the one being
-     * disconnected.
-     *
-     * Checks /dev/disk/by-path/ for symlinks matching the same host:port + IQN but
-     * with a different LUN number.
-     */
-    private boolean hasOtherActiveLuns(String host, int port, String iqn, String lun) {
-        String prefix = "ip-" + host + ":" + port + "-iscsi-" + iqn + "-lun-";
-        File byPathDir = new File("/dev/disk/by-path");
-        if (!byPathDir.exists() || !byPathDir.isDirectory()) {
+        if (!createIscsiNode(host, port, iqn, volumePath)) {
             return false;
         }
-        File[] entries = byPathDir.listFiles();
-        if (entries == null) {
+
+        if (!applyChapCredentials(host, port, iqn, volumePath, details)) {
             return false;
         }
-        for (File entry : entries) {
-            String name = entry.getName();
-            // Skip partition entries (e.g. lun-0-part1, lun-0-part2) — these are not
-            // independent LUNs, they are partition symlinks for the same LUN disk.
-            // Only count actual LUN entries (no "-part" suffix after the lun number).
-            if (name.startsWith(prefix) && !name.equals(prefix + lun) && !name.contains("-part")) {
-                logger.debug("Found other active LUN on same target: " + name);
-                return true;
-            }
-        }
-        return false;
-    }
 
-    /**
-     * Removes a single stale SCSI device from the kernel using the sysfs interface.
-     *
-     * When ONTAP unmaps a LUN from the host's igroup, the by-path symlink and the
-     * underlying SCSI device (/dev/sdX) remain present in the kernel until explicitly
-     * removed — the kernel does not auto-remove devices from live iSCSI sessions.
-     *
-     * This method resolves the by-path symlink to the real block device name (e.g. sdd),
-     * then writes "1" to /sys/block/<dev>/device/delete — the standard Linux kernel SCSI
-     * API for removing a single device without tearing down the entire iSCSI session.
-     * Once the kernel processes the delete, it also removes the by-path symlink.
-     *
-     * This is used instead of iscsiadm --logout when other LUNs on the same IQN are still
-     * active (ONTAP single-IQN-per-SVM model), since logout would tear down ALL LUNs.
-     */
-    private void removeStaleScsiDevice(String host, int port, String iqn, String lun) {
-        String byPath = getByPath(host, port, "/" + iqn + "/" + lun);
-        Path byPathLink = Paths.get(byPath);
-        if (!Files.exists(byPathLink)) {
-            logger.debug("by-path entry for LUN " + lun + " already gone, nothing to remove");
-            return;
-        }
-        try {
-            Path realDevice = byPathLink.toRealPath();
-            String devName = realDevice.getFileName().toString();
-            File deleteFile = new File("/sys/block/" + devName + "/device/delete");
-            if (!deleteFile.exists()) {
-                logger.warn("sysfs delete entry not found for device " + devName + " — cannot remove stale SCSI device");
-                return;
-            }
-            try (FileWriter fw = new FileWriter(deleteFile)) {
-                fw.write("1");
-            }
-            logger.info("Removed stale SCSI device " + devName + " for LUN /" + iqn + "/" + lun + " via sysfs");
-        } catch (Exception e) {
-            logger.warn("Failed to remove stale SCSI device for LUN /" + iqn + "/" + lun + ": " + e.getMessage());
-        }
-    }
-
-    private boolean disconnectPhysicalDisk(String host, int port, String iqn, String lun) {
-        // Check if other LUNs on the same IQN target are still in use.
-        // ONTAP (and similar) uses a single IQN per SVM with multiple LUNs.
-        // Doing iscsiadm --logout tears down the ENTIRE target session,
-        // which would destroy access to ALL LUNs — not just the one being disconnected.
-        if (hasOtherActiveLuns(host, port, iqn, lun)) {
-            logger.info("Skipping iSCSI logout for /" + iqn + "/" + lun +
-                    " — other LUNs on the same target are still active. Removing stale SCSI device for this LUN only.");
-            removeStaleScsiDevice(host, port, iqn, lun);
-            // After removing this LUN's device, re-check: if no other LUNs remain active,
-            // If it is the last one then must logout to clean up the iSCSI session entirely.
-            if (hasOtherActiveLuns(host, port, iqn, lun)) {
-                logger.info("Other LUNs still active after removing /" + iqn + "/" + lun + " — session kept alive.");
-                return true;
-            }
-            logger.info("No more active LUNs on target after removing /" + iqn + "/" + lun + " — proceeding with iSCSI logout.");
-        }
-
-        // No other LUNs active on this target — safe to logout and delete the node record.
-
-        // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 --logout
-        Script iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", iqn);
-        iScsiAdmCmd.add("-p", host + ":" + port);
-        iScsiAdmCmd.add("--logout");
-
-        String result = iScsiAdmCmd.execute();
-
-        if (result != null) {
-            logger.debug("Failed to log out of iSCSI target /" + iqn + "/" + lun + " : message = " + result);
-            System.out.println("Failed to log out of iSCSI target /" + iqn + "/" + lun + " : message = " + result);
-
+        if (!loginOrRescanExistingSession(iqn, host, port, volumePath)) {
             return false;
-        } else {
-            logger.debug("Successfully logged out of iSCSI target /" + iqn + "/" + lun);
-            System.out.println("Successfully logged out of iSCSI target /" + iqn + "/" + lun);
         }
 
-        // ex. sudo iscsiadm -m node -T iqn.2012-03.com.test:volume1 -p 192.168.233.10:3260 -o delete
-        iScsiAdmCmd = new Script(true, "iscsiadm", 0, logger);
-
-        iScsiAdmCmd.add("-m", "node");
-        iScsiAdmCmd.add("-T", iqn);
-        iScsiAdmCmd.add("-p", host + ":" + port);
-        iScsiAdmCmd.add("-o", "delete");
-
-        result = iScsiAdmCmd.execute();
-
-        if (result != null) {
-            logger.debug("Failed to remove iSCSI target /" + iqn + "/" + lun + " : message = " + result);
-            System.out.println("Failed to remove iSCSI target /" + iqn + "/" + lun + " : message = " + result);
-
+        // Logging in can return before the kernel has added the device, so the disk is not usable
+        // the moment iscsiadm succeeds. Waiting on a non-zero size also guards against reporting
+        // success when the device never appears, which would otherwise let a caller create a plain
+        // file where the LUN device was expected.
+        if (!waitForDeviceToAppear(volumePath, pool)) {
+            logger.warn("iSCSI device for LUN {} on target {} at {}:{} did not become available",
+                    getLunWwid(volumePath), iqn, host, port);
             return false;
-        } else {
-            logger.debug("Removed iSCSI target /" + iqn + "/" + lun);
-            System.out.println("Removed iSCSI target /" + iqn + "/" + lun);
         }
-
-        waitForDiskToBecomeUnavailable(host, port, iqn, lun);
 
         return true;
     }
 
     @Override
-    public boolean disconnectPhysicalDisk(String volumeUuid, KVMStoragePool pool) {
-        return disconnectPhysicalDisk(pool.getSourceHost(), pool.getSourcePort(), getIqn(volumeUuid), getLun(volumeUuid));
+    public boolean disconnectPhysicalDisk(String volumePath, KVMStoragePool pool) {
+        return disconnectLun(pool.getSourceHost(), pool.getSourcePort(), getTargetIqn(volumePath), getLunWwid(volumePath));
     }
 
     @Override
@@ -560,62 +211,46 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
         String port = volumeToDisconnect.get(DiskTO.STORAGE_PORT);
         String path = volumeToDisconnect.get(DiskTO.IQN);
 
-        if (host != null && port != null && path != null) {
-            return disconnectPhysicalDisk(host, Integer.parseInt(port), getIqn(path), getLun(path));
-        }
-
-        return false;
-    }
-
-    @Override
-    public boolean disconnectPhysicalDiskByPath(String localPath) {
-        String search1 = "/dev/disk/by-path/ip-";
-        String search2 = ":";
-        String search3 = "-iscsi-";
-        String search4 = "-lun-";
-
-        if (!localPath.contains(search3)) {
+        if (host == null || port == null || path == null) {
             return false;
         }
 
-        int index = localPath.indexOf(search2);
-
-        String host = localPath.substring(search1.length(), index);
-
-        int index2 = localPath.indexOf(search3);
-
-        String port = localPath.substring(index + search2.length(), index2);
-
-        index = localPath.indexOf(search4);
-
-        String iqn = localPath.substring(index2 + search3.length(), index);
-
-        String lun = localPath.substring(index + search4.length());
-
-        return disconnectPhysicalDisk(host, Integer.parseInt(port), iqn, lun);
+        return disconnectLun(host, Integer.parseInt(port), getTargetIqn(path), getLunWwid(path));
     }
 
+    /**
+     * Claims the by-id devices this adaptor hands out.
+     *
+     * The target IQN and portal are not recoverable from a by-id name, so they are read back from
+     * the device's iSCSI session in sysfs.
+     *
+     * Returning false for anything else is required by the {@link StorageAdaptor} contract:
+     * {@code KVMStoragePoolManager.disconnectPhysicalDiskByPath} scans every adaptor and stops at
+     * the first one that claims the path.
+     */
     @Override
-    public boolean deletePhysicalDisk(String volumeUuid, KVMStoragePool pool, Storage.ImageFormat format) {
-        throw new UnsupportedOperationException("Deleting a physical disk is not supported.");
-    }
+    public boolean disconnectPhysicalDiskByPath(String localPath) {
+        if (!isOntapDevicePath(localPath)) {
+            return false;
+        }
 
-    // does not apply for OntapIscsiStorageAdaptor
-    @Override
-    public List<KVMPhysicalDisk> listPhysicalDisks(String storagePoolUuid, KVMStoragePool pool) {
-        throw new UnsupportedOperationException("Listing disks is not supported for this configuration.");
-    }
+        String kernelDevice = resolveKernelDevice(localPath);
+        if (kernelDevice == null) {
+            logger.info("Device {} is already gone, nothing to disconnect", localPath);
+            return true;
+        }
 
-    @Override
-    public KVMPhysicalDisk createDiskFromTemplate(KVMPhysicalDisk template, String name, PhysicalDiskFormat format,
-            ProvisioningType provisioningType, long size,
-            KVMStoragePool destPool, int timeout, byte[] passphrase) {
-        throw new UnsupportedOperationException("Creating a disk from a template is not yet supported for this configuration.");
-    }
+        Integer sessionId = findSessionId(kernelDevice);
+        String iqn = sessionId == null ? null : readSessionAttribute(sessionId, "targetname");
+        if (iqn == null) {
+            // A real ONTAP LUN always sits under an iSCSI session. If this one does not, it is not
+            // ours, so leave it alone and let the manager try the next adaptor.
+            logger.debug("Device {} ({}) is not on a readable iSCSI session, not claiming it",
+                    localPath, kernelDevice);
+            return false;
+        }
 
-    @Override
-    public KVMPhysicalDisk createTemplateFromDisk(KVMPhysicalDisk disk, String name, PhysicalDiskFormat format, long size, KVMStoragePool destPool) {
-        throw new UnsupportedOperationException("Creating a template from a disk is not yet supported for this configuration.");
+        return disconnectLun(null, 0, iqn, localPath.substring(BY_ID_SCSI_PREFIX.length()));
     }
 
     @Override
@@ -624,44 +259,27 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
     }
 
     @Override
-    public KVMPhysicalDisk copyPhysicalDisk(KVMPhysicalDisk srcDisk, String destVolumeUuid, KVMStoragePool destPool, int timeout, byte[] srcPassphrase, byte[] destPassphrase, ProvisioningType provisioningType) {
-
-        QemuImgFile srcFile;
-
+    public KVMPhysicalDisk copyPhysicalDisk(KVMPhysicalDisk srcDisk, String destVolumeUuid, KVMStoragePool destPool,
+                                            int timeout, byte[] srcPassphrase, byte[] destPassphrase, ProvisioningType provisioningType) {
         KVMStoragePool srcPool = srcDisk.getPool();
-
-        if (srcPool.getType() == StoragePoolType.RBD) {
-            srcFile = new QemuImgFile(KVMPhysicalDisk.RBDStringBuilder(srcPool, srcDisk.getPath()), srcDisk.getFormat());
-        } else {
-            srcFile = new QemuImgFile(srcDisk.getPath(), srcDisk.getFormat());
-        }
+        QemuImgFile srcFile = srcPool.getType() == StoragePoolType.RBD
+                ? new QemuImgFile(KVMPhysicalDisk.RBDStringBuilder(srcPool, srcDisk.getPath()), srcDisk.getFormat())
+                : new QemuImgFile(srcDisk.getPath(), srcDisk.getFormat());
 
         KVMPhysicalDisk destDisk = destPool.getPhysicalDisk(destVolumeUuid);
-
         QemuImgFile destFile = new QemuImgFile(destDisk.getPath(), destDisk.getFormat());
 
         try {
-            QemuImg q = new QemuImg(timeout);
-            q.convert(srcFile, destFile);
-            // Below fix is required when vendor depends on host based copy rather than storage CAN_CREATE_VOLUME_FROM_VOLUME capability
-            // When host based template copy is triggered , small size template sits in RAM(depending on host memory and RAM) and copy is marked successful and by the time flush to storage is triggered
-            // disconnectPhysicalDisk would disconnect the lun , hence template staying in RAM is not copied to storage lun. Below does flushing of data to storage and marking
-            // copy as successful once flush is complete.
-            Script flushCmd = new Script(true, "blockdev", 0, logger);
-            flushCmd.add("--flushbufs", destDisk.getPath());
-            String flushResult = flushCmd.execute();
-            if (flushResult != null) {
-                logger.warn("iSCSI copyPhysicalDisk: blockdev --flushbufs returned: {}", flushResult);
-            }
-            Script syncCmd = new Script(true, "sync", 0, logger);
-            syncCmd.execute();
-            logger.info("iSCSI copyPhysicalDisk: flush/sync completed ");
+            new QemuImg(timeout).convert(srcFile, destFile);
+
+            // A small template can still be sitting in the page cache when convert returns. The LUN
+            // is disconnected right after a copy, so without an explicit flush that data would never
+            // reach the array and the copy would be reported successful while the LUN stayed empty.
+            flushToDevice(destDisk.getPath());
         } catch (QemuImgException | LibvirtException ex) {
-            String msg = "Failed to copy data from " + srcDisk.getPath() + " to " +
-                    destDisk.getPath() + ". The error was the following: " + ex.getMessage();
-
+            String msg = "Failed to copy data from " + srcDisk.getPath() + " to " + destDisk.getPath()
+                    + ". The error was the following: " + ex.getMessage();
             logger.error(msg);
-
             throw new CloudRuntimeException(msg);
         }
 
@@ -671,6 +289,34 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
     @Override
     public boolean refresh(KVMStoragePool pool) {
         return true;
+    }
+
+    @Override
+    public KVMPhysicalDisk createPhysicalDisk(String volumeUuid, KVMStoragePool pool, PhysicalDiskFormat format,
+                                              ProvisioningType provisioningType, long size, byte[] passphrase) {
+        throw new UnsupportedOperationException("Creating a physical disk is not supported; ONTAP LUNs are provisioned by the management server.");
+    }
+
+    @Override
+    public boolean deletePhysicalDisk(String volumeUuid, KVMStoragePool pool, Storage.ImageFormat format) {
+        throw new UnsupportedOperationException("Deleting a physical disk is not supported; ONTAP LUNs are removed by the management server.");
+    }
+
+    @Override
+    public List<KVMPhysicalDisk> listPhysicalDisks(String storagePoolUuid, KVMStoragePool pool) {
+        throw new UnsupportedOperationException("Listing disks is not supported for this configuration.");
+    }
+
+    @Override
+    public KVMPhysicalDisk createDiskFromTemplate(KVMPhysicalDisk template, String name, PhysicalDiskFormat format,
+                                                  ProvisioningType provisioningType, long size, KVMStoragePool destPool,
+                                                  int timeout, byte[] passphrase) {
+        throw new UnsupportedOperationException("Creating a disk from a template is not supported for this configuration.");
+    }
+
+    @Override
+    public KVMPhysicalDisk createTemplateFromDisk(KVMPhysicalDisk disk, String name, PhysicalDiskFormat format, long size, KVMStoragePool destPool) {
+        throw new UnsupportedOperationException("Creating a template from a disk is not supported for this configuration.");
     }
 
     @Override
@@ -684,12 +330,461 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
     }
 
     @Override
-    public KVMPhysicalDisk createDiskFromTemplateBacking(KVMPhysicalDisk template, String name, PhysicalDiskFormat format, long size, KVMStoragePool destPool, int timeout, byte[] passphrase) {
+    public KVMPhysicalDisk createDiskFromTemplateBacking(KVMPhysicalDisk template, String name, PhysicalDiskFormat format,
+                                                         long size, KVMStoragePool destPool, int timeout, byte[] passphrase) {
         return null;
     }
 
     @Override
-    public KVMPhysicalDisk createTemplateFromDirectDownloadFile(String templateFilePath, String destTemplatePath, KVMStoragePool destPool, Storage.ImageFormat format, int timeout) {
+    public KVMPhysicalDisk createTemplateFromDirectDownloadFile(String templateFilePath, String destTemplatePath,
+                                                                KVMStoragePool destPool, Storage.ImageFormat format, int timeout) {
         return null;
+    }
+
+    private boolean createIscsiNode(String host, int port, String iqn, String volumePath) {
+        String result = runIscsiadmNodeCommand(host, port, iqn, "-o", "new");
+
+        if (result == null) {
+            logger.debug("Added iSCSI node for target {}", iqn);
+            return true;
+        }
+        if (result.toLowerCase().contains("exists")) {
+            logger.debug("iSCSI node already exists for target {}, proceeding", iqn);
+            return true;
+        }
+        logger.warn("Failed to add iSCSI node for {}: {}", volumePath, result);
+        return false;
+    }
+
+    private boolean applyChapCredentials(String host, int port, String iqn, String volumePath, Map<String, String> details) {
+        if (details == null) {
+            return true;
+        }
+
+        String username = details.get(DiskTO.CHAP_INITIATOR_USERNAME);
+        String secret = details.get(DiskTO.CHAP_INITIATOR_SECRET);
+
+        if (!StringUtils.isNoneBlank(username, secret)) {
+            return true;
+        }
+
+        return updateNodeSetting(host, port, iqn, "node.session.auth.authmethod", "CHAP", volumePath)
+                && updateNodeSetting(host, port, iqn, "node.session.auth.username", username, volumePath)
+                && updateNodeSetting(host, port, iqn, "node.session.auth.password", secret, volumePath);
+    }
+
+    private boolean updateNodeSetting(String host, int port, String iqn, String name, String value, String volumePath) {
+        String result = runIscsiadmNodeCommand(host, port, iqn, "--op", "update", "-n", name, "-v", value);
+        if (result != null) {
+            // The value is not logged: for the CHAP settings it is a credential.
+            logger.warn("Failed to set {} on iSCSI target {} for {}: {}", name, iqn, volumePath, result);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Logs in, rescanning instead when the session was already established.
+     *
+     * Login is idempotent but its exit status is not portable: re-login exits 0 on some
+     * distributions and ISCSI_ERR_SESS_EXISTS on others, where it also produces an error message
+     * that would otherwise read as a failure. The session is therefore checked beforehand and a
+     * pre-existing session treated as success.
+     */
+    private boolean loginOrRescanExistingSession(String iqn, String host, int port, String volumePath) {
+        boolean sessionAlreadyActive = isIscsiSessionActive(iqn, host);
+
+        Script login = new Script(true, "iscsiadm", 0, logger);
+        login.add("-m", "node");
+        login.add("-T", iqn);
+        login.add("-p", host + ":" + port);
+        login.add("--login");
+
+        String result = login.execute();
+        boolean sessionPreExisted = login.getExitValue() == ISCSI_SESSION_EXISTS_CODE || sessionAlreadyActive;
+
+        if (sessionPreExisted) {
+            logger.debug("iSCSI session for target {} at {}:{} pre-existed, rescanning", iqn, host, port);
+            rescanIscsiSession(host, port, iqn);
+            return true;
+        }
+        if (result == null) {
+            logger.debug("Logged in to iSCSI target {} for {}", iqn, volumePath);
+            return true;
+        }
+        logger.warn("Failed to log in to iSCSI target {} for {}: {}", iqn, volumePath, result);
+        return false;
+    }
+
+    /**
+     * Reports whether a session to this target and portal already exists.
+     *
+     * ISCSI_ERR_NO_OBJS_FOUND simply means no session exists, which is a normal outcome here; any
+     * other non-zero exit is treated as "not confirmed active" so that login is still attempted.
+     */
+    private boolean isIscsiSessionActive(String iqn, String host) {
+        Script sessionCmd = new Script(true, "iscsiadm", 0, logger);
+        sessionCmd.add("-m", "session");
+
+        OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
+        sessionCmd.executeIgnoreExitValue(parser, ISCSI_ERR_NO_OBJS_FOUND);
+
+        int exitValue = sessionCmd.getExitValue();
+        if (exitValue != 0 && exitValue != ISCSI_ERR_NO_OBJS_FOUND) {
+            logger.warn("Unable to determine iSCSI session state for target {} at {}: 'iscsiadm -m session' exited with {}",
+                    iqn, host, exitValue);
+            return false;
+        }
+
+        String sessions = parser.getLines();
+        if (StringUtils.isBlank(sessions)) {
+            return false;
+        }
+        for (String line : sessions.split("\n")) {
+            if (line.contains(iqn) && line.contains(host)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void rescanIscsiSession(String host, int port, String iqn) {
+        String result = runIscsiadmNodeCommand(host, port, iqn, "--rescan");
+        if (result != null) {
+            logger.warn("iSCSI session rescan of target {} returned: {}", iqn, result);
+        }
+    }
+
+    /**
+     * Releases one LUN, tearing the session down only once it is the last one on the target.
+     *
+     * ONTAP presents all of an SVM's LUNs through a single IQN, so {@code iscsiadm --logout} would
+     * drop every LUN on the session rather than just this one. While siblings remain, the LUN is
+     * released by deleting its SCSI device through sysfs instead; the kernel does not remove
+     * devices from a live session on its own when the array unmaps a LUN.
+     *
+     * @param host the portal address, or null to read it back from the device's session
+     */
+    private boolean disconnectLun(String host, int port, String iqn, String lunWwid) {
+        String devicePath = getDeviceById(lunWwid);
+        String kernelDevice = resolveKernelDevice(devicePath);
+
+        if (kernelDevice == null) {
+            logger.info("Device {} for LUN {} on target {} is already gone; nothing to disconnect", devicePath, lunWwid, iqn);
+            return true;
+        }
+
+        Integer sessionId = findSessionId(kernelDevice);
+        if (sessionId != null && hasOtherLunsInSession(sessionId, kernelDevice)) {
+            logger.info("Skipping iSCSI logout for LUN {} on target {}: other LUNs on the same session are still "
+                    + "active. Removing device {} only.", lunWwid, iqn, kernelDevice);
+            removeScsiDevice(kernelDevice);
+
+            if (hasOtherLunsInSession(sessionId, kernelDevice)) {
+                logger.info("Other LUNs still active on target {} after removing LUN {}; session kept alive", iqn, lunWwid);
+                return true;
+            }
+            logger.info("No LUNs remain on target {} after removing LUN {}; proceeding with iSCSI logout", iqn, lunWwid);
+        }
+
+        if (host == null && sessionId != null) {
+            host = readConnectionAttribute(sessionId, "persistent_address");
+            port = parsePort(readConnectionAttribute(sessionId, "persistent_port"));
+        }
+        if (host == null) {
+            logger.warn("Unable to determine the portal of target {}; removing device {} without logging out", iqn, kernelDevice);
+            removeScsiDevice(kernelDevice);
+            return true;
+        }
+
+        if (!logoutAndForgetTarget(host, port, iqn, lunWwid)) {
+            return false;
+        }
+
+        waitForDeviceToDisappear(devicePath);
+        return true;
+    }
+
+    private boolean logoutAndForgetTarget(String host, int port, String iqn, String lunWwid) {
+        String logoutResult = runIscsiadmNodeCommand(host, port, iqn, "--logout");
+        if (logoutResult != null) {
+            logger.warn("Failed to log out of iSCSI target {} while releasing LUN {}: {}", iqn, lunWwid, logoutResult);
+            return false;
+        }
+        logger.debug("Logged out of iSCSI target {} while releasing LUN {}", iqn, lunWwid);
+
+        String deleteResult = runIscsiadmNodeCommand(host, port, iqn, "-o", "delete");
+        if (deleteResult != null) {
+            logger.warn("Failed to delete the iSCSI node record for target {}: {}", iqn, deleteResult);
+            return false;
+        }
+        logger.debug("Deleted the iSCSI node record for target {}", iqn);
+
+        return true;
+    }
+
+    /** @return null on success, or the command output describing the failure */
+    private String runIscsiadmNodeCommand(String host, int port, String iqn, String... operation) {
+        Script command = new Script(true, "iscsiadm", 0, logger);
+        command.add("-m", "node");
+        command.add("-T", iqn);
+        command.add("-p", host + ":" + port);
+        for (String argument : operation) {
+            command.add(argument);
+        }
+        return command.execute();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Device and sysfs handling
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Removes a single SCSI device from the kernel, the standard alternative to tearing down the
+     * whole session. The kernel removes the device's udev aliases once it processes the delete.
+     */
+    private void removeScsiDevice(String kernelDevice) {
+        File deleteFile = new File(SYS_BLOCK + "/" + kernelDevice + "/device/delete");
+        if (!deleteFile.exists()) {
+            logger.warn("No sysfs delete entry for device {}; cannot remove it", kernelDevice);
+            return;
+        }
+        try (FileWriter writer = new FileWriter(deleteFile)) {
+            writer.write("1");
+            logger.info("Removed SCSI device {} via sysfs", kernelDevice);
+        } catch (IOException ex) {
+            logger.warn("Failed to remove SCSI device {}: {}", kernelDevice, ex.getMessage());
+        }
+    }
+
+    /**
+     * Reports whether the session carries any LUN other than {@code ownDevice}.
+     *
+     * Every SCSI disk reachable through an iSCSI session has that session in its sysfs device path,
+     * so comparing session ids across {@code /sys/block} identifies the siblings without needing to
+     * know any logical unit numbers.
+     */
+    private boolean hasOtherLunsInSession(int sessionId, String ownDevice) {
+        File[] blockDevices = new File(SYS_BLOCK).listFiles();
+        if (blockDevices == null) {
+            return false;
+        }
+        for (File blockDevice : blockDevices) {
+            String name = blockDevice.getName();
+            if (name.equals(ownDevice)) {
+                continue;
+            }
+            Integer otherSessionId = findSessionId(name);
+            if (otherSessionId != null && otherSessionId == sessionId) {
+                logger.debug("Device {} is another LUN on iSCSI session {}", name, sessionId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Extracts the iSCSI session id from a block device's sysfs path, which looks like
+     * {@code /sys/devices/platform/host33/session13/target33:0:0/33:0:0:1/block/sdc}.
+     *
+     * @return the session id, or null if the device is not backed by iSCSI
+     */
+    private Integer findSessionId(String kernelDevice) {
+        try {
+            Path deviceLink = Paths.get(SYS_BLOCK, kernelDevice, "device");
+            if (!Files.exists(deviceLink)) {
+                return null;
+            }
+            for (Path element : deviceLink.toRealPath()) {
+                String name = element.toString();
+                if (name.startsWith(SESSION_DIR_PREFIX)) {
+                    return Integer.parseInt(name.substring(SESSION_DIR_PREFIX.length()));
+                }
+            }
+        } catch (IOException | NumberFormatException ex) {
+            logger.debug("Unable to determine the iSCSI session of device {}: {}", kernelDevice, ex.getMessage());
+        }
+        return null;
+    }
+
+    private String readSessionAttribute(int sessionId, String attribute) {
+        return readSysfsValue(Paths.get(SYS_ISCSI_SESSION, SESSION_DIR_PREFIX + sessionId, attribute));
+    }
+
+    /**
+     * Reads a connection attribute of a session. A connection's own index is not guaranteed to
+     * match its session's, so the connection directory is discovered under the session rather than
+     * assumed to be {@code connection<sessionId>:0}.
+     */
+    private String readConnectionAttribute(int sessionId, String attribute) {
+        Path sessionDevice = Paths.get(SYS_ISCSI_SESSION, SESSION_DIR_PREFIX + sessionId, "device");
+        File[] children = sessionDevice.toFile().listFiles();
+        if (children == null) {
+            return null;
+        }
+        for (File child : children) {
+            String name = child.getName();
+            if (!name.startsWith("connection")) {
+                continue;
+            }
+            String value = readSysfsValue(sessionDevice.resolve(name).resolve("iscsi_connection").resolve(name).resolve(attribute));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String readSysfsValue(Path path) {
+        try {
+            if (!Files.exists(path)) {
+                return null;
+            }
+            String value = new String(Files.readAllBytes(path)).trim();
+            return value.isEmpty() ? null : value;
+        } catch (IOException ex) {
+            logger.debug("Unable to read {}: {}", path, ex.getMessage());
+            return null;
+        }
+    }
+
+    private int parsePort(String port) {
+        try {
+            return port != null ? Integer.parseInt(port) : DEFAULT_ISCSI_PORT;
+        } catch (NumberFormatException ex) {
+            return DEFAULT_ISCSI_PORT;
+        }
+    }
+
+    private String resolveKernelDevice(String devicePath) {
+        try {
+            Path link = Paths.get(devicePath);
+            if (!Files.exists(link)) {
+                return null;
+            }
+            return link.toRealPath().getFileName().toString();
+        } catch (IOException ex) {
+            logger.debug("Unable to resolve {}: {}", devicePath, ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean waitForDeviceToAppear(String volumePath, KVMStoragePool pool) {
+        for (int attempt = 0; attempt < DEVICE_WAIT_TRIES; attempt++) {
+            if (getPhysicalDisk(volumePath, pool).getSize() > 0) {
+                return true;
+            }
+            if (!sleepBetweenAttempts()) {
+                return false;
+            }
+        }
+        return getPhysicalDisk(volumePath, pool).getSize() > 0;
+    }
+
+    private void waitForDeviceToDisappear(String devicePath) {
+        for (int attempt = 0; attempt < DEVICE_WAIT_TRIES && getDeviceSize(devicePath) > 0; attempt++) {
+            if (!sleepBetweenAttempts()) {
+                return;
+            }
+        }
+    }
+
+    private boolean sleepBetweenAttempts() {
+        try {
+            Thread.sleep(DEVICE_WAIT_INTERVAL_MS);
+            return true;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /**
+     * @return the device size in bytes, or 0 if the device is absent or not a block device
+     */
+    private long getDeviceSize(String devicePath) {
+        Path path = Paths.get(devicePath);
+
+        if (!Files.exists(path)) {
+            logger.debug("Device does not exist yet: {}", devicePath);
+            return 0L;
+        }
+        if (Files.isRegularFile(path)) {
+            // A plain file here means something wrote to the device name before the LUN appeared;
+            // treating it as a disk would silently back a volume with local storage.
+            logger.warn("Found a regular file at {} where a block device was expected; it must be removed manually", devicePath);
+            return 0L;
+        }
+
+        Script command = new Script(true, "blockdev", 0, logger);
+        command.add("--getsize64", devicePath);
+
+        OutputInterpreter.OneLineParser parser = new OutputInterpreter.OneLineParser();
+        String result = command.execute(parser);
+
+        if (result != null) {
+            logger.warn("Unable to get the size of device {}: {}", devicePath, result);
+            return 0L;
+        }
+
+        try {
+            return Long.parseLong(parser.getLine().trim());
+        } catch (NumberFormatException | NullPointerException ex) {
+            logger.warn("Unable to parse the size of device {}", devicePath);
+            return 0L;
+        }
+    }
+
+    private void flushToDevice(String devicePath) {
+        Script flush = new Script(true, "blockdev", 0, logger);
+        flush.add("--flushbufs", devicePath);
+        String flushResult = flush.execute();
+        if (flushResult != null) {
+            logger.warn("blockdev --flushbufs on {} returned: {}", devicePath, flushResult);
+        }
+        new Script(true, "sync", 0, logger).execute();
+        logger.debug("Flushed buffers to {}", devicePath);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Volume path handling
+    // ---------------------------------------------------------------------------------------------
+
+    private boolean isOntapDevicePath(String localPath) {
+        return localPath != null
+                && localPath.startsWith(BY_ID_SCSI_PREFIX)
+                && LUN_WWID.matcher(localPath.substring(BY_ID_SCSI_PREFIX.length())).matches();
+    }
+
+    private String getDeviceById(String lunWwid) {
+        return BY_ID_SCSI_PREFIX + lunWwid;
+    }
+
+    private String getTargetIqn(String volumePath) {
+        return getPathComponent(volumePath, 1);
+    }
+
+    private String getLunWwid(String volumePath) {
+        return getPathComponent(volumePath, 2);
+    }
+
+    /**
+     * Splits a {@code /<targetIQN>/<lunWwid>} volume path.
+     *
+     * The WWID occupies the component a logical unit number would hold for other iSCSI vendors, so
+     * the path keeps the two-component shape every hypervisor resource expects. That is also why
+     * the path carries the WWID rather than the ONTAP serial it encodes: serials contain '/'.
+     */
+    private String getPathComponent(String volumePath, int index) {
+        String[] components = volumePath == null ? new String[0] : volumePath.split("/");
+
+        if (components.length != 3) {
+            String message = "Wrong format for ONTAP iSCSI path: " + volumePath
+                    + ". It should be formatted as '/targetIQN/lunWwid'.";
+            logger.warn(message);
+            throw new CloudRuntimeException(message);
+        }
+
+        return components[index].trim();
     }
 }

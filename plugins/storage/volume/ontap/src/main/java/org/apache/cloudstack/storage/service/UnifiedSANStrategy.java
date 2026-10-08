@@ -347,6 +347,46 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
+    /**
+     * Fetches a LUN's serial number, the array-assigned identity its SCSI WWID is derived from.
+     *
+     * <p>Kept separate from {@link #getCloudStackVolume(Map)} rather than widening that method's
+     * query: ONTAP narrows a response to the requested {@code fields}, and existing callers of
+     * {@code getCloudStackVolume} rely on {@code name} and {@code uuid} being present.</p>
+     *
+     * @return the serial number, or null if the LUN no longer exists on the array
+     */
+    public String getLunSerialNumber(String svmName, String lunName) {
+        logger.trace("getLunSerialNumber: fetching serial number of LUN [{}] on SVM [{}]", lunName, svmName);
+        if (svmName == null || svmName.isEmpty() || lunName == null || lunName.isEmpty()) {
+            throw new CloudRuntimeException("Failed to get LUN serial number, invalid svm or LUN name");
+        }
+        try {
+            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+            Map<String, Object> queryParams = Map.of(
+                    OntapStorageConstants.SVM_DOT_NAME, svmName,
+                    OntapStorageConstants.NAME, lunName,
+                    OntapStorageConstants.FIELDS, OntapStorageConstants.SERIAL_NUMBER);
+            OntapResponse<Lun> lunResponse = sanFeignClient.getLunResponse(authHeader, queryParams);
+            if (lunResponse == null || lunResponse.getRecords() == null || lunResponse.getRecords().isEmpty()) {
+                logger.warn("getLunSerialNumber: LUN [{}] on SVM [{}] not found", lunName, svmName);
+                return null;
+            }
+            return lunResponse.getRecords().get(0).getSerialNumber();
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                logger.warn("getLunSerialNumber: LUN [{}] on SVM [{}] not found (status 404)", lunName, svmName);
+                return null;
+            }
+            logger.error("FeignException while fetching serial number of LUN [{}], Status: {}, Exception: {}",
+                    lunName, e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch LUN serial number: " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Exception while fetching serial number of LUN [{}]: {}", lunName, e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch LUN serial number: " + e.getMessage());
+        }
+    }
+
     @Override
     public AccessGroup createAccessGroup(AccessGroup accessGroup) {
         logger.trace("createAccessGroup : Creating Igroup with access group request {} ", accessGroup);
