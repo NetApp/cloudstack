@@ -38,7 +38,7 @@ Deeper design lives in the Cursor skill
 
 | Doc | URL | pageId |
 |---|---|---|
-| TOI: NetApp ONTAP Storage Plugin | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/624932561 | `624932561` |
+| Transfer of Information: NetApp ONTAP Storage Plugin | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/624932561 | `624932561` |
 | Admin Guide | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/669425954 | `669425954` |
 | Integrated Spec | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/330407273 | `330407273` |
 | Architectural Spec | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/330407201 | `330407201` |
