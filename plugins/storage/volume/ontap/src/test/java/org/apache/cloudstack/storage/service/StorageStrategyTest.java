@@ -50,6 +50,7 @@ import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -156,7 +157,7 @@ public class StorageStrategyTest {
         }
 
         @Override
-        CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
             return null;
         }
 
@@ -379,6 +380,45 @@ public class StorageStrategyTest {
         assertNotNull(result);
         assertNull(result.getModel());
         assertNull(result.getPlatformType());
+    }
+
+    @Test
+    public void testIsAff_allNodesAllFlash_returnsTrue() {
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("AFF-A400", true, true, false))));
+
+        assertTrue(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAff_anyNodeNotAllFlash_returnsFalse() {
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("FAS8300", false, false, false))));
+
+        assertFalse(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAff_nullAllFlashOptimized_returnsFalse() {
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(
+                        clusterNode("AFF-A400", true, true, false),
+                        clusterNode("unknown", null, null, null))));
+
+        assertFalse(storageStrategy.isAff());
+    }
+
+    @Test
+    public void testIsAff_noNodes_throws() {
+        when(clusterFeignClient.getClusterNodes(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of()));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> storageStrategy.isAff());
+        assertTrue(ex.getMessage().contains("Unable to determine whether the ONTAP cluster is AFF or FAS"));
     }
 
     private Cluster stubClusterGet() {
