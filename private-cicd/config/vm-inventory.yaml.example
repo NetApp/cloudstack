@@ -1,0 +1,72 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Copy this schema to a protected file outside Git and replace every placeholder
+# with non-secret lab inventory data. Upload the populated file to Jenkins as a
+# Secret file credential; never commit it.
+# Create one Jenkins Lockable Resource per entry. Its resource name must equal
+# lock_resource and it must carry the label: cloudstack-presubmit-vm.
+
+vms:
+  - id: presubmit-vm-01
+    enabled: true
+    lock_resource: PLACEHOLDER-cloudstack-presubmit-vm-01
+    capabilities: [ubuntu22, kvm, ontap]
+
+    # vCenter inventory names.
+    vcenter_vm: PLACEHOLDER-vcenter-vm-name
+    snapshot: PLACEHOLDER-clean-snapshot-name
+
+    # Passwordless SSH from the Jenkins presubmit pod.
+    ssh_host: PLACEHOLDER-vm-fqdn-or-ip
+    ssh_user: root
+    bridge: cloudbr0
+
+    # Non-secret network allocation dedicated to this VM.
+    dedicated_ips:
+      management_server: PLACEHOLDER-management-ip
+      kvm_host: PLACEHOLDER-kvm-ip
+      public:
+        gateway: PLACEHOLDER-public-gateway
+        netmask: PLACEHOLDER-public-netmask
+        start: PLACEHOLDER-public-start-ip
+        end: PLACEHOLDER-public-end-ip
+      pod:
+        gateway: PLACEHOLDER-pod-gateway
+        netmask: PLACEHOLDER-pod-netmask
+        start: PLACEHOLDER-pod-start-ip
+        end: PLACEHOLDER-pod-end-ip
+
+    zone:
+      name: CloudStack-ONTAP-CI
+      network_type: Advanced
+      dns1: PLACEHOLDER-dns1
+      dns2: PLACEHOLDER-dns2
+      internal_dns1: PLACEHOLDER-internal-dns1
+      internal_dns2: PLACEHOLDER-internal-dns2
+      guest_cidr: 10.1.1.0/24
+      guest_vlan_range: PLACEHOLDER-guest-vlan-range
+      pod_name: Pod1
+      cluster_name: Cluster1
+      primary_storage_url: PLACEHOLDER-nfs-primary-url
+      secondary_storage_url: PLACEHOLDER-nfs-secondary-url
+      systemvm_template_url: PLACEHOLDER-systemvm-template-url
+      template_name: PLACEHOLDER-kvm-template-name
+
+    ontap:
+      storage_ip: PLACEHOLDER-ontap-data-lif
+      svm_name: PLACEHOLDER-ontap-svm-name

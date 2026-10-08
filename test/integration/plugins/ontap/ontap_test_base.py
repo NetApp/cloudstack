@@ -22,7 +22,10 @@ Provides:
   OntapRestClient    - thin wrapper around the ONTAP REST API (NFS + iSCSI methods)
   _parse_pool_details - converts a StoragePool details attribute to a plain dict
   OntapTestBase      - base cloudstackTestCase with common tearDownClass,
-                       _poll_pool_state, _create_volume, and _delete_pool
+                       _poll_pool_state, _poll_vm_state, _create_volume,
+                       _delete_pool and the template-cache assertions (every
+                       ONTAP ROOT volume on KVM is cloned from the primary
+                       template cache)
 """
 
 import logging
@@ -38,7 +41,10 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
+    listVirtualMachines as listVirtualMachinesAPI,
+    listVolumes as listVolumesAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackAPI import listHosts as listHostsAPI
@@ -48,6 +54,8 @@ from marvin.lib.base import Account, DiskOffering
 from marvin.sshClient import SshClient
 from marvin.lib.common import get_domain, get_zone, list_clusters, list_storage_pools
 from marvin.lib.utils import cleanup_resources
+
+from helpers import template_cache_util as tcu
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -122,6 +130,20 @@ def _parse_pool_details(pool):
     }
 
 
+def _list_vms_cmd(vm_id):
+    cmd = listVirtualMachinesAPI.listVirtualMachinesCmd()
+    cmd.id = vm_id
+    cmd.listall = True
+    return cmd
+
+
+def _list_vols_for_vm(vm_id):
+    cmd = listVolumesAPI.listVolumesCmd()
+    cmd.virtualmachineid = vm_id
+    cmd.listall = True
+    return cmd
+
+
 # ---------------------------------------------------------------------------
 # ONTAP REST helper
 # ---------------------------------------------------------------------------
@@ -144,7 +166,24 @@ class OntapRestClient:
         url = self._base + path
         resp = requests.delete(url, auth=self._auth, params=params,
                                verify=False, timeout=30)
+        if not resp.ok:
+            raise requests.HTTPError(
+                "%s for url: %s body=%s"
+                % (resp.status_code, resp.url, resp.text),
+                response=resp,
+            )
+
+    def _patch(self, path, payload=None, params=None):
+        url = self._base + path
+        resp = requests.patch(url, auth=self._auth, params=params,
+                              json=payload or {}, verify=False, timeout=30)
         resp.raise_for_status()
+        if resp.content:
+            try:
+                return resp.json()
+            except ValueError:
+                return None
+        return None
 
     def delete_volume(self, name):
         """Delete the ONTAP FlexVol with the given name. No-op if not found."""
@@ -274,6 +313,126 @@ class OntapRestClient:
         return [r.get("name", "") for r in resp.get("records", [])
                 if r.get("name") not in (".", "..")]
 
+    def _unmap_lun(self, svm_name, lun_uuid):
+        """Best-effort removal of all lun-maps for a LUN UUID."""
+        try:
+            maps = self._get(
+                "/protocols/san/lun-maps",
+                params={
+                    "svm.name": svm_name,
+                    "lun.uuid": lun_uuid,
+                    "fields": "lun.uuid,igroup.uuid",
+                },
+            )
+            for lun_map in maps.get("records", []):
+                mapped_lun = lun_map.get("lun", {}).get("uuid") or lun_uuid
+                igroup_uuid = lun_map.get("igroup", {}).get("uuid")
+                if not igroup_uuid:
+                    continue
+                try:
+                    self._delete(
+                        "/protocols/san/lun-maps/%s/%s"
+                        % (mapped_lun, igroup_uuid)
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _offline_lun(self, svm_name, lun_path, lun_uuid):
+        """Take LUN offline. Lab ONTAP rejects allow_delete_online."""
+        try:
+            self._patch(
+                "/storage/luns/%s" % lun_uuid,
+                payload={"enabled": False, "status": {"state": "offline"}},
+            )
+        except Exception:
+            try:
+                self._patch(
+                    "/storage/luns/%s" % lun_uuid,
+                    payload={"enabled": False},
+                )
+            except Exception:
+                return
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            cur = self.get_lun(svm_name, lun_path)
+            if not cur:
+                return
+            state = (
+                (cur.get("status") or {}).get("state")
+                or ("online" if cur.get("enabled") else "offline")
+            )
+            if str(state).lower() == "offline" or cur.get("enabled") is False:
+                return
+            time.sleep(2)
+
+    def _delete_lun_clones(self, svm_name, parent_uuid):
+        """Delete FlexClone child LUNs so the parent cache LUN can be removed."""
+        try:
+            data = self._get(
+                "/storage/luns",
+                params={
+                    "svm.name": svm_name,
+                    "fields": "name,uuid,clone",
+                },
+            )
+        except Exception:
+            return
+        for child in data.get("records", []):
+            clone = child.get("clone") or {}
+            source = clone.get("source") or {}
+            if source.get("uuid") != parent_uuid:
+                continue
+            child_path = child.get("name")
+            child_uuid = child.get("uuid")
+            if not child_path or not child_uuid:
+                continue
+            self._unmap_lun(svm_name, child_uuid)
+            self._offline_lun(svm_name, child_path, child_uuid)
+            try:
+                self._delete("/storage/luns/%s" % child_uuid)
+            except Exception:
+                pass
+
+    def delete_lun(self, svm_name, lun_path):
+        """Unmap + offline + delete a LUN by full path. No-op if missing."""
+        lun = self.get_lun(svm_name, lun_path)
+        if not lun:
+            return False
+        uuid = lun.get("uuid")
+        if not uuid:
+            return False
+
+        # Mapped LUNs / FlexClone parents cannot be deleted until dependents go.
+        self._unmap_lun(svm_name, uuid)
+        self._delete_lun_clones(svm_name, uuid)
+        self._offline_lun(svm_name, lun_path, uuid)
+        if not self.get_lun(svm_name, lun_path):
+            return True
+        # Do not pass allow_delete_online — rejected on this ONTAP build.
+        self._delete("/storage/luns/%s" % uuid)
+        return True
+
+    def delete_file_in_volume(self, vol_name, file_path):
+        """
+        Delete a file inside a FlexVol via ONTAP files API.
+
+        ``file_path`` may be absolute (``/foo/bar``) or relative to volume root.
+        Returns True if a delete was attempted on an existing volume.
+        """
+        vol = self.get_volume(vol_name)
+        if not vol:
+            return False
+        vol_uuid = vol.get("uuid", "")
+        if not vol_uuid:
+            return False
+        from urllib.parse import quote
+        path = file_path if file_path.startswith("/") else "/" + file_path
+        encoded_path = quote(path, safe="")
+        self._delete("/storage/volumes/%s/files/%s" % (vol_uuid, encoded_path))
+        return True
+
 
 # ---------------------------------------------------------------------------
 # Base test class
@@ -300,6 +459,14 @@ class OntapTestBase(cloudstackTestCase):
 
     # Subclass sets this to distinguish volume names, e.g. "OntapNFS3Vol"
     _vol_name_prefix = "OntapVol"
+
+    # Template-cache suites set these: "NFS3" / "ISCSI" and the numeric
+    # vm_template.id used as the template_spool_ref key.
+    PROTOCOL = "NFS3"
+    template_db_id = None
+
+    # VM states from which the VM will never reach any other target state.
+    _VM_TERMINAL_STATES = ("error", "destroyed", "expunging")
 
     # ---- zone guard ----------------------------------------------------
 
@@ -599,6 +766,121 @@ class OntapTestBase(cloudstackTestCase):
         self.fail(
             "Pool %s did not reach state '%s' within %ds (last: '%s')"
             % (pool_id, target_state, timeout, current_state)
+        )
+
+    def _poll_vm_state(self, vm_id, target_state, timeout=300, interval=10):
+        """
+        Poll listVirtualMachines until the VM reaches target_state.
+        Fails immediately when the VM lands in a terminal state other than
+        the target instead of waiting out the full timeout.
+        """
+        deadline = time.time() + timeout
+        current_state = "unknown"
+        target = target_state.lower()
+        while time.time() < deadline:
+            vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
+            if vms:
+                current_state = vms[0].state
+                current = (current_state or "").lower()
+                if current == target:
+                    return vms[0]
+                if current in self._VM_TERMINAL_STATES:
+                    self.fail(
+                        "VM %s entered terminal state '%s' while waiting for '%s'"
+                        % (vm_id, current_state, target_state)
+                    )
+            time.sleep(interval)
+        self.fail(
+            "VM %s did not reach state '%s' within %ds (last: '%s')"
+            % (vm_id, target_state, timeout, current_state)
+        )
+
+    # ---- template-cache assertions ------------------------------------
+
+    def _is_iscsi(self):
+        return self.PROTOCOL.upper() == "ISCSI"
+
+    def _root_volume_for_vm(self, vm_id):
+        vols = self.apiClient.listVolumes(_list_vols_for_vm(vm_id)) or []
+        roots = [
+            v for v in vols
+            if str(getattr(v, "type", "")).upper() == "ROOT"
+        ]
+        self.assertTrue(roots, "No ROOT volume for VM %s" % vm_id)
+        return roots[0]
+
+    def _assert_root_on_pool(self, vm_id, pool):
+        root = self._root_volume_for_vm(vm_id)
+        self.assertEqual(
+            str(root.storageid), str(pool.id),
+            "ROOT volume storageid=%s should equal ONTAP pool id=%s "
+            "(check service-offering / pool storage tags)"
+            % (root.storageid, pool.id),
+        )
+        return root
+
+    def _wait_for_ready_spool_ref(self, pool_db_id, timeout=600):
+        spool = tcu.wait_for_spool_ref(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+            timeout=timeout,
+        )
+        tcu.assert_spool_ref_ready(
+            self, spool, expect_local_path=self._is_iscsi(),
+        )
+        return spool
+
+    def _assert_single_ready_spool_ref(self, pool_db_id):
+        count = tcu.count_template_spool_refs(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+        )
+        self.assertEqual(
+            count, 1, "Expected one template_spool_ref, got %s" % count,
+        )
+        spool = tcu.get_template_spool_ref(
+            self.dbConnection, pool_db_id, self.__class__.template_db_id,
+        )
+        tcu.assert_spool_ref_ready(
+            self, spool, expect_local_path=self._is_iscsi(),
+        )
+        return spool
+
+    def _assert_cache_on_ontap(self, pool, spool_ref):
+        if self._is_iscsi():
+            tcu.assert_iscsi_template_cache_lun(
+                self, self.ontap, self.svm_name, pool.name,
+                self.__class__.template_db_id,
+            )
+            cache_count = tcu.count_iscsi_template_cache_luns(
+                self.ontap, self.svm_name, pool.name,
+                self.__class__.template_db_id,
+            )
+            self.assertEqual(
+                cache_count, 1,
+                "Expected exactly one cs_tmpl_%s LUN, found %s"
+                % (self.__class__.template_db_id, cache_count),
+            )
+        else:
+            tcu.assert_nfs_template_cache_file(
+                self, self.ontap, pool.name, spool_ref.get("install_path")
+            )
+
+    def _count_non_cache_luns(self, pool):
+        return tcu.count_luns_excluding_template_cache(
+            self.ontap, self.svm_name, pool.name
+        )
+
+    def _wait_for_non_cache_lun_count(self, pool, expected, timeout=180,
+                                      interval=10):
+        """Poll until the FlexVol holds ``expected`` non-cache LUNs."""
+        deadline = time.time() + timeout
+        current = self._count_non_cache_luns(pool)
+        while current != expected and time.time() < deadline:
+            time.sleep(interval)
+            current = self._count_non_cache_luns(pool)
+        self.assertEqual(
+            current, expected,
+            "Expected %s non-cache LUNs in FlexVol '%s', found %s"
+            % (expected, pool.name, current),
         )
 
     def _create_volume(self, pool_id):
