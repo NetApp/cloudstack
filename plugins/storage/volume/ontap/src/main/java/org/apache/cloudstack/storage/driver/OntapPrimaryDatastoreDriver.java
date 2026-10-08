@@ -354,7 +354,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (requestedSize > templatePoolRef.getTemplateSize()) {
             logger.info("cloneCloudStackVolumeFromTemplate: Growing clone of template [{}] from {} to {} bytes for volume [{}]",
                     templateId, templatePoolRef.getTemplateSize(), requestedSize, volumeInfo.getId());
-            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+            resizeClonedVolumeOrCleanup(storageStrategy, cloned, requestedSize,
+                    "cloneCloudStackVolumeFromTemplate template [" + templateId + "] volume [" + volumeInfo.getId() + "]");
         }
 
         return cloned;
@@ -449,10 +450,36 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (snapshotSize > 0 && requestedSize > snapshotSize) {
             logger.info("cloneCloudStackVolumeFromSnapshot: Growing clone of snapshot [{}] from {} to {} bytes for volume [{}]",
                     csSnapshotId, snapshotSize, requestedSize, volumeInfo.getId());
-            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+            resizeClonedVolumeOrCleanup(storageStrategy, cloned, requestedSize,
+                    "cloneCloudStackVolumeFromSnapshot snapshot [" + csSnapshotId + "] volume [" + volumeInfo.getId() + "]");
         }
 
         return cloned;
+    }
+
+    /**
+     * Grows a just-created ONTAP clone to the requested size. If resize fails, deletes the clone
+     * so the CloudStack create-failure path does not leave an orphaned LUN/file on the array.
+     */
+    private void resizeClonedVolumeOrCleanup(StorageStrategy storageStrategy, CloudStackVolume cloned,
+                                             long requestedSize, String context) {
+        try {
+            storageStrategy.resizeCloudStackVolume(cloned, requestedSize);
+        } catch (RuntimeException resizeEx) {
+            logger.error("{}: Resize to {} bytes failed; deleting orphaned ONTAP clone: {}",
+                    context, requestedSize, resizeEx.getMessage());
+            bestEffortDeleteOrphanedClone(storageStrategy, cloned);
+            throw resizeEx;
+        }
+    }
+
+    private void bestEffortDeleteOrphanedClone(StorageStrategy storageStrategy, CloudStackVolume cloned) {
+        try {
+            storageStrategy.deleteCloudStackVolume(cloned);
+            logger.info("Deleted orphaned ONTAP clone after resize failure");
+        } catch (Exception cleanupEx) {
+            logger.warn("Failed to delete orphaned ONTAP clone after resize failure: {}", cleanupEx.getMessage());
+        }
     }
 
     private String requireSnapshotDetail(long csSnapshotId, String key) {

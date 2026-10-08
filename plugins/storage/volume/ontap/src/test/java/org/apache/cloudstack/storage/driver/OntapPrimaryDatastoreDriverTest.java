@@ -1026,6 +1026,33 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testCreateAsync_VolumeClonedFromSnapshot_ResizeFails_DeletesOrphanedClone() {
+        stubVolumeCloneFromSnapshot(5368709120L, 21474836480L, ProtocolType.ISCSI.name());
+
+        Lun clonedLun = new Lun();
+        clonedLun.setName("/vol/vol1/test_volume");
+        clonedLun.setUuid("snap-cloned-lun-uuid");
+        CloudStackVolume cloned = new CloudStackVolume();
+        cloned.setLun(clonedLun);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(sanStrategy);
+            when(sanStrategy.cloneCloudStackVolume(any())).thenReturn(cloned);
+            doThrow(new CloudRuntimeException("resize failed"))
+                    .when(sanStrategy).resizeCloudStackVolume(eq(cloned), eq(21474836480L));
+            doNothing().when(sanStrategy).deleteCloudStackVolume(eq(cloned));
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            verify(sanStrategy).deleteCloudStackVolume(eq(cloned));
+            verify(volumeDetailsDao, never()).addDetail(eq(100L), eq(OntapStorageConstants.LUN_DOT_UUID), anyString(), anyBoolean());
+        }
+    }
+
+    @Test
     void testCreateAsync_VolumeClonedFromSnapshot_NfsSuccess() {
         stubVolumeCloneFromSnapshot(5368709120L, 5368709120L, ProtocolType.NFS3.name());
         storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
