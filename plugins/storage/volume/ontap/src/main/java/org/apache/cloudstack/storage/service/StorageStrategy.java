@@ -67,7 +67,6 @@ import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
 
-import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options
  *
