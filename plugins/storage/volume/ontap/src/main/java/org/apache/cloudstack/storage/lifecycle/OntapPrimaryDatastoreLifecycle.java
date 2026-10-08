@@ -149,7 +149,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
             }
             Aggregate aggregate;
             try {
-                aggregate = storageStrategy.chooseAggregate(capacityBytes);
+                aggregate = storageStrategy.chooseAggregate(storageStrategy.getAggregates(), capacityBytes);
             } catch (Exception e) {
                 logger.error("Exception occurred while choosing aggregate for pool: " + storagePoolName, e);
                 throw new CloudRuntimeException("Failed to choose ONTAP aggregate for pool: " + storagePoolName
