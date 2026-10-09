@@ -306,22 +306,40 @@ public class UnifiedSANStrategy extends SANStrategy {
         if (sizeInBytes <= 0) {
             throw new CloudRuntimeException("Failed to resize Lun, invalid size " + sizeInBytes);
         }
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        LunSpace lunSpace = new LunSpace();
+        lunSpace.setSize(sizeInBytes);
+        Lun patch = new Lun();
+        patch.setSpace(lunSpace);
+
+        int maxRetries = OntapStorageConstants.ONTAP_LUN_RESIZE_MAX_RETRIES;
+        int pollIntervalMs = OntapStorageConstants.ONTAP_LUN_RESIZE_RETRY_INTERVAL_MS;
         String lunUuid = cloudstackVolume.getLun().getUuid();
-        logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
-        try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            LunSpace lunSpace = new LunSpace();
-            lunSpace.setSize(sizeInBytes);
-            Lun patch = new Lun();
-            patch.setSpace(lunSpace);
-            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
-            pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
-            logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
-        } catch (FeignException e) {
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
-        } catch (Exception e) {
-            logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+        for (int attempt = 1; ; attempt++) {
+            logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
+            try {
+                JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
+                pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
+                logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
+                return;
+            } catch (FeignException e) {
+                if (e.status() != 404 || attempt >= maxRetries) {
+                    logger.error("FeignException occurred while resizing LUN: {}, Status: {}, Exception: {}",
+                            lunUuid, e.status(), e.getMessage());
+                    throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
+                }
+                logger.debug("resizeCloudStackVolume: PATCH for Lun {} returned 404, retry {}/{}",
+                        lunUuid, attempt, maxRetries);
+            } catch (Exception e) {
+                logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
+                throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
+            }
+            try {
+                Thread.sleep(pollIntervalMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new CloudRuntimeException("Interrupted while waiting for Lun to accept resize", ie);
+            }
         }
     }
 
