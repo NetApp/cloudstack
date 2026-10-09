@@ -295,33 +295,54 @@ public class UnifiedSANStrategy extends SANStrategy {
      * Grows an existing LUN to {@code sizeInBytes}.
      *
      * <p>Needed after cloning a cached template, because a clone inherits the size of its source
-     * while the service offering may ask for a larger disk.</p>
+     * while the service offering may ask for a larger disk. ONTAP can temporarily return 404 when
+     * PATCH follows clone creation before the new LUN is visible to the update path, so PATCH is
+     * retried with the UUID returned by the clone response.</p>
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
-        if (cloudstackVolume == null || cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null
+                || cloudstackVolume.getLun().getUuid() == null) {
             logger.error("resizeCloudStackVolume: Lun resize failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("Failed to resize Lun, invalid request");
         }
         if (sizeInBytes <= 0) {
             throw new CloudRuntimeException("Failed to resize Lun, invalid size " + sizeInBytes);
         }
+        String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+        LunSpace lunSpace = new LunSpace();
+        lunSpace.setSize(sizeInBytes);
+        Lun patch = new Lun();
+        patch.setSpace(lunSpace);
+
+        int maxRetries = OntapStorageConstants.ONTAP_LUN_RESIZE_MAX_RETRIES;
+        int pollIntervalMs = OntapStorageConstants.ONTAP_LUN_RESIZE_RETRY_INTERVAL_MS;
         String lunUuid = cloudstackVolume.getLun().getUuid();
-        logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
-        try {
-            String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            LunSpace lunSpace = new LunSpace();
-            lunSpace.setSize(sizeInBytes);
-            Lun patch = new Lun();
-            patch.setSpace(lunSpace);
-            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
-            pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
-            logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
-        } catch (FeignException e) {
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
-        } catch (Exception e) {
-            logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+        for (int attempt = 1; ; attempt++) {
+            logger.trace("resizeCloudStackVolume: Resizing Lun {} to {} bytes", lunUuid, sizeInBytes);
+            try {
+                JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
+                pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
+                logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
+                return;
+            } catch (FeignException e) {
+                if (e.status() != 404 || attempt >= maxRetries) {
+                    logger.error("FeignException occurred while resizing LUN: {}, Status: {}, Exception: {}",
+                            lunUuid, e.status(), e.getMessage());
+                    throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
+                }
+                logger.debug("resizeCloudStackVolume: PATCH for Lun {} returned 404, retry {}/{}",
+                        lunUuid, attempt, maxRetries);
+            } catch (Exception e) {
+                logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
+                throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
+            }
+            try {
+                Thread.sleep(pollIntervalMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new CloudRuntimeException("Interrupted while waiting for Lun to accept resize", ie);
+            }
         }
     }
 
