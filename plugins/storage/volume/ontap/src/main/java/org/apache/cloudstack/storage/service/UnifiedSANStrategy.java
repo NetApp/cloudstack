@@ -299,8 +299,7 @@ public class UnifiedSANStrategy extends SANStrategy {
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
-        if (cloudstackVolume == null || cloudstackVolume.getLun() == null
-                || cloudstackVolume.getLun().getUuid() == null) {
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null || cloudstackVolume.getLun().getUuid() == null) {
             logger.error("resizeCloudStackVolume: Lun resize failed. Invalid request: {}", cloudstackVolume);
             throw new CloudRuntimeException("Failed to resize Lun, invalid request");
         }
