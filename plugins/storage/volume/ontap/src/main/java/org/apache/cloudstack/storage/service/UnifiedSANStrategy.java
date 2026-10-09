@@ -295,9 +295,7 @@ public class UnifiedSANStrategy extends SANStrategy {
      * Grows an existing LUN to {@code sizeInBytes}.
      *
      * <p>Needed after cloning a cached template, because a clone inherits the size of its source
-     * while the service offering may ask for a larger disk. ONTAP can temporarily return 404 when
-     * PATCH follows clone creation before the new LUN is visible to the update path, so PATCH is
-     * retried with the UUID returned by the clone response.</p>
+     * while the service offering may ask for a larger disk.</p>
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
