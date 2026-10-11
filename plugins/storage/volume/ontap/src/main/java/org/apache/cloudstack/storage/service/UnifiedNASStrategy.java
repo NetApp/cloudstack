@@ -95,8 +95,28 @@ public class UnifiedNASStrategy extends NASStrategy {
                 logger.error("createCloudStackVolume: " + errMsg);
                 throw new CloudRuntimeException(errMsg);
             }
+            if (cloudstackVolume.getFile() != null && cloudstackVolume.getFile().getQosPolicy() != null) {
+                try {
+                    updateCloudStackVolume(cloudstackVolume);
+                } catch (RuntimeException qosError) {
+                    logger.error("createCloudStackVolume: QoS attach failed; deleting leftover NFS volume file", qosError);
+                    try {
+                        Answer cleanup = deleteVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
+                        if (cleanup == null || !cleanup.getResult()) {
+                            logger.error("createCloudStackVolume: leftover NFS file may remain after QoS attach failure: {}",
+                                    cleanup != null ? cleanup.getDetails() : "null answer");
+                        }
+                    } catch (Exception cleanupError) {
+                        logger.error("createCloudStackVolume: failed to delete leftover NFS volume file after QoS attach failure",
+                                cleanupError);
+                    }
+                    throw qosError;
+                }
+            }
             return cloudstackVolume;
-        }catch (Exception e) {
+        } catch (CloudRuntimeException e) {
+            throw e;
+        } catch (Exception e) {
             logger.error("createCloudStackVolume: error occured " + e);
             throw new CloudRuntimeException(e);
         }
@@ -115,8 +135,23 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        return null;
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null
+                || cloudstackVolume.getFlexVolumeUuid() == null || cloudstackVolume.getFile() == null) {
+            throw new CloudRuntimeException("Invalid NFS volume QoS update request");
+        }
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(cloudstackVolume.getFile().getQosPolicy());
+        String filePath = cloudstackVolume.getVolumeInfo().getUuid();
+        try {
+            nasFeignClient.updateFile(getAuthHeader(), cloudstackVolume.getFlexVolumeUuid(), filePath, fileInfo);
+        } catch (FeignException e) {
+            throw new CloudRuntimeException("Failed to apply QoS policy to NFS volume file: " + e.getMessage(), e);
+        }
+        logger.info("Applied QoS policy [{}] to NFS volume file [{}]",
+                cloudstackVolume.getFile().getQosPolicy() != null
+                        ? cloudstackVolume.getFile().getQosPolicy().getName() : null, filePath);
+        return cloudstackVolume;
     }
 
     @Override
@@ -140,7 +175,8 @@ public class UnifiedNASStrategy extends NASStrategy {
      * Clones a file inside the FlexVolume using ONTAP's file clone API.
      *
      * <p>The source is taken from {@code file.path} and the destination from
-     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.</p>
+     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.
+     * When {@code snapshotName} is set, the source is read from that FlexVolume snapshot.</p>
      */
     @Override
     public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
@@ -157,14 +193,16 @@ public class UnifiedNASStrategy extends NASStrategy {
         String flexVolUuid = details.get(OntapStorageConstants.VOLUME_UUID);
         String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
         if (flexVolUuid == null || flexVolUuid.isEmpty()) {
-            throw new CloudRuntimeException("Failed to clone file, FlexVolume uuid is missing from pool details");
+            throw new CloudRuntimeException("Failed to clone file, FlexVolume uuid is missing from pool poolDetails");
         }
         String sourcePath = cloudstackVolume.getFile().getPath();
         String destinationPath = cloudstackVolume.getDestinationPath();
+        String snapshotName = cloudstackVolume.getSnapshotName();
 
-        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}]", sourcePath, destinationPath, flexVolName);
+        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}] from snapshot [{}]",
+                sourcePath, destinationPath, flexVolName, snapshotName);
         try {
-            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath);
+            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath, snapshotName);
             JobResponse jobResponse = nasFeignClient.cloneFile(getAuthHeader(), request);
             pollJobIfPresent(jobResponse, "clone file [" + sourcePath + "] to [" + destinationPath + "]");
 
@@ -177,6 +215,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             clonedCloudStackVolume.setFile(clonedFile);
             clonedCloudStackVolume.setDatastoreId(cloudstackVolume.getDatastoreId());
             clonedCloudStackVolume.setVolumeInfo(cloudstackVolume.getVolumeInfo());
+            clonedCloudStackVolume.setSnapshotName(snapshotName);
             return clonedCloudStackVolume;
         } catch (FeignException e) {
             logger.error("FeignException occurred while cloning file [{}], Status: {}, Exception: {}",
@@ -266,7 +305,7 @@ public class UnifiedNASStrategy extends NASStrategy {
             logger.info("createAccessGroup: ExportPolicy created: {}, now attaching this policy to storage pool volume", createdPolicy.getName());
             // attach export policy to volume of storage pool
             assignExportPolicyToVolume(volumeUUID,createdPolicy.getName());
-            // save the export policy details in storage pool details
+            // save the export policy poolDetails in storage pool poolDetails
             storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), OntapStorageConstants.EXPORT_POLICY_ID, String.valueOf(createdPolicy.getId()), true);
             storagePoolDetailsDao.addDetail(accessGroup.getStoragePoolId(), OntapStorageConstants.EXPORT_POLICY_NAME, createdPolicy.getName(), true);
             logger.info("Successfully assigned exportPolicy {} to volume {}", policyRequest.getName(), volumeName);
@@ -327,7 +366,7 @@ public class UnifiedNASStrategy extends NASStrategy {
 
         Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
         if (details == null || details.isEmpty()) {
-            throw new CloudRuntimeException("No storage pool details found for storagePoolId: " + accessGroup.getStoragePoolId());
+            throw new CloudRuntimeException("No storage pool poolDetails found for storagePoolId: " + accessGroup.getStoragePoolId());
         }
         String exportPolicyId = details.get(OntapStorageConstants.EXPORT_POLICY_ID);
         if (exportPolicyId == null || exportPolicyId.isEmpty()) {

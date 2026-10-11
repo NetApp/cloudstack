@@ -90,12 +90,12 @@ public class UnifiedSANStrategy extends SANStrategy {
         } catch (FeignException e) {
             logger.error("FeignException occurred while creating LUN: {}, Status: {}, Exception: {}",
                     cloudstackVolume.getLun().getName(), e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage(), e);
         } catch (CloudRuntimeException e) {
             throw e;
         } catch (Exception e) {
             logger.error("Exception occurred while creating LUN: {}, Exception: {}", cloudstackVolume.getLun().getName(), e.getMessage());
-            throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to create Lun: " + e.getMessage(), e);
         }
     }
 
@@ -110,7 +110,9 @@ public class UnifiedSANStrategy extends SANStrategy {
                                                 Map<String, String> details, long sizeInBytes) {
         if (sizeInBytes <= 0) {
             throw new CloudRuntimeException("Unknown virtual size for template [" + templateInfo.getId()
-                    + "]; cannot size the template LUN on pool [" + storagePool.getId() + "]");
+                    + "]; cannot size the template LUN on pool [" + storagePool.getId() + "]. The template size in vm_template"
+                    + " is unset; verify the template was registered/seeded with its virtual size (virtualsize in"
+                    + " template.properties on secondary storage).");
         }
 
         CloudStackVolume request = buildTemplateLunRequest(storagePool, details, templateInfo.getId(), sizeInBytes);
@@ -183,8 +185,25 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        return null;
+    public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null
+                || cloudstackVolume.getLun().getUuid() == null) {
+            throw new CloudRuntimeException("Invalid iSCSI volume QoS update request");
+        }
+        Lun lunUpdate = new Lun();
+        lunUpdate.setQosPolicy(cloudstackVolume.getLun().getQosPolicy());
+        try {
+            JobResponse response = sanFeignClient.updateLun(
+                    getAuthHeader(), cloudstackVolume.getLun().getUuid(), lunUpdate);
+            pollJobIfPresent(response, "update QoS policy on LUN [" + cloudstackVolume.getLun().getUuid() + "]");
+        } catch (FeignException e) {
+            throw new CloudRuntimeException("Failed to apply QoS policy to LUN: " + e.getMessage(), e);
+        }
+        logger.info("Applied QoS policy [{}] to LUN [{}]",
+                cloudstackVolume.getLun().getQosPolicy() != null
+                        ? cloudstackVolume.getLun().getQosPolicy().getName() : null,
+                cloudstackVolume.getLun().getUuid());
+        return cloudstackVolume;
     }
 
     @Override
@@ -198,7 +217,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
             Map<String, Object> queryParams = Map.of("allow_delete_while_mapped", "true");
             try {
-                sanFeignClient.deleteLun(authHeader, cloudstackVolume.getLun().getUuid(), queryParams);
+                JobResponse response = sanFeignClient.deleteLun(authHeader, cloudstackVolume.getLun().getUuid(), queryParams);
+                pollJobIfPresent(response, "delete Lun [" + cloudstackVolume.getLun().getName() + "]");
             } catch (FeignException feignEx) {
                 if (feignEx.status() == 404) {
                     logger.warn("deleteCloudStackVolume: Lun {} does not exist (status 404), skipping deletion", cloudstackVolume.getLun().getName());
@@ -260,7 +280,6 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
-
     /**
      * Ensures ONTAP returned a usable LUN identity from create/clone. Callers in the datastore
      * driver rely on non-null name and uuid, so reject incomplete records at the Feign boundary.
@@ -295,12 +314,11 @@ public class UnifiedSANStrategy extends SANStrategy {
             lunSpace.setSize(sizeInBytes);
             Lun patch = new Lun();
             patch.setSpace(lunSpace);
-            sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, patch);
+            pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
             logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
         } catch (FeignException e) {
-            logger.error("FeignException occurred while resizing LUN: {}, Status: {}, Exception: {}",
-                    lunUuid, e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage(), e);
         } catch (Exception e) {
             logger.error("Exception occurred while resizing LUN: {}, Exception: {}", lunUuid, e.getMessage());
             throw new CloudRuntimeException("Failed to resize Lun: " + e.getMessage());
@@ -340,10 +358,10 @@ public class UnifiedSANStrategy extends SANStrategy {
                 return null;
             }
             logger.error("FeignException occurred while fetching Lun, Status: {}, Exception: {}", e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun poolDetails: " + e.getMessage());
         } catch (Exception e) {
             logger.error("Exception occurred while fetching Lun, Exception: {}", e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Lun details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Lun poolDetails: " + e.getMessage());
         }
     }
 
@@ -394,9 +412,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             logger.error("createAccessGroup: Igroup creation failed. Invalid request: {}", accessGroup);
             throw new CloudRuntimeException("Failed to create Igroup, invalid request");
         }
-        // Get StoragePool details
+        // Get StoragePool poolDetails
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("Failed to create Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException("Failed to create Igroup, invalid datastore poolDetails in the request");
         }
         if (accessGroup.getHostsToConnect() == null || accessGroup.getHostsToConnect().isEmpty()) {
             throw new CloudRuntimeException("Failed to create Igroup, no hosts to connect provided in the request");
@@ -405,7 +423,7 @@ public class UnifiedSANStrategy extends SANStrategy {
         String igroupName = null;
         try {
             Map<String, String> dataStoreDetails = storagePoolDetailsDao.listDetailsKeyPairs(accessGroup.getStoragePoolId());
-            logger.trace("createAccessGroup: Successfully fetched datastore details.");
+            logger.trace("createAccessGroup: Successfully fetched datastore poolDetails.");
 
             // Generate Igroup request
             Igroup igroupRequest = new Igroup();
@@ -481,9 +499,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             logger.error("deleteAccessGroup: Igroup deletion failed. Invalid request: {}", accessGroup);
             throw new CloudRuntimeException("Failed to delete Igroup, invalid request");
         }
-        // Get StoragePool details
+        // Get StoragePool poolDetails
         if (accessGroup.getStoragePoolId() == null) {
-            throw new CloudRuntimeException("Failed to delete Igroup, invalid datastore details in the request");
+            throw new CloudRuntimeException("Failed to delete Igroup, invalid datastore poolDetails in the request");
         }
         try {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
@@ -590,10 +608,10 @@ public class UnifiedSANStrategy extends SANStrategy {
                 return null;
             }
             logger.error("FeignException occurred while fetching Igroup, Status: {}, Exception: {}", e.status(), e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup poolDetails: " + e.getMessage());
         } catch (Exception e) {
             logger.error("Exception occurred while fetching Igroup, Exception: {}", e.getMessage());
-            throw new CloudRuntimeException("Failed to fetch Igroup details: " + e.getMessage());
+            throw new CloudRuntimeException("Failed to fetch Igroup poolDetails: " + e.getMessage());
         }
     }
 
@@ -639,7 +657,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                     throw feignEx;
                 }
             }
-            // Get the LunMap details
+            // Get the LunMap poolDetails
             OntapResponse<LunMap> lunMapResponse = null;
             try {
                 lunMapResponse = sanFeignClient.getLunMapResponse(authHeader,
@@ -654,12 +672,12 @@ public class UnifiedSANStrategy extends SANStrategy {
                     lunNumber =  lunMapResponse.getRecords().get(0).getLogicalUnitNumber().toString();
 
                 } else {
-                    logger.error("enableLogicalAccess: Failed to fetch LunMap details for Lun: {} and igroup: {}. LunMap response is null or empty.", lunName, igroupName);
-                    throw new CloudRuntimeException("Failed to fetch LunMap details for Lun: " + lunName + " and igroup: " + igroupName);
+                    logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}. LunMap response is null or empty.", lunName, igroupName);
+                    throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
                 }
             } catch (Exception e) {
-                logger.error("enableLogicalAccess: Failed to fetch LunMap details for Lun: {} and igroup: {}, Exception: {}", lunName, igroupName, e);
-                throw new CloudRuntimeException("Failed to fetch LunMap details for Lun: " + lunName + " and igroup: " + igroupName);
+                logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}, Exception: {}", lunName, igroupName, e);
+                throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
             }
             logger.trace("enableLogicalAccess: LunMap created successfully, LunMap: {}", lunMapResponse.getRecords().get(0));
         } catch (Exception e) {
