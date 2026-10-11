@@ -136,6 +136,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     @Override
+    public boolean zoneWideVolumesAvailableWithoutClusterMotion(){
+        logger.trace("zoneWideVolumesAvailableWithoutClusterMotion invoked");
+        return true;
+    }
+
+    @Override
     public boolean requiresAccessForMigration(DataObject dataObject) {
         logger.trace("requiresAccessForMigration invoked");
         return true;
