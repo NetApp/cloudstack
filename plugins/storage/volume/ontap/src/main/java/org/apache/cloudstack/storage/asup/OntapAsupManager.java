@@ -457,9 +457,9 @@ public class OntapAsupManager extends ManagerBase {
     }
 
     /**
-     * Adds {@code hasMultiPrimaryStoragePoolVm}: true when at least one VM with ROOT on this
-     * pool also has an attached DATADISK on a different primary storage pool. Uses a single
-     * {@code LIMIT 1} existence query.
+     * Adds {@code hasMultiPrimaryStoragePoolVm}: true when at least one VM with a Ready ROOT
+     * on this pool also has an attached Ready DATADISK on a different primary storage pool.
+     * Uses a single {@code LIMIT 1} existence query.
      */
     private void hasMultiPrimaryStoragePoolVm(StoragePoolVO pool, Map<String, Object> payload) {
         try {
