@@ -326,6 +326,19 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void copyAsyncExceptionWithoutMessageCompletesCallbackWithFailure() {
+        VolumeInfo srcVolume = mock(VolumeInfo.class);
+        VolumeInfo destVolume = mock(VolumeInfo.class);
+        when(srcVolume.getState()).thenThrow(new RuntimeException());
+
+        driver.copyAsync(srcVolume, destVolume, copyCallback);
+
+        verify(copyCallback).complete(argThat(result -> result != null
+                && result.isFailed()
+                && result.getResult().contains(RuntimeException.class.getName())));
+    }
+
+    @Test
     void testCreateAsync_NullDataObject_ThrowsException() {
         assertThrows(InvalidParameterValueException.class,
             () -> driver.createAsync(dataStore, null, createCallback));
@@ -964,6 +977,31 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertTrue(driver.grantAccess(volumeInfo, host, dataStore));
             verify(nasStrategy, never()).updateAccessGroup(any());
+        }
+    }
+
+    @Test
+    void testGrantAccess_NFSAttachingUnattached_DoesNotUpdateExportPolicy() throws Exception {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getUuid()).thenReturn("vol-uuid");
+        when(volumeVO.getState()).thenReturn(Volume.State.Attaching);
+        when(volumeVO.getInstanceId()).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            assertTrue(driver.grantAccess(volumeInfo, host, dataStore));
+            verify(nasStrategy, never()).updateAccessGroup(any());
+            verify(storageManager, never()).connectHostToSharedPool(any(), anyLong());
         }
     }
 

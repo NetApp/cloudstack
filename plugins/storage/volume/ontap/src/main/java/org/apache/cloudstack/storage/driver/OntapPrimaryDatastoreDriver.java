@@ -1207,6 +1207,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     private boolean areCompatibleIscsiCopyPools(Map<String, String> srcDetails, Map<String, String> destDetails) {
+        // This check is narrower than the core migration rule because canCopy already requires two ONTAP iSCSI pools.
         if (srcDetails == null || destDetails == null
                 || !isIscsi(srcDetails) || !isIscsi(destDetails)
                 || !StringUtils.equals(srcDetails.get(OntapStorageConstants.STORAGE_IP),
@@ -1240,8 +1241,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             destVolumeVO.setFolder(copiedLun.getUuid());
             destVolumeVO.set_iScsiName(null);
             copiedPath = copiedLun.getName();
-        } else if (copiedVolume.getFile() != null && copiedVolume.getFile().getPath() != null) {
-            copiedPath = copiedVolume.getFile().getPath();
         }
         destVolumeVO.setPath(copiedPath);
         volumeDao.update(destVolumeVO.getId(), destVolumeVO);

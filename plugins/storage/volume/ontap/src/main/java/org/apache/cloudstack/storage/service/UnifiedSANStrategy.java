@@ -362,8 +362,12 @@ public class UnifiedSANStrategy extends SANStrategy {
         Lun.Copy copy = new Lun.Copy();
         copy.setSource(source);
 
+        String svmName = destDetails.get(OntapStorageConstants.SVM_NAME);
+        if (StringUtils.isBlank(svmName)) {
+            throw new CloudRuntimeException("Destination storage pool has no ONTAP SVM name");
+        }
         Svm svm = new Svm();
-        svm.setName(destDetails.get(OntapStorageConstants.SVM_NAME));
+        svm.setName(svmName);
         Lun lun = new Lun();
         lun.setSvm(svm);
         lun.setName(OntapStorageUtils.getLunName(destStoragePool.getName(), destLunName));
