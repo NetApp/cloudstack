@@ -19,9 +19,9 @@
 Combined (sequential + concurrency) VM-instance benchmark for the NetApp
 ONTAP CloudStack plugin.
 
-Convenience wrapper that runs benchmark_vm_instance_sequential.py's Section
-5.2 scale matrix immediately followed by benchmark_vm_instance_concurrency.py's
-Section 6.2 parallel matrix, for each protocol, under a single shared
+Convenience wrapper that runs benchmark_vm_instance_sequential.py's sequential
+scale matrix immediately followed by benchmark_vm_instance_concurrency.py's
+parallel matrix, for each protocol, under a single shared
 --run-id - equivalent to running both scripts back to back, but in one
 invocation and one combined results/summary_vm_<run_id>.csv.
 
@@ -29,7 +29,7 @@ Prefer the two standalone scripts (benchmark_vm_instance_sequential.py /
 benchmark_vm_instance_concurrency.py) when you want to review the sequential
 results before deciding whether to proceed with a concurrency run - this
 combined script is for when you already trust the config/environment and just
-want the full 5.2.x + 6.2.x matrix in one go.
+want the full sequential and parallel matrix in one go.
 
 Protocols and concurrency levels come from config.yaml. Prefer run.py.
 

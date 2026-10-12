@@ -19,11 +19,10 @@
 Concurrency storage-pool benchmark for the NetApp ONTAP CloudStack plugin.
 
 Drives createStoragePool / deleteStoragePool in parallel (ThreadPoolExecutor)
-over the CloudStack HTTP/REST API and reproduces Section 6.1 - Parallel/
-Concurrency Matrix (C = 2,5,10,20,30 workers):
+over the CloudStack HTTP/REST API. Concurrency levels come from config.yaml:
 
-  6.1.1 Parallel pool creation
-  6.1.2 Parallel pool deletion
+  Parallel pool creation
+  Parallel pool deletion
 
 See benchmark_storage_pool_sequential.py for the sequential scale matrix
 (kept as a separate script/entry point on purpose - concurrency runs are the
@@ -79,7 +78,7 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
     prefix = cfg["benchmark"]["pool_name_prefix"]
 
     for level in levels:
-        log.info("[6.1.1] Parallel CREATE protocol=%s C=%s", protocol_key, level)
+        log.info("Parallel pool create protocol=%s concurrency=%s", protocol_key, level)
         names = [format_pool_name(prefix, protocol_key, run_id, i, concurrency_level=level)
                  for i in range(1, level + 1)]
 
@@ -95,14 +94,14 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         wall = time.perf_counter() - t0
 
         for idx, r in enumerate(results, start=1):
-            raw_logger.log(run_id, "concurrent_create", "6.1.1", protocol_key, level, idx, r)
+            raw_logger.log(run_id, "concurrent_create", "pool_concurrent_create", protocol_key, level, idx, r)
 
         succ = [r for r in results if r.success]
         fail = [r for r in results if not r.success]
         avg = mean_seconds([r.duration_sec for r in succ])
         notes = "Watch mgmt-server job-queue/thread-pool saturation as a confound" if level >= 30 else ""
         summary_rows.append({
-            "run_id": run_id, "phase": "concurrent_create", "test_id": "6.1.1",
+            "run_id": run_id, "phase": "concurrent_create", "test_id": "pool_concurrent_create",
             "protocol": protocol_key, "checkpoint": level,
             "total_time_sec": round(wall, 3), "avg_time_sec": round(avg, 3),
             "success_count": len(succ), "failure_count": len(fail), "notes": notes,
@@ -114,7 +113,7 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         for r in fail:
             log.error("%s: %s", r.pool_name, r.error)
 
-        log.info("[6.1.2] Parallel DELETE protocol=%s C=%s", protocol_key, len(succ))
+        log.info("Parallel pool delete protocol=%s concurrency=%s", protocol_key, len(succ))
         t0 = time.perf_counter()
         del_results = []
         if dry_run:
@@ -127,13 +126,13 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         wall_del = time.perf_counter() - t0
 
         for idx, r in enumerate(del_results, start=1):
-            raw_logger.log(run_id, "concurrent_delete", "6.1.2", protocol_key, level, idx, r)
+            raw_logger.log(run_id, "concurrent_delete", "pool_concurrent_delete", protocol_key, level, idx, r)
 
         succ_d = [r for r in del_results if r.success]
         fail_d = [r for r in del_results if not r.success]
         avg_d = mean_seconds([r.duration_sec for r in succ_d])
         summary_rows.append({
-            "run_id": run_id, "phase": "concurrent_delete", "test_id": "6.1.2",
+            "run_id": run_id, "phase": "concurrent_delete", "test_id": "pool_concurrent_delete",
             "protocol": protocol_key, "checkpoint": level,
             "total_time_sec": round(wall_del, 3), "avg_time_sec": round(avg_d, 3),
             "success_count": len(succ_d), "failure_count": len(fail_d), "notes": "",

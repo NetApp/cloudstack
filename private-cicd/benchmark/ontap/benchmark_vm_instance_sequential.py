@@ -20,11 +20,11 @@ Sequential VM-instance benchmark for the NetApp ONTAP CloudStack plugin.
 
 Drives deployVirtualMachine / destroyVirtualMachine one at a time over the
 CloudStack HTTP/REST API against pre-provisioned bench_vm_nfs3 / bench_vm_iscsi
-storage pools (see README.md "VM instance benchmark prerequisites") and
-reproduces Section 5.2 - Sequential Scale Matrix:
+storage pools (see README.md "VM instance benchmark prerequisites").
+Checkpoints come from config.yaml:
 
-  5.2.1 Sequential create (1 VM at a time, cumulative to N)
-  5.2.2 Sequential delete (1 VM at a time, from N remaining)
+  Sequential create (1 VM at a time, cumulative to N)
+  Sequential delete (1 VM at a time, from N remaining)
 
 Each deployed VM gets a root disk (from the service offering) AND one data
 disk (from the disk offering) landing on the SAME tagged storage pool.
@@ -86,11 +86,11 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
 
     created = []
     create_durations = []
-    log.info("[5.2.1] Sequential CREATE protocol=%s up to N=%s", protocol_key, max_n)
+    log.info("Sequential VM create protocol=%s up to N=%s", protocol_key, max_n)
     for i in range(1, max_n + 1):
         name = format_vm_name(prefix, protocol_key, run_id, i)
         result = fake_create(name) if dry_run else deploy_vm(client, name, infra, vm_cfg, proto_cfg)
-        raw_logger.log(run_id, "sequential_create", "5.2.1", protocol_key, max_n, i, result)
+        raw_logger.log(run_id, "sequential_create", "vm_sequential_create", protocol_key, max_n, i, result)
         status = "OK" if result.success else "FAIL"
         log.info("[%s/%s] create %s -> %s (%.3fs)", i, max_n, name, status, result.duration_sec)
         if result.success:
@@ -102,7 +102,7 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
             total = sum(create_durations)
             avg = mean_seconds(create_durations)
             summary_rows.append({
-                "run_id": run_id, "phase": "sequential_create", "test_id": "5.2.1",
+                "run_id": run_id, "phase": "sequential_create", "test_id": "vm_sequential_create",
                 "protocol": protocol_key, "checkpoint": i,
                 "total_time_sec": round(total, 3), "avg_time_sec": round(avg, 3),
                 "success_count": len(created), "failure_count": i - len(created), "notes": "",
@@ -115,10 +115,10 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
             time.sleep(delay)
 
     total_created = len(created)
-    log.info("[5.2.2] Sequential DELETE protocol=%s from N=%s remaining", protocol_key, total_created)
+    log.info("Sequential VM delete protocol=%s from N=%s remaining", protocol_key, total_created)
     if total_created in checkpoints:
         summary_rows.append({
-            "run_id": run_id, "phase": "sequential_delete", "test_id": "5.2.2",
+            "run_id": run_id, "phase": "sequential_delete", "test_id": "vm_sequential_delete",
             "protocol": protocol_key, "checkpoint": total_created,
             "total_time_sec": 0, "avg_time_sec": 0, "success_count": 0, "failure_count": 0,
             "notes": "baseline - no deletes issued yet",
@@ -128,7 +128,7 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
     for idx, (name, vm_id) in enumerate(created, start=1):
         result = fake_delete(vm_id, name) if dry_run else destroy_vm(client, vm_id, name)
         remaining = total_created - idx
-        raw_logger.log(run_id, "sequential_delete", "5.2.2", protocol_key, total_created, idx, result)
+        raw_logger.log(run_id, "sequential_delete", "vm_sequential_delete", protocol_key, total_created, idx, result)
         status = "OK" if result.success else "FAIL"
         log.info(
             "[%s/%s] delete %s -> %s (%.3fs) remaining=%s",
@@ -143,7 +143,7 @@ def run_sequential(client, cfg, protocol_key, run_id, raw_logger, summary_rows, 
             total = sum(delete_durations)
             avg = mean_seconds(delete_durations)
             summary_rows.append({
-                "run_id": run_id, "phase": "sequential_delete", "test_id": "5.2.2",
+                "run_id": run_id, "phase": "sequential_delete", "test_id": "vm_sequential_delete",
                 "protocol": protocol_key, "checkpoint": remaining,
                 "total_time_sec": round(total, 3), "avg_time_sec": round(avg, 3),
                 "success_count": deleted_ok, "failure_count": idx - deleted_ok, "notes": "",

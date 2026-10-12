@@ -21,11 +21,10 @@ Concurrency VM-instance benchmark for the NetApp ONTAP CloudStack plugin.
 Drives deployVirtualMachine / destroyVirtualMachine in parallel
 (ThreadPoolExecutor) over the CloudStack HTTP/REST API against pre-
 provisioned bench_vm_nfs3 / bench_vm_iscsi storage pools (see README.md
-"VM instance benchmark prerequisites") and reproduces Section 6.2 - Parallel/
-Concurrency Matrix:
+"VM instance benchmark prerequisites"). Concurrency levels come from config.yaml:
 
-  6.2.1 Parallel VM creation
-  6.2.2 Parallel VM deletion
+  Parallel VM creation
+  Parallel VM deletion
 
 Each deployed VM gets a root disk (from the service offering) AND one data
 disk (from the disk offering) landing on the SAME tagged storage pool.
@@ -87,7 +86,7 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
     prefix = vm_cfg["vm_name_prefix"]
 
     for level in levels:
-        log.info("[6.2.1] Parallel CREATE protocol=%s C=%s", protocol_key, level)
+        log.info("Parallel VM create protocol=%s concurrency=%s", protocol_key, level)
         names = [format_vm_name(prefix, protocol_key, run_id, i, concurrency_level=level)
                  for i in range(1, level + 1)]
 
@@ -103,14 +102,14 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         wall = time.perf_counter() - t0
 
         for idx, r in enumerate(results, start=1):
-            raw_logger.log(run_id, "concurrent_create", "6.2.1", protocol_key, level, idx, r)
+            raw_logger.log(run_id, "concurrent_create", "vm_concurrent_create", protocol_key, level, idx, r)
 
         succ = [r for r in results if r.success]
         fail = [r for r in results if not r.success]
         avg = mean_seconds([r.duration_sec for r in succ])
         notes = "Watch mgmt-server job-queue/thread-pool + single-host KVM saturation as a confound" if level >= 20 else ""
         summary_rows.append({
-            "run_id": run_id, "phase": "concurrent_create", "test_id": "6.2.1",
+            "run_id": run_id, "phase": "concurrent_create", "test_id": "vm_concurrent_create",
             "protocol": protocol_key, "checkpoint": level,
             "total_time_sec": round(wall, 3), "avg_time_sec": round(avg, 3),
             "success_count": len(succ), "failure_count": len(fail), "notes": notes,
@@ -122,7 +121,7 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         for r in fail:
             log.error("%s: %s", r.vm_name, r.error)
 
-        log.info("[6.2.2] Parallel DELETE protocol=%s C=%s", protocol_key, len(succ))
+        log.info("Parallel VM delete protocol=%s concurrency=%s", protocol_key, len(succ))
         t0 = time.perf_counter()
         del_results = []
         if dry_run:
@@ -135,13 +134,13 @@ def run_concurrency(client, cfg, protocol_key, run_id, raw_logger, summary_rows,
         wall_del = time.perf_counter() - t0
 
         for idx, r in enumerate(del_results, start=1):
-            raw_logger.log(run_id, "concurrent_delete", "6.2.2", protocol_key, level, idx, r)
+            raw_logger.log(run_id, "concurrent_delete", "vm_concurrent_delete", protocol_key, level, idx, r)
 
         succ_d = [r for r in del_results if r.success]
         fail_d = [r for r in del_results if not r.success]
         avg_d = mean_seconds([r.duration_sec for r in succ_d])
         summary_rows.append({
-            "run_id": run_id, "phase": "concurrent_delete", "test_id": "6.2.2",
+            "run_id": run_id, "phase": "concurrent_delete", "test_id": "vm_concurrent_delete",
             "protocol": protocol_key, "checkpoint": level,
             "total_time_sec": round(wall_del, 3), "avg_time_sec": round(avg_d, 3),
             "success_count": len(succ_d), "failure_count": len(fail_d), "notes": "",

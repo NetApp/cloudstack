@@ -16,9 +16,8 @@
 # specific language governing permissions and limitations
 # under the License.
 """
-Turn a benchmark run's raw and summary CSVs into markdown tables for sections
-5.1.1, 5.1.2, 6.1.1, 6.1.2 (storage pools) or 5.2.x / 6.2.x (VM instances),
-plus Results Log rows.
+Turn a benchmark run's raw and summary CSVs into markdown tables for the
+storage-pool and VM-instance sequential and parallel runs, plus a results log.
 
 Usage:
     python3 render_report.py --run-id RUN_20260722_120000_ab12 \
@@ -34,16 +33,24 @@ from collections import defaultdict
 PROTOCOL_ORDER = ["nfs3", "iscsi"]
 PROTOCOL_LABEL = {"nfs3": "NFS3", "iscsi": "iSCSI"}
 
-# test_id -> (section title, sequential N-column label, category for section 9)
+# test_id -> (title, sequential N-column label, category, phase)
 SECTION_DEFS = {
-    "5.1.1": ("5.1.1 Sequential create (1 pool at a time, cumulative to N)", "N (pools)", "Storage Pool"),
-    "5.1.2": ("5.1.2 Sequential delete (1 pool at a time, from N remaining)", "N (pools remaining)", "Storage Pool"),
-    "6.1.1": ("6.1.1 Parallel pool creation", None, "Storage Pool"),
-    "6.1.2": ("6.1.2 Parallel pool deletion", None, "Storage Pool"),
-    "5.2.1": ("5.2.1 Sequential create (1 VM at a time, cumulative to N)", "N (VMs)", "VM Instance"),
-    "5.2.2": ("5.2.2 Sequential delete (1 VM at a time, from N remaining)", "N (VMs remaining)", "VM Instance"),
-    "6.2.1": ("6.2.1 Parallel VM creation", None, "VM Instance"),
-    "6.2.2": ("6.2.2 Parallel VM deletion", None, "VM Instance"),
+    "pool_sequential_create": (
+        "Sequential create (1 pool at a time, cumulative to N)",
+        "N (pools)", "Storage Pool", "sequential_create"),
+    "pool_sequential_delete": (
+        "Sequential delete (1 pool at a time, from N remaining)",
+        "N (pools remaining)", "Storage Pool", "sequential_delete"),
+    "pool_concurrent_create": ("Parallel pool creation", None, "Storage Pool", "concurrent_create"),
+    "pool_concurrent_delete": ("Parallel pool deletion", None, "Storage Pool", "concurrent_delete"),
+    "vm_sequential_create": (
+        "Sequential create (1 VM at a time, cumulative to N)",
+        "N (VMs)", "VM Instance", "sequential_create"),
+    "vm_sequential_delete": (
+        "Sequential delete (1 VM at a time, from N remaining)",
+        "N (VMs remaining)", "VM Instance", "sequential_delete"),
+    "vm_concurrent_create": ("Parallel VM creation", None, "VM Instance", "concurrent_create"),
+    "vm_concurrent_delete": ("Parallel VM deletion", None, "VM Instance", "concurrent_delete"),
 }
 
 
@@ -129,7 +136,7 @@ def render_concurrency_table(summary_rows, test_id):
 
 
 def build_results_log_rows(summary_rows, raw_rows, run_id, cs_build, ontap_version, run_date):
-    header = ("| Run Date | Run ID | CloudStack Build | ONTAP Version | Category | Test ID / Section | "
+    header = ("| Run Date | Run ID | CloudStack Build | ONTAP Version | Category | Test ID | "
                "Scale (N) / Concurrency (C) | Protocol | Min (s) | Avg (s) | P95 (s) | Max (s) | "
                "Success Rate | Notes |")
     sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
@@ -157,7 +164,7 @@ def build_results_log_rows(summary_rows, raw_rows, run_id, cs_build, ontap_versi
         mn, avg, p95, mx = stats_for(durations)
         total_ops = int(row["success_count"]) + int(row["failure_count"])
         success_rate = f"{(int(row['success_count']) / total_ops * 100):.0f}%" if total_ops else "-"
-        category = SECTION_DEFS.get(test_id, (None, None, "Storage Pool"))[2]
+        category = SECTION_DEFS.get(test_id, (None, None, "Storage Pool", None))[2]
         lines.append(
             f"| {run_date} | {run_id} | {cs_build} | {ontap_version} | {category} | {test_id} | "
             f"{scale_label} | {PROTOCOL_LABEL.get(protocol, protocol)} | "
@@ -193,21 +200,18 @@ def main():
     if not summary_rows:
         raise SystemExit(f"No summary rows found at {summary_path}")
 
-    # Render whichever sections actually have data in this run, in a stable order.
-    present_test_ids = sorted({r["test_id"] for r in summary_rows if r["test_id"] in SECTION_DEFS})
+    # Render whichever tests actually have data in this run, in a stable order.
+    present_test_ids = {r["test_id"] for r in summary_rows}
     sections = []
-    for test_id in present_test_ids:
-        title, n_label, _category = SECTION_DEFS[test_id]
-        phase = {
-            "5.1.1": "sequential_create", "5.1.2": "sequential_delete",
-            "5.2.1": "sequential_create", "5.2.2": "sequential_delete",
-        }.get(test_id)
+    for test_id, (title, n_label, _category, phase) in SECTION_DEFS.items():
+        if test_id not in present_test_ids:
+            continue
         if n_label is not None:
             sections.append(f"### {title}\n\n" +
                              render_sequential_table(summary_rows, raw_rows, phase, test_id, n_label))
         else:
             sections.append(f"### {title}\n\n" + render_concurrency_table(summary_rows, test_id))
-    sections.append("### 9. Results Log rows for this run\n\n" +
+    sections.append("### Results log\n\n" +
                      build_results_log_rows(summary_rows, raw_rows, args.run_id, args.cloudstack_build,
                                              args.ontap_version, run_date))
 
