@@ -73,6 +73,7 @@ public class OntapStorageConstants {
      * NAA designator type prepended by {@code scsi_id}) as {@code /dev/disk/by-id/scsi-3<wwid>}.</p>
      */
     public static final String NETAPP_NAA_OUI = "600a0980";
+    public static final String SPACE_USED = "space.used";
     public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_capacity_optimized,is_perf_optimized";
     public  static final String INITIATORS = "initiators";
     public static final String AGGREGATES = "aggregates";
