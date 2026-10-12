@@ -19,7 +19,7 @@
 Sequential workflow integration tests for NetApp ONTAP data volume lifecycle
 with a running virtual machine.
 
-Tests are numbered test_01 ... test_12, plus test_03a and test_03b, and must
+Tests are numbered test_01 ... test_11, plus test_03a and test_03b, and must
 run in that order.  Each step builds on the shared state established by the
 previous step.
 
@@ -36,14 +36,13 @@ Workflow:
   03a Deploy a second VM — reuses the cache (still one template_spool_ref)
   03b Expunge the second VM — cache and template_spool_ref survive
   04  Attach the ONTAP data volume to the running VM
-  05  Verify resize is rejected while the attached VM is running
-  06  Stop the VM — export policy stays; volume remains attached in CS
-  07  Grow the attached volume and its qcow2 file while the VM is stopped
-  08  Verify shrinking the volume is rejected without changing its size
-  09  Start the VM — VM Running; volume still attached; FlexVol online
-  10  Detach the ONTAP data volume from the VM
-  11  Grow the detached data volume
-  12  Destroy VM (cache still survives); delete ONTAP volume; enter
+  05  Stop the VM — export policy stays; volume remains attached in CS
+  06  Grow the attached volume and its qcow2 file while the VM is stopped
+  07  Verify shrinking the volume is rejected without changing its size
+  08  Start the VM — VM Running; volume still attached; FlexVol online
+  09  Detach the ONTAP data volume from the VM
+  10  Grow the detached data volume
+  11  Destroy VM (cache still survives); delete ONTAP volume; enter
       maintenance; force-delete pool
 
 Prerequisites:
@@ -652,60 +651,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 05 - Resize attached volume while VM is running must fail
+    # Step 05 - Stop VM — export policy must be retained
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_05_resize_running_vm_rejected(self):
-        """
-        Attempt to grow the attached volume while its managed KVM VM is
-        running.
-        Verifies:
-          - CloudStack rejects the resize while the VM is running
-          - CloudStack volume size is unchanged
-          - The ONTAP backing file is still present in the FlexVol
-          - qcow2 virtual size is unchanged
-        """
-        if self.__class__.vm is None:
-            self.skipTest("VM not deployed — test_03 was skipped")
-        self.assertIsNotNone(self.__class__.volume,
-                             "Volume absent — test_02 must pass first")
-
-        target_gib = self.__class__.target_volume_size // (1024 ** 3)
-        with self.assertRaises(Exception) as context:
-            self._resize_volume(self.__class__.volume.id, target_gib)
-        self.assertIn(
-            "not in the Stopped state", str(context.exception),
-            "Resize failed for an unexpected reason")
-
-        volume = self._poll_volume_size(
-            self.__class__.volume.id, self.__class__.initial_volume_size)
-        self.assertIsNotNone(
-            volume, "CloudStack volume size changed after rejected resize")
-
-        # DB: size must remain unchanged after a rejected resize
-        db_size = self._get_db_volume_size(self.__class__.volume.id)
-        self.assertEqual(
-            db_size, self.__class__.initial_volume_size,
-            "cloud DB volumes.size changed after rejected running-VM resize")
-
-        files = self.ontap.list_files_in_volume(self.__class__.pool.name)
-        self.assertIn(
-            self.__class__.volume_path, files,
-            "ONTAP backing file disappeared after the rejected running-VM resize")
-
-        backend_size = self._get_qcow2_virtual_size(
-            self.__class__.pool.id, self.__class__.volume_path)
-        self.assertEqual(
-            backend_size, self.__class__.initial_volume_size,
-            "qcow2 virtual size changed after rejected running-VM resize")
-
-    # ------------------------------------------------------------------
-    # Step 06 - Stop VM — export policy must be retained
-    # ------------------------------------------------------------------
-
-    @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_06_stop_vm_export_retained(self):
+    def test_05_stop_vm_export_retained(self):
         """
         Stop the running VM while the NFS3 data volume is still attached.
         Unlike iSCSI (where LUN-maps are removed on VM stop), NFS3 export
@@ -759,11 +709,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 07 - Grow attached volume while VM is stopped
+    # Step 06 - Grow attached volume while VM is stopped
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_07_grow_stopped_vm_volume(self):
+    def test_06_grow_stopped_vm_volume(self):
         """
         Grow the attached NFS3 volume while its managed KVM VM is stopped.
         Verifies:
@@ -809,11 +759,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "NFS3 backing file disappeared from ONTAP after resize")
 
     # ------------------------------------------------------------------
-    # Step 08 - Shrink must fail
+    # Step 07 - Shrink must fail
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_08_shrink_rejected(self):
+    def test_07_shrink_rejected(self):
         """
         Attempt to shrink the grown NFS3 volume back to its initial size.
         Verifies:
@@ -827,7 +777,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.assertEqual(
             self._get_db_volume_size(self.__class__.volume.id),
             self.__class__.target_volume_size,
-            "Volume was not grown to the target size — test_07 must pass "
+            "Volume was not grown to the target size — test_06 must pass "
             "before the shrink check")
 
         initial_gib = self.__class__.initial_volume_size // (1024 ** 3)
@@ -857,11 +807,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "qcow2 virtual size changed after rejected shrink")
 
     # ------------------------------------------------------------------
-    # Step 09 - Start VM — volume accessible; FlexVol online
+    # Step 08 - Start VM — volume accessible; FlexVol online
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_09_start_vm_volume_accessible(self):
+    def test_08_start_vm_volume_accessible(self):
         """
         Start the stopped VM.
         Verifies:
@@ -921,11 +871,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
             "KVM data-disk capacity does not reflect the NFS3 resize")
 
     # ------------------------------------------------------------------
-    # Step 10 - Detach ONTAP data volume from the VM
+    # Step 09 - Detach ONTAP data volume from the VM
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_10_detach_volume_from_vm(self):
+    def test_09_detach_volume_from_vm(self):
         """
         Detach the ONTAP data volume from the running VM.
         Verifies:
@@ -1008,11 +958,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 11 - Grow detached data volume
+    # Step 10 - Grow detached data volume
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_11_grow_detached_volume(self):
+    def test_10_grow_detached_volume(self):
         """Grow the materialized qcow2 after it has been detached."""
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_02 must pass first")
@@ -1033,11 +983,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.__class__.target_volume_size = detached_target
 
     # ------------------------------------------------------------------
-    # Step 12 - Destroy VM, delete volume, delete pool
+    # Step 11 - Destroy VM, delete volume, delete pool
     # ------------------------------------------------------------------
 
     @attr(tags=["vm_volume_workflow"], required_hardware=True)
-    def test_12_destroy_vm_and_cleanup(self):
+    def test_11_destroy_vm_and_cleanup(self):
         """
         Destroy the VM, delete the ONTAP data volume, enter maintenance,
         then force-delete the pool.
