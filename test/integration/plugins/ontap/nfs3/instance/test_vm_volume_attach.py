@@ -661,8 +661,9 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         Attempt to grow the attached volume while its managed KVM VM is
         running.
         Verifies:
-          - CloudStack rejects the resize
+          - CloudStack rejects the resize while the VM is running
           - CloudStack volume size is unchanged
+          - The ONTAP backing file is still present in the FlexVol
           - qcow2 virtual size is unchanged
         """
         if self.__class__.vm is None:
@@ -687,6 +688,11 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.assertEqual(
             db_size, self.__class__.initial_volume_size,
             "cloud DB volumes.size changed after rejected running-VM resize")
+
+        files = self.ontap.list_files_in_volume(self.__class__.pool.name)
+        self.assertIn(
+            self.__class__.volume_path, files,
+            "ONTAP backing file disappeared after the rejected running-VM resize")
 
         backend_size = self._get_qcow2_virtual_size(
             self.__class__.pool.id, self.__class__.volume_path)

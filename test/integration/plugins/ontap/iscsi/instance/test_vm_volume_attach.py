@@ -878,7 +878,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             self._resize_volume(
                 self.__class__.volume.id, initial_gib, shrink_ok=True)
         self.assertIn(
-            "does not support shrinking", str(context.exception),
+            "Unable to shrink volume", str(context.exception),
             "Shrink failed for an unexpected reason")
 
         volume = self._poll_volume_size(

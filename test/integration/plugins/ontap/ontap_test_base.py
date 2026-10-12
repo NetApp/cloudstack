@@ -28,11 +28,9 @@ Provides:
                        template cache)
 """
 
-import json
 import logging
 import random
 import requests
-import shlex
 import sys
 import time
 import urllib3
@@ -54,10 +52,10 @@ from marvin.cloudstackAPI import listHosts as listHostsAPI
 from marvin.cloudstackTestCase import cloudstackTestCase
 from marvin.jsonHelper import jsonDump
 from marvin.lib.base import Account, DiskOffering
-from marvin.sshClient import SshClient
 from marvin.lib.common import get_domain, get_zone, list_clusters, list_storage_pools
 from marvin.lib.utils import cleanup_resources
 
+from helpers import kvm_host
 from helpers import template_cache_util as tcu
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -572,44 +570,9 @@ class OntapTestBase(cloudstackTestCase):
 
     @classmethod
     def _cleanup_kvm_storage_pool_mounts(cls, pool_uuid):
-        """
-        SSH to each KVM host and unmount the NFS storage pool mount for
-        *pool_uuid*, then destroy and undefine the libvirt storage pool.
-
-        Must be called BEFORE the ONTAP FlexVol is deleted (i.e., before
-        deleteStoragePool) so that the unmount completes while the NFS
-        export is still reachable.  Prevents stale NFS mounts from
-        triggering KVMHAMonitor heartbeat failures that reboot the host
-        via ``echo b > /proc/sysrq-trigger``.
-        """
-        for creds in cls.kvm_hosts_ssh_creds:
-            host_ip = creds["host"]
-            try:
-                ssh = SshClient(
-                    host_ip, 22,
-                    creds["user"], creds["password"],
-                    retries=3, delay=3, timeout=15.0,
-                )
-                for cmd in [
-                    "umount -f -l /mnt/{u} 2>/dev/null; true".format(
-                        u=pool_uuid),
-                    "virsh pool-destroy {u} 2>/dev/null; true".format(
-                        u=pool_uuid),
-                    "virsh pool-undefine {u} 2>/dev/null; true".format(
-                        u=pool_uuid),
-                ]:
-                    try:
-                        ssh.execute(cmd)
-                    except Exception as cmd_ex:
-                        logger.warning(
-                            "_cleanup_kvm_storage_pool_mounts: cmd '%s' "
-                            "failed on %s: %s" % (cmd, host_ip, cmd_ex)
-                        )
-            except Exception as ex:
-                logger.warning(
-                    "_cleanup_kvm_storage_pool_mounts: SSH to %s failed: %s"
-                    % (host_ip, ex)
-                )
+        """Unmount and undefine the libvirt pool on each KVM host."""
+        kvm_host.cleanup_kvm_storage_pool_mounts(
+            cls.kvm_hosts_ssh_creds, pool_uuid)
 
     # ---- shared teardown -----------------------------------------------
 
@@ -935,74 +898,13 @@ class OntapTestBase(cloudstackTestCase):
 
     def _get_qcow2_virtual_size(self, pool_uuid, volume_path):
         """Read a qcow2 virtual size from the KVM host mounting the NFS pool."""
-        pool_arg = shlex.quote(str(pool_uuid))
-        volume_arg = shlex.quote(str(volume_path))
-        command = (
-            "path=$(virsh vol-path --pool {pool} {volume} 2>/dev/null || true); "
-            "if [ -z \"$path\" ]; then path=/mnt/{pool}/{volume}; fi; "
-            "qemu_img=$(command -v cloud-qemu-img || command -v qemu-img); "
-            "test -n \"$qemu_img\" || "
-            "{{ echo 'qemu-img executable not found' >&2; exit 1; }}; "
-            "\"$qemu_img\" info -U --output=json \"$path\""
-        ).format(pool=pool_arg, volume=volume_arg)
-
-        errors = []
-        for creds in self.kvm_hosts_ssh_creds:
-            try:
-                ssh = SshClient(
-                    creds["host"], 22, creds["user"], creds["password"],
-                    retries=3, delay=3, timeout=15.0,
-                )
-                output = "\n".join(ssh.execute(command))
-                json_start = output.find("{")
-                if json_start < 0:
-                    raise ValueError(output)
-                info, _ = json.JSONDecoder().raw_decode(output[json_start:])
-                return int(info["virtual-size"])
-            except Exception as exc:
-                errors.append("%s: %s" % (creds.get("host", "?"), exc))
-
-        raise RuntimeError(
-            "Could not read qcow2 virtual size from any KVM host: %s"
-            % "; ".join(errors)
-        )
+        return kvm_host.get_qcow2_virtual_size(
+            self.kvm_hosts_ssh_creds, pool_uuid, volume_path)
 
     def _get_vm_data_disk_capacity(self, instance_name):
-        """Return the libvirt capacity of the VM's first data disk in bytes.
-
-        The ONTAP VM workflow attaches exactly one data disk. The first libvirt
-        disk is therefore the root disk and the second is the resized data
-        disk, independent of whether its source is NFS or iSCSI multipath.
-        """
-        instance_arg = shlex.quote(str(instance_name))
-        command = (
-            "target=$(virsh domblklist {vm} --details | "
-            "awk '$2 == \"disk\" {{ count++; if (count == 2) "
-            "{{ print $3; exit }} }}'); "
-            "test -n \"$target\" || "
-            "{{ echo 'data disk target not found' >&2; exit 1; }}; "
-            "virsh domblkinfo {vm} \"$target\" | "
-            "awk '$1 == \"Capacity:\" {{ print $2; exit }}'"
-        ).format(vm=instance_arg)
-
-        errors = []
-        for creds in self.kvm_hosts_ssh_creds:
-            try:
-                ssh = SshClient(
-                    creds["host"], 22, creds["user"], creds["password"],
-                    retries=3, delay=3, timeout=15.0,
-                )
-                output = "\n".join(ssh.execute(command)).strip()
-                if not output:
-                    raise ValueError("virsh returned no data-disk capacity")
-                return int(output.splitlines()[-1].strip())
-            except Exception as exc:
-                errors.append("%s: %s" % (creds.get("host", "?"), exc))
-
-        raise RuntimeError(
-            "Could not read VM data-disk capacity from any KVM host: %s"
-            % "; ".join(errors)
-        )
+        """Return the libvirt capacity of the VM's first data disk in bytes."""
+        return kvm_host.get_vm_data_disk_capacity(
+            self.kvm_hosts_ssh_creds, instance_name)
 
     def _get_db_volume_size(self, volume_uuid):
         """Query the cloud DB directly for the size (bytes) stored in the
