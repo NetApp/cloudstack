@@ -2037,6 +2037,30 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testResize_MinIopsEqualToMaxIops_Fails() {
+        long currentSize = 4L * 1024 * 1024 * 1024;
+        stubResizeVolumeRecord(currentSize);
+        when(volumeInfo.getpayload()).thenReturn(
+                new ResizeVolumePayload(currentSize, 100L, 100L, null, false, null, null, true));
+        when(storagePool.getCapacityIops()).thenReturn(null);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
+                    .thenReturn(sanStrategy);
+
+            driver.resize(volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains(
+                    "Minimum IOPS cannot be greater than or equal to maximum IOPS"));
+            verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());
+            verify(sanStrategy, never()).resizeCloudStackVolume(any(), anyLong());
+        }
+    }
+
+    @Test
     void testCreateAsync_MinIopsBeyondPoolCapacity_FailsWithCapacityDetails() {
         VolumeVO allocatedVolume = mock(VolumeVO.class);
         when(allocatedVolume.getId()).thenReturn(50L);
@@ -2385,7 +2409,30 @@ class OntapPrimaryDatastoreDriverTest {
             verify(createCallback).complete(resultCaptor.capture());
             assertFalse(resultCaptor.getValue().isSuccess());
             assertTrue(resultCaptor.getValue().getResult().contains(
-                    "Minimum IOPS cannot be greater than maximum IOPS"));
+                    "Minimum IOPS cannot be greater than or equal to maximum IOPS"));
+            verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());
+            verify(sanStrategy, never()).createCloudStackVolume(any());
+        }
+    }
+
+    @Test
+    void testCreateAsync_MinIopsEqualToMaxIops_Fails() {
+        stubIscsiVolumeCreate();
+        when(volumeInfo.getVolumeType()).thenReturn(Volume.Type.DATADISK);
+        when(volumeInfo.getMinIops()).thenReturn(100L);
+        when(volumeInfo.getMaxIops()).thenReturn(100L);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any()))
+                    .thenReturn(sanStrategy);
+
+            driver.createAsync(dataStore, volumeInfo, createCallback);
+
+            ArgumentCaptor<CreateCmdResult> resultCaptor = ArgumentCaptor.forClass(CreateCmdResult.class);
+            verify(createCallback).complete(resultCaptor.capture());
+            assertFalse(resultCaptor.getValue().isSuccess());
+            assertTrue(resultCaptor.getValue().getResult().contains(
+                    "Minimum IOPS cannot be greater than or equal to maximum IOPS"));
             verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());
             verify(sanStrategy, never()).createCloudStackVolume(any());
         }
