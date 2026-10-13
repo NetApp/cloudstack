@@ -147,6 +147,93 @@ boolean hasIntegrationStarted(build) {
 }
 
 @NonCPS
+String revisionHeadSha(revision) {
+    if (revision == null) {
+        return ''
+    }
+    try {
+        def hash = revision.pullHash?.toString() ?: ''
+        if (hash ==~ /^[0-9a-fA-F]{40}$/) {
+            return hash
+        }
+    } catch (Exception ignored) {
+        return ''
+    }
+    return ''
+}
+
+@NonCPS
+String indexedHeadSha(build) {
+    return revisionHeadSha(build?.getAction(jenkins.scm.api.SCMRevisionAction)?.revision)
+}
+
+// A multibranch child only contains builds for one PR. Stop an older run of
+// that child before it holds the VM. A queued duplicate of the same indexed
+// SHA is cancelled; a queued item with no SHA is left alone.
+@NonCPS
+def supersedeMultibranchBuilds(String jobName, int buildNumber, String sha) {
+    def jenkins = jenkins.model.Jenkins.get()
+    def job = jenkins.getItemByFullName(jobName)
+    if (job == null) {
+        throw new IllegalStateException("Cannot find Jenkins job '${jobName}'.")
+    }
+
+    def results = []
+    def latest = revisionHeadSha(job.getAction(jenkins.scm.api.SCMRevisionAction)?.revision)
+    if (latest && sha && !latest.equalsIgnoreCase(sha)) {
+        def self = job.getBuildByNumber(buildNumber)
+        if (self != null && self.isBuilding() && !hasIntegrationStarted(self)) {
+            self.doStop()
+            results << "Stopping build #${buildNumber}: a newer head ${latest.take(12)} is indexed."
+        } else if (self != null && hasIntegrationStarted(self)) {
+            results << "Not stopping build #${buildNumber}: ONTAP integration has started."
+        }
+        return results
+    }
+    jenkins.queue.items.findAll { item ->
+        item.task?.fullName == job.fullName
+    }.each { item ->
+        def queued = revisionHeadSha(item.getAction(jenkins.scm.api.SCMRevisionAction)?.revision)
+        if (queued && sha && queued.equalsIgnoreCase(sha)) {
+            jenkins.queue.cancel(item)
+            results << "Cancelled a queued build for ${sha.take(12)}."
+        }
+    }
+    job.getBuilds().findAll { build ->
+        build.isBuilding() && build.number < buildNumber
+    }.each { build ->
+        if (hasIntegrationStarted(build)) {
+            results << "Not aborting build #${build.number}: ONTAP integration has started."
+        } else {
+            build.doStop()
+            results << "Aborted superseded build #${build.number}."
+        }
+    }
+    return results
+}
+
+@NonCPS
+int diffNumberForResolvedSha(String jobName, int buildNumber, String sha) {
+    def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
+    if (job == null || !sha) {
+        return 1
+    }
+    def previousShas = [] as Set
+    job.getBuilds().findAll {
+        it.number < buildNumber
+    }.each { build ->
+        def previousSha = build.getAction(
+            org.jenkinsci.plugins.workflow.cps.EnvActionImpl
+        )?.getOverriddenEnvironment()?.get('RESOLVED_SOURCE_SHA')
+        if (previousSha) {
+            previousShas << previousSha
+        }
+    }
+    previousShas.remove(sha)
+    return previousShas.size() + 1
+}
+
+@NonCPS
 def abortOlderBuildsForSource(String jobName, int buildNumber, String sourceKey) {
     def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
     if (job == null) {
@@ -196,6 +283,44 @@ boolean isValidBranchName(String branchName) {
     return !branchName.split('/').any {
         it.isEmpty() || it.startsWith('.') || it.endsWith('.lock')
     }
+}
+
+boolean isMultibranchPullRequest() {
+    return env.CHANGE_ID?.trim()
+}
+
+// Branch Source does not fill Declarative parameters. A multibranch run stores
+// one resolved pull-request context in the environment and reads it here.
+def sourceValue(String name) {
+    if (env.PRESUBMIT_MULTIBRANCH_READY == 'true') {
+        switch (name) {
+            case 'SOURCE_MODE':
+                return env.EFFECTIVE_SOURCE_MODE
+            case 'PR_ID':
+                return env.EFFECTIVE_PR_ID
+            case 'PR_ACTION':
+                return env.EFFECTIVE_PR_ACTION
+            case 'PR_DRAFT':
+                return env.EFFECTIVE_PR_DRAFT
+            case 'PR_REPOSITORY':
+                return env.EFFECTIVE_PR_REPOSITORY
+            case 'PR_BASE_BRANCH':
+                return env.EFFECTIVE_PR_BASE_BRANCH
+            case 'PR_HEAD_BRANCH':
+                return env.EFFECTIVE_PR_HEAD_BRANCH
+            case 'PR_HEAD_SHA':
+                return env.EFFECTIVE_PR_HEAD_SHA
+            case 'PR_AUTHOR_LOGIN':
+                return env.EFFECTIVE_PR_AUTHOR_LOGIN
+            case 'PR_AUTHOR_EMAIL':
+                return env.EFFECTIVE_PR_AUTHOR_EMAIL
+            case 'PR_URL':
+                return env.EFFECTIVE_PR_URL
+            case 'PR_TITLE':
+                return env.EFFECTIVE_PR_TITLE
+        }
+    }
+    return params.get(name)
 }
 
 def validateInventory(Map inventory) {
@@ -321,13 +446,13 @@ void recordStageEvent(String stageName, String status) {
 }
 
 String presubmitSubjectBase() {
-    def recipientName = params.PR_AUTHOR_LOGIN?.trim()
+    def recipientName = sourceValue('PR_AUTHOR_LOGIN')?.trim()
     if (!recipientName && env.PRESUBMIT_MAIL_TO?.contains('@')) {
         recipientName = env.PRESUBMIT_MAIL_TO.substring(0, env.PRESUBMIT_MAIL_TO.indexOf('@'))
     }
-    def sourceName = params.SOURCE_MODE == 'branch' ?
-        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
-    def title = params.PR_TITLE?.replaceAll(/[\r\n]+/, ' ')?.trim()
+    def sourceName = sourceValue('SOURCE_MODE') == 'branch' ?
+        "branch ${params.SOURCE_BRANCH}" : "PR-${sourceValue('PR_ID')}"
+    def title = sourceValue('PR_TITLE')?.replaceAll(/[\r\n]+/, ' ')?.trim()
     if (title?.length() > 80) {
         title = title.take(77) + '...'
     }
@@ -365,15 +490,15 @@ boolean hasGithubAppCredential() {
 
 List githubEnvironment() {
     return [
-        "GITHUB_REPOSITORY=${params.PR_REPOSITORY}",
-        "GITHUB_HEAD_SHA=${params.PR_HEAD_SHA}",
-        "PR_ID=${params.PR_ID}",
-        "PR_TITLE=${params.PR_TITLE ?: ''}"
+        "GITHUB_REPOSITORY=${sourceValue('PR_REPOSITORY')}",
+        "GITHUB_HEAD_SHA=${sourceValue('PR_HEAD_SHA')}",
+        "PR_ID=${sourceValue('PR_ID')}",
+        "PR_TITLE=${sourceValue('PR_TITLE') ?: ''}"
     ]
 }
 
 void createGithubCheck() {
-    if (params.SOURCE_MODE != 'pull_request' || !hasGithubAppCredential()) {
+    if (sourceValue('SOURCE_MODE') != 'pull_request' || !hasGithubAppCredential()) {
         echo 'GitHub Check creation skipped: GitHub App credential is not configured.'
         return
     }
@@ -394,7 +519,7 @@ void createGithubCheck() {
                     throw new IllegalStateException("GitHub returned an invalid Check Run ID '${checkRunId}'.")
                 }
                 env.GITHUB_CHECK_RUN_ID = checkRunId
-                echo "Created GitHub Check Run ${checkRunId} on ${params.PR_HEAD_SHA}."
+                echo "Created GitHub Check Run ${checkRunId} on ${sourceValue('PR_HEAD_SHA')}."
             }
         }
     } catch (Exception e) {
@@ -435,10 +560,10 @@ void completeGithubCheck(String conclusion) {
 }
 
 void resolvePresubmitMailRecipient() {
-    def webhookEmail = params.PR_AUTHOR_EMAIL?.trim()
+    def webhookEmail = sourceValue('PR_AUTHOR_EMAIL')?.trim()
     env.PRESUBMIT_MAIL_TO = webhookEmail?.contains('@') &&
         !webhookEmail.equalsIgnoreCase('null') ? webhookEmail : ''
-    if (env.PRESUBMIT_MAIL_TO || params.SOURCE_MODE != 'pull_request' ||
+    if (env.PRESUBMIT_MAIL_TO || sourceValue('SOURCE_MODE') != 'pull_request' ||
             !hasGithubAppCredential()) {
         return
     }
@@ -485,14 +610,14 @@ String presubmitInfoRow(String label, String valueHtml) {
 }
 
 String presubmitStartHtml() {
-    def source = params.SOURCE_MODE == 'branch' ?
-        "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
-    def sourceHtml = params.PR_URL ==~ /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+$/ ?
-        "<a href=\"${htmlEscape(params.PR_URL)}\">${htmlEscape(source)}</a>" :
+    def source = sourceValue('SOURCE_MODE') == 'branch' ?
+        "branch ${params.SOURCE_BRANCH}" : "PR-${sourceValue('PR_ID')}"
+    def sourceHtml = sourceValue('PR_URL') ==~ /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+$/ ?
+        "<a href=\"${htmlEscape(sourceValue('PR_URL'))}\">${htmlEscape(source)}</a>" :
         htmlEscape(source)
     def diffNumber = env.PRESUBMIT_DIFF_NUMBER?.trim()
     def rows = presubmitInfoRow('Source', sourceHtml) +
-        presubmitInfoRow('Title', htmlEscape(params.PR_TITLE ?: 'not provided'))
+        presubmitInfoRow('Title', htmlEscape(sourceValue('PR_TITLE') ?: 'not provided'))
     if (diffNumber) {
         rows += presubmitInfoRow('Diff', "#${htmlEscape(diffNumber)}")
     }
@@ -524,12 +649,13 @@ results follows when this run finishes.</p>
 // GitHub App diagnostic skip them, as does a request that `Check eligibility`
 // rejected by setting NOT_BUILT.
 boolean isWorkerStageEnabled() {
-    return params.SOURCE_MODE in ['pull_request', 'branch'] &&
-        currentBuild.result != 'NOT_BUILT'
+    return sourceValue('SOURCE_MODE') in ['pull_request', 'branch'] &&
+        currentBuild.result != 'NOT_BUILT' &&
+        currentBuild.currentResult != 'NOT_BUILT'
 }
 
 boolean isDiagnoseRun() {
-    return params.SOURCE_MODE == 'diagnose'
+    return sourceValue('SOURCE_MODE') == 'diagnose'
 }
 
 void discoverPullRequests() {
@@ -668,10 +794,10 @@ void validateSourceRequest() {
         TimeZone.getTimeZone('UTC')
     )
     recordStageEvent('Validate source request', 'STARTED')
-    if (!(params.SOURCE_MODE in ['pull_request', 'branch'])) {
-        error("Unsupported SOURCE_MODE '${params.SOURCE_MODE}'.")
+    if (!(sourceValue('SOURCE_MODE') in ['pull_request', 'branch'])) {
+        error("Unsupported SOURCE_MODE '${sourceValue('SOURCE_MODE')}'.")
     }
-    if (params.SOURCE_MODE == 'branch') {
+    if (sourceValue('SOURCE_MODE') == 'branch') {
         if (!isValidBranchName(params.SOURCE_BRANCH)) {
             error('SOURCE_BRANCH is not a valid Git branch name.')
         }
@@ -679,16 +805,16 @@ void validateSourceRequest() {
             error('SOURCE_SHA must be a full 40-character Git SHA.')
         }
     } else {
-        if (!(params.PR_ID ==~ /^[0-9]+$/)) {
+        if (!(sourceValue('PR_ID') ==~ /^[0-9]+$/)) {
             error('PR_ID must be the numeric GitHub pull request number.')
         }
-        if (params.PR_REPOSITORY != params.EXPECTED_REPOSITORY) {
-            error("Repository '${params.PR_REPOSITORY}' is not '${params.EXPECTED_REPOSITORY}'.")
+        if (sourceValue('PR_REPOSITORY') != params.EXPECTED_REPOSITORY) {
+            error("Repository '${sourceValue('PR_REPOSITORY')}' is not '${params.EXPECTED_REPOSITORY}'.")
         }
-        if (!(params.PR_HEAD_BRANCH ==~ /^[A-Za-z0-9._\/-]+$/)) {
+        if (!(sourceValue('PR_HEAD_BRANCH') ==~ /^[A-Za-z0-9._\/-]+$/)) {
             error('PR_HEAD_BRANCH contains unsupported characters.')
         }
-        if (!(params.PR_HEAD_SHA ==~ /^[0-9a-fA-F]{40}$/) && params.PR_ACTION != 'closed') {
+        if (!(sourceValue('PR_HEAD_SHA') ==~ /^[0-9a-fA-F]{40}$/) && sourceValue('PR_ACTION') != 'closed') {
             error('PR_HEAD_SHA must be a full 40-character Git SHA.')
         }
     }
@@ -718,15 +844,23 @@ void validateSourceRequest() {
         }
     }
     try {
-        def sourceKey = params.SOURCE_MODE == 'branch' ?
-            "branch:${params.SOURCE_BRANCH}" :
-            "pull_request:${params.PR_ID}"
-        env.PRESUBMIT_DIFF_NUMBER = diffNumberForSource(
-            env.JOB_NAME,
-            env.BUILD_NUMBER.toInteger(),
-            sourceKey,
-            env.RESOLVED_SOURCE_SHA
-        ).toString()
+        if (isMultibranchPullRequest()) {
+            env.PRESUBMIT_DIFF_NUMBER = diffNumberForResolvedSha(
+                env.JOB_NAME,
+                env.BUILD_NUMBER.toInteger(),
+                env.RESOLVED_SOURCE_SHA
+            ).toString()
+        } else {
+            def sourceKey = sourceValue('SOURCE_MODE') == 'branch' ?
+                "branch:${params.SOURCE_BRANCH}" :
+                "pull_request:${sourceValue('PR_ID')}"
+            env.PRESUBMIT_DIFF_NUMBER = diffNumberForSource(
+                env.JOB_NAME,
+                env.BUILD_NUMBER.toInteger(),
+                sourceKey,
+                env.RESOLVED_SOURCE_SHA
+            ).toString()
+        }
     } catch (Exception e) {
         env.PRESUBMIT_DIFF_NUMBER = ''
         echo "Unable to determine the diff number: ${e}"
@@ -736,37 +870,51 @@ void validateSourceRequest() {
     // five-minute discovery runs.
     def diffLabel = env.PRESUBMIT_DIFF_NUMBER ?
         " diff #${env.PRESUBMIT_DIFF_NUMBER}" : ''
-    if (params.SOURCE_MODE == 'branch') {
+    if (sourceValue('SOURCE_MODE') == 'branch') {
         currentBuild.displayName =
             "#${env.BUILD_NUMBER} branch ${params.SOURCE_BRANCH}${diffLabel}"
         currentBuild.description = "Branch ${params.SOURCE_BRANCH} @ ${params.SOURCE_SHA.take(12)}"
     } else {
         currentBuild.displayName =
-            "#${env.BUILD_NUMBER} PR-${params.PR_ID}${diffLabel} ${params.PR_ACTION}"
+            "#${env.BUILD_NUMBER} PR-${sourceValue('PR_ID')}${diffLabel} ${sourceValue('PR_ACTION')}"
         currentBuild.description =
-            "${env.RESOLVED_SOURCE_SHA?.take(12)} ${params.PR_TITLE ?: params.PR_URL}"
+            "${env.RESOLVED_SOURCE_SHA?.take(12)} ${sourceValue('PR_TITLE') ?: sourceValue('PR_URL')}"
     }
 }
 
 void checkPresubmitEligibility() {
     recordStageEvent('Check eligibility', 'STARTED')
-    if (params.SOURCE_MODE == 'pull_request') {
+    if (sourceValue('SOURCE_MODE') == 'pull_request') {
         def eligibleActions = ['opened', 'synchronize', 'reopened', 'ready_for_review']
-        if (params.PR_ACTION == 'closed' ||
-                params.PR_DRAFT.toBoolean() ||
-                params.PR_BASE_BRANCH != 'main' ||
-                !(params.PR_ACTION in eligibleActions)) {
+        if (sourceValue('PR_ACTION') == 'closed' ||
+                sourceValue('PR_DRAFT').toBoolean() ||
+                sourceValue('PR_BASE_BRANCH') != 'main' ||
+                !(sourceValue('PR_ACTION') in eligibleActions)) {
             currentBuild.result = 'NOT_BUILT'
-            echo "Ignoring PR-${params.PR_ID}: action=${params.PR_ACTION}, draft=${params.PR_DRAFT}, base=${params.PR_BASE_BRANCH}"
+            echo "Ignoring PR-${sourceValue('PR_ID')}: action=${sourceValue('PR_ACTION')}, draft=${sourceValue('PR_DRAFT')}, base=${sourceValue('PR_BASE_BRANCH')}"
         }
     }
 }
 
 void abortSupersededRun() {
     recordStageEvent('Abort superseded run', 'STARTED')
-    def sourceKey = params.SOURCE_MODE == 'branch' ?
+    if (isMultibranchPullRequest()) {
+        try {
+            supersedeMultibranchBuilds(
+                env.JOB_NAME,
+                env.BUILD_NUMBER.toInteger(),
+                env.RESOLVED_SOURCE_SHA
+            ).each { result ->
+                echo result
+            }
+        } catch (Exception e) {
+            echo "Unable to inspect older builds; no build was aborted: ${e}"
+        }
+        return
+    }
+    def sourceKey = sourceValue('SOURCE_MODE') == 'branch' ?
         "branch:${params.SOURCE_BRANCH}" :
-        "pull_request:${params.PR_ID}"
+        "pull_request:${sourceValue('PR_ID')}"
     try {
         abortOlderBuildsForSource(
             env.JOB_NAME,
@@ -782,8 +930,110 @@ void abortSupersededRun() {
 
 void checkoutCiScripts() {
     recordStageEvent('Checkout CI scripts', 'STARTED')
+    if (env.PRESUBMIT_CI_SHA?.trim() && fileExists('private-cicd/scripts/resolve-pull-request.py')) {
+        echo "CI scripts already checked out from main at ${env.PRESUBMIT_CI_SHA}."
+        return
+    }
     deleteDir()
-    checkout(scm)
+    def remote = [
+        url: params.CLOUDSTACK_GIT_URL,
+        refspec: '+refs/heads/main:refs/remotes/origin/main'
+    ]
+    def credentialId = params.GIT_CREDENTIALS_ID?.trim()
+    if (!credentialId) {
+        credentialId = params.GITHUB_APP_CREDENTIALS_ID?.trim()
+    }
+    if (credentialId && !credentialId.startsWith('PLACEHOLDER-')) {
+        remote.credentialsId = credentialId
+    }
+    def cloneOptions = [[
+        $class: 'CloneOption',
+        honorRefspec: true,
+        noTags: true,
+        shallow: true,
+        depth: 1
+    ]]
+    try {
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: '*/main']],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: cloneOptions + [[
+                $class: 'SparseCheckoutPaths',
+                sparseCheckoutPaths: [[path: 'private-cicd']]
+            ]],
+            userRemoteConfigs: [remote]
+        ])
+    } catch (Exception e) {
+        echo "Sparse CI checkout unavailable, using a full main checkout: ${e}"
+        deleteDir()
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: '*/main']],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: cloneOptions,
+            userRemoteConfigs: [remote]
+        ])
+    }
+    env.PRESUBMIT_CI_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+    echo "Checked out CI scripts from main at ${env.PRESUBMIT_CI_SHA}."
+}
+
+void prepareMultibranchPullRequest() {
+    checkoutCiScripts()
+    def indexed = indexedHeadSha(currentBuild.rawBuild)
+    if (!(indexed ==~ /^[0-9a-fA-F]{40}$/)) {
+        currentBuild.result = 'NOT_BUILT'
+        echo "Not building PR-${env.CHANGE_ID}: Jenkins did not index a 40-character pull request head SHA."
+        return
+    }
+    def status = 1
+    withCredentials([
+        usernamePassword(
+            credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+            usernameVariable: 'GITHUB_APP',
+            passwordVariable: 'GITHUB_ACCESS_TOKEN'
+        )
+    ]) {
+        withEnv([
+            "PRESUBMIT_REPOSITORY=${params.EXPECTED_REPOSITORY}",
+            "PRESUBMIT_PR_ID=${env.CHANGE_ID}",
+            "PRESUBMIT_INDEXED_SHA=${indexed}",
+            "PRESUBMIT_CHANGE_TARGET=${env.CHANGE_TARGET ?: ''}"
+        ]) {
+            status = sh(
+                script: '''python3 private-cicd/scripts/resolve-pull-request.py \
+                    --repository "$PRESUBMIT_REPOSITORY" \
+                    --pr-id "$PRESUBMIT_PR_ID" \
+                    --indexed-sha "$PRESUBMIT_INDEXED_SHA" \
+                    --change-target "$PRESUBMIT_CHANGE_TARGET" \
+                    --output multibranch-source.json''',
+                returnStatus: true
+            )
+        }
+    }
+    def decision = fileExists('multibranch-source.json') ? readJSON(file: 'multibranch-source.json') : [:]
+    if (status != 0 || !decision.eligible) {
+        currentBuild.result = 'NOT_BUILT'
+        echo "Not building PR-${env.CHANGE_ID}: ${decision.reason ?: 'pull request lookup failed.'}"
+        return
+    }
+    env.PRESUBMIT_MULTIBRANCH_READY = 'true'
+    env.EFFECTIVE_SOURCE_MODE = 'pull_request'
+    env.EFFECTIVE_PR_ID = decision.pr_id.toString()
+    env.EFFECTIVE_PR_ACTION = 'synchronize'
+    env.EFFECTIVE_PR_DRAFT = 'false'
+    env.EFFECTIVE_PR_REPOSITORY = params.EXPECTED_REPOSITORY
+    env.EFFECTIVE_PR_BASE_BRANCH = decision.pr_base_branch.toString()
+    env.EFFECTIVE_PR_HEAD_BRANCH = decision.pr_head_branch.toString()
+    env.EFFECTIVE_PR_HEAD_SHA = decision.pr_head_sha.toString()
+    env.EFFECTIVE_PR_AUTHOR_LOGIN = decision.pr_author_login?.toString() ?: ''
+    env.EFFECTIVE_PR_AUTHOR_EMAIL = decision.pr_author_email?.toString() ?: ''
+    env.EFFECTIVE_PR_URL = decision.pr_url?.toString() ?: ''
+    env.EFFECTIVE_PR_TITLE = decision.pr_title?.toString() ?: ''
+    env.RESOLVED_SOURCE_SHA = env.EFFECTIVE_PR_HEAD_SHA
+    env.RESOLVED_SOURCE_ID = "pr-${env.EFFECTIVE_PR_ID}"
+    echo "Accepted PR-${env.EFFECTIVE_PR_ID} at ${env.RESOLVED_SOURCE_SHA}."
 }
 
 // A full worker run takes over an hour, so reporting problems are diagnosed
@@ -793,11 +1043,11 @@ void diagnoseGithubApp() {
     if (!hasGithubAppCredential()) {
         error('GITHUB_APP_CREDENTIALS_ID is unset or still a placeholder.')
     }
-    def headSha = params.PR_HEAD_SHA?.trim() ?: params.SOURCE_SHA?.trim()
+    def headSha = sourceValue('PR_HEAD_SHA')?.trim() ?: params.SOURCE_SHA?.trim()
     if (!(headSha ==~ /^[0-9a-f]{40}$/)) {
         error('Set PR_HEAD_SHA to a full 40-character commit SHA to diagnose.')
     }
-    def repository = params.PR_REPOSITORY?.trim() ?: params.EXPECTED_REPOSITORY
+    def repository = sourceValue('PR_REPOSITORY')?.trim() ?: params.EXPECTED_REPOSITORY
     withCredentials([
         usernamePassword(
             credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
@@ -808,7 +1058,7 @@ void diagnoseGithubApp() {
         withEnv([
             "GITHUB_REPOSITORY=${repository}",
             "GITHUB_HEAD_SHA=${headSha}",
-            "PR_ID=${params.PR_ID ?: ''}"
+            "PR_ID=${sourceValue('PR_ID') ?: ''}"
         ]) {
             sh 'private-cicd/scripts/github-check-run.sh diagnose'
         }
@@ -863,18 +1113,18 @@ void checkoutSource() {
     recordStageEvent('Checkout source', 'STARTED')
     dir(env.SOURCE_DIR) {
         deleteDir()
-        def isBranch = params.SOURCE_MODE == 'branch'
-        def sourceBranch = isBranch ? params.SOURCE_BRANCH : params.PR_HEAD_BRANCH
-        def sourceSha = isBranch ? params.SOURCE_SHA : params.PR_HEAD_SHA
-        def sourceLabel = isBranch ? "branch:${sourceBranch}" : "pull_request:${params.PR_ID}"
+        def isBranch = sourceValue('SOURCE_MODE') == 'branch'
+        def sourceBranch = isBranch ? params.SOURCE_BRANCH : sourceValue('PR_HEAD_BRANCH')
+        def sourceSha = isBranch ? params.SOURCE_SHA : sourceValue('PR_HEAD_SHA')
+        def sourceLabel = isBranch ? "branch:${sourceBranch}" : "pull_request:${sourceValue('PR_ID')}"
         def remoteRef = isBranch ?
             "refs/remotes/origin/source/${sourceBranch}" :
-            "refs/remotes/origin/pr/${params.PR_ID}"
+            "refs/remotes/origin/pr/${sourceValue('PR_ID')}"
         def remote = [
             url: params.CLOUDSTACK_GIT_URL,
             refspec: isBranch ?
                 "+refs/heads/${sourceBranch}:${remoteRef}" :
-                "+refs/pull/${params.PR_ID}/head:${remoteRef}"
+                "+refs/pull/${sourceValue('PR_ID')}/head:${remoteRef}"
         ]
         if (params.GIT_CREDENTIALS_ID?.trim()) {
             remote.credentialsId = params.GIT_CREDENTIALS_ID
@@ -987,9 +1237,9 @@ void deployAndRunOntapIntegration() {
                 env.VM_NAME = vm.vcenter_vm as String
                 env.VM_SNAPSHOT = vm.snapshot as String
                 env.VM_BRIDGE = vm.bridge as String
-                def sourceDescription = params.SOURCE_MODE == 'branch' ?
+                def sourceDescription = sourceValue('SOURCE_MODE') == 'branch' ?
                     "branch=${params.SOURCE_BRANCH}" :
-                    "PR-${params.PR_ID}"
+                    "PR-${sourceValue('PR_ID')}"
                 currentBuild.description = "${sourceDescription} VM=${env.VM_ID}"
                 echo "Reserved compatible VM '${env.VM_ID}' via '${env.LOCKED_VM}'."
 
@@ -1063,7 +1313,11 @@ void deployAndRunOntapIntegration() {
 }
 
 void publishPresubmitResults() {
-    if (params.SOURCE_MODE == 'discover') {
+    if (isMultibranchPullRequest() && currentBuild.currentResult == 'NOT_BUILT') {
+        echo "Multibranch PR-${env.CHANGE_ID} was not built."
+        return
+    }
+    if (sourceValue('SOURCE_MODE') == 'discover') {
         echo 'Discovery build completed; worker reporting was skipped.'
         return
     }
@@ -1088,15 +1342,15 @@ void publishPresubmitResults() {
         if (!env.PRESUBMIT_MAIL_TO?.trim()) {
             resolvePresubmitMailRecipient()
         }
-        def sourceName = params.SOURCE_MODE == 'branch' ?
-            "branch ${params.SOURCE_BRANCH}" : "PR-${params.PR_ID}"
+        def sourceName = sourceValue('SOURCE_MODE') == 'branch' ?
+            "branch ${params.SOURCE_BRANCH}" : "PR-${sourceValue('PR_ID')}"
         try {
             if (fileExists('private-cicd/scripts/generate-presubmit-report.py')) {
                 withEnv([
                     "PRESUBMIT_REPORT_RESULT=${result}",
                     "PRESUBMIT_REPORT_SOURCE=${sourceName}",
-                    "PRESUBMIT_REPORT_SOURCE_URL=${params.PR_URL ?: ''}",
-                    "PRESUBMIT_REPORT_TITLE=${params.PR_TITLE ?: ''}",
+                    "PRESUBMIT_REPORT_SOURCE_URL=${sourceValue('PR_URL') ?: ''}",
+                    "PRESUBMIT_REPORT_TITLE=${sourceValue('PR_TITLE') ?: ''}",
                     "PRESUBMIT_REPORT_SHA=${env.RESOLVED_SOURCE_SHA}",
                     "PRESUBMIT_REPORT_DIFF=${env.PRESUBMIT_DIFF_NUMBER ?: ''}",
                     "PRESUBMIT_REPORT_VM=${env.VM_ID ?: ''}"
@@ -1193,15 +1447,11 @@ spec:
         timeout(time: 8, unit: 'HOURS')
     }
 
-    triggers {
-        cron('H/5 * * * *')
-    }
-
     parameters {
         choice(
             name: 'SOURCE_MODE',
             choices: ['discover', 'pull_request', 'branch', 'diagnose'],
-            description: 'Timer builds use discover. Self-queued workers use pull_request. Use branch for a manual exact-SHA build, or diagnose to probe GitHub App Checks access using PR_HEAD_SHA.'
+            description: 'Legacy discover mode is not scheduled. Multibranch pull requests ignore this default. Use pull_request for a manual PR build, branch for an exact SHA, or diagnose to probe GitHub App Checks access.'
         )
         string(name: 'SOURCE_BRANCH', defaultValue: '', description: 'Manual branch mode: remote branch name, for example feature/CSTACKEX-223.')
         string(name: 'SOURCE_SHA', defaultValue: '', description: 'Manual branch mode: exact full 40-character commit SHA.')
@@ -1260,12 +1510,25 @@ spec:
         stage('Discover PR revisions') {
             when {
                 expression {
-                    return params.SOURCE_MODE == 'discover'
+                    return sourceValue('SOURCE_MODE') == 'discover' && !isMultibranchPullRequest()
                 }
             }
             steps {
                 script {
                     discoverPullRequests()
+                }
+            }
+        }
+
+        stage('Prepare multibranch pull request') {
+            when {
+                expression {
+                    return isMultibranchPullRequest()
+                }
+            }
+            steps {
+                script {
+                    prepareMultibranchPullRequest()
                 }
             }
         }
