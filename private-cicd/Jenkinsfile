@@ -165,7 +165,15 @@ String revisionHeadSha(revision) {
 @NonCPS
 String indexedHeadSha(String jobName, int buildNumber) {
     def job = jenkins.model.Jenkins.get().getItemByFullName(jobName)
-    def build = job?.getBuildByNumber(buildNumber)
+    if (job == null) {
+        return ''
+    }
+    // A manual build does not copy the indexed revision onto the build. The scan stores it on the job.
+    def hash = revisionHeadSha(job.getAction(jenkins.scm.api.SCMRevisionAction)?.revision)
+    if (hash) {
+        return hash
+    }
+    def build = job.getBuildByNumber(buildNumber)
     return revisionHeadSha(build?.getAction(jenkins.scm.api.SCMRevisionAction)?.revision)
 }
 
