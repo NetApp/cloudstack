@@ -196,7 +196,24 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     @Override
     public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
-        return null;
+        if (cloudstackVolume == null || cloudstackVolume.getLun() == null
+                || cloudstackVolume.getLun().getUuid() == null) {
+            throw new CloudRuntimeException("Invalid iSCSI volume QoS update request");
+        }
+        Lun lunUpdate = new Lun();
+        lunUpdate.setQosPolicy(cloudstackVolume.getLun().getQosPolicy());
+        try {
+            JobResponse response = sanFeignClient.updateLun(
+                    getAuthHeader(), cloudstackVolume.getLun().getUuid(), lunUpdate);
+            pollJobIfPresent(response, "update QoS policy on LUN [" + cloudstackVolume.getLun().getUuid() + "]");
+        } catch (FeignException e) {
+            throw new CloudRuntimeException("Failed to apply QoS policy to LUN: " + e.getMessage(), e);
+        }
+        logger.info("Applied QoS policy [{}] to LUN [{}]",
+                cloudstackVolume.getLun().getQosPolicy() != null
+                        ? cloudstackVolume.getLun().getQosPolicy().getName() : null,
+                cloudstackVolume.getLun().getUuid());
+        return cloudstackVolume;
     }
 
     @Override
