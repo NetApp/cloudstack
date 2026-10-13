@@ -96,7 +96,9 @@ def assess(pull, pr_id, indexed_sha, change_target, expected_repository):
         )
     elif decision["pr_draft"]:
         decision["reason"] = "pull request is a draft."
-    elif decision["pr_head_sha"].lower() != (indexed_sha or "").lower():
+    elif not decision["pr_head_sha"] or len(decision["pr_head_sha"]) != 40:
+        decision["reason"] = "GitHub pull request head SHA is missing."
+    elif (indexed_sha or "").strip() and decision["pr_head_sha"].lower() != indexed_sha.strip().lower():
         decision["reason"] = "indexed revision does not match the pull request head SHA."
     else:
         decision["eligible"] = True

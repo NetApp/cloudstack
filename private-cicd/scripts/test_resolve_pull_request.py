@@ -70,6 +70,12 @@ class AssessPullRequestTest(unittest.TestCase):
                 candidate, "98", SHA, "main", "NetApp/cloudstack")
             self.assertFalse(decision["eligible"], candidate)
 
+    def test_accepts_github_head_when_jenkins_sha_is_missing(self):
+        decision = MODULE.assess(pull(), "98", "", "main", "NetApp/cloudstack")
+
+        self.assertTrue(decision["eligible"])
+        self.assertEqual(SHA, decision["pr_head_sha"])
+
     def test_rejects_change_target_other_than_main(self):
         decision = MODULE.assess(
             pull(), "98", SHA, "feature/other", "NetApp/cloudstack")
