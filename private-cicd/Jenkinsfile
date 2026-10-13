@@ -930,14 +930,16 @@ void abortSupersededRun() {
 
 void checkoutCiScripts() {
     recordStageEvent('Checkout CI scripts', 'STARTED')
+    // Pilot for PR-119. Change this back to main before the folder includes every PR.
+    def ciBranch = 'feature/CSTACKEX-340'
     if (env.PRESUBMIT_CI_SHA?.trim() && fileExists('private-cicd/scripts/resolve-pull-request.py')) {
-        echo "CI scripts already checked out from main at ${env.PRESUBMIT_CI_SHA}."
+        echo "CI scripts already checked out from ${ciBranch} at ${env.PRESUBMIT_CI_SHA}."
         return
     }
     deleteDir()
     def remote = [
         url: params.CLOUDSTACK_GIT_URL,
-        refspec: '+refs/heads/main:refs/remotes/origin/main'
+        refspec: "+refs/heads/${ciBranch}:refs/remotes/origin/${ciBranch}"
     ]
     def credentialId = params.GIT_CREDENTIALS_ID?.trim()
     if (!credentialId) {
@@ -956,7 +958,7 @@ void checkoutCiScripts() {
     try {
         checkout([
             $class: 'GitSCM',
-            branches: [[name: '*/main']],
+            branches: [[name: "*/${ciBranch}"]],
             doGenerateSubmoduleConfigurations: false,
             extensions: cloneOptions + [[
                 $class: 'SparseCheckoutPaths',
@@ -965,18 +967,18 @@ void checkoutCiScripts() {
             userRemoteConfigs: [remote]
         ])
     } catch (Exception e) {
-        echo "Sparse CI checkout unavailable, using a full main checkout: ${e}"
+        echo "Sparse CI checkout unavailable, using a full ${ciBranch} checkout: ${e}"
         deleteDir()
         checkout([
             $class: 'GitSCM',
-            branches: [[name: '*/main']],
+            branches: [[name: "*/${ciBranch}"]],
             doGenerateSubmoduleConfigurations: false,
             extensions: cloneOptions,
             userRemoteConfigs: [remote]
         ])
     }
     env.PRESUBMIT_CI_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-    echo "Checked out CI scripts from main at ${env.PRESUBMIT_CI_SHA}."
+    echo "Checked out CI scripts from ${ciBranch} at ${env.PRESUBMIT_CI_SHA}."
 }
 
 void prepareMultibranchPullRequest() {
