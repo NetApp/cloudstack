@@ -19,12 +19,18 @@
 
 # Create the auto-triggered ONTAP presubmit job
 
-This guide creates **one** Pipeline job, `cloudstack-ontap-presubmit`. Timer
-builds poll GitHub every five minutes and self-queue one worker build for each
-new eligible PR head SHA. Worker builds compile and package concurrently, then
-wait for an available `cloudstack-presubmit-vm` Lockable Resource before
-integration. Until `feature/CSTACKEX-223` is merged, the job loads trusted CI
-from that branch. After merge, change only **Branches to build** to `*/main`.
+The current job is the multibranch folder `cloudstack-ontap-presubmit-mb`.
+It scans GitHub about once a minute and creates one child job for every open
+non-draft origin pull request into `main`. Remote Jenkinsfile Provider loads
+`private-cicd/Jenkinsfile` from `main`. Match branches stays off. Draft pull
+requests get no job. The folder include filter can be narrowed to one `PR-<number>`
+for the first run, then returned to `PR-*`. Do not add a webhook.
+
+The sections below describe the retired single Pipeline job and its five-minute
+`SOURCE_MODE=discover` timer. Do not create that second job. Keep
+`cloudstack-ontap-presubmit` disabled after the folder works. Do not delete the
+GitHub App, credentials, or the VM lock until a multibranch pull request has
+passed.
 
 Do not create a GitHub repository webhook. OpenLab Jenkins is not reachable
 from GitHub.com, so inbound `pull_request` deliveries fail with
@@ -36,8 +42,8 @@ item for this presubmit: that would run `Jenkinsfile` from the PR branch. This
 design loads trusted CI from a fixed branch and checks the PR SHA out
 separately.
 
-Do not create a separate poller, Multibranch Pipeline, or second production
-copy of this job.
+The multibranch folder above is the production job. Do not create another
+poller or a second production copy.
 
 This guide starts before the Jenkins item exists and ends after polling and
 required Check have been verified. Follow sections 1 through 21 in order. Do
