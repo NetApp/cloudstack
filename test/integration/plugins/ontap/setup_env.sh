@@ -95,6 +95,12 @@ if ! "${PIP}" install "pyvmomi==8.0.2.0.1"; then
     exit 1
 fi
 
+echo "==> Pinning paramiko<4 (CentOS 5.5 guest sshd only offers SHA-1 kex and ssh-rsa)"
+if ! "${PIP}" install "paramiko>=3.4,<4"; then
+    echo "Unable to install paramiko; verify access to the configured Python package index" >&2
+    exit 1
+fi
+
 echo ""
 echo "==> Verifying installation"
 if ! "${PYTHON}" -c "import marvin; print('Marvin OK')"; then
@@ -125,7 +131,8 @@ fi
 echo "Nose test discovery compatibility OK"
 
 echo ""
-echo "Done. Activate the venv with:"
+echo "Done. Guest SSH uses paramiko>=3.4,<4 (CentOS 5.5 sshd is SHA-1 only)."
+echo "Activate the venv with:"
 echo "  source test/integration/plugins/ontap/.venv/bin/activate"
 echo ""
 echo "Run zone setup tests:"
