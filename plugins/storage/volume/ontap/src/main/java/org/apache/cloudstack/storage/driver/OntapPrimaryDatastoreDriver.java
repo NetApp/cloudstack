@@ -1394,14 +1394,15 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     /**
      * Derives a LUN's SCSI WWID from its ONTAP serial number.
      *
-     * <p>NetApp builds the NAA IEEE Registered Extended identifier as its OUI followed by the ASCII
-     * bytes of the serial number in hex. For serial {@code x0M-8?/kEsJT} this yields
-     * {@code 600a098078304d2d383f2f6b45734a54}, which the host shows as
-     * {@code /dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a54} and vSphere shows as
+     * <p>NetApp builds the NAA IEEE Registered Extended identifier as the format designator ({@code 6}),
+     * its OUI ({@code 00a098}), a 4-bit pad nibble ({@code 0}), and then the ASCII bytes of the 12-char
+     * serial number in hex. For serial {@code x0M-8?/kEsJT} this yields
+     * {@code 600a098078304d2d383f2f6b45734a54}, which the host exposes as
+     * {@code /dev/disk/by-id/wwn-0x600a098078304d2d383f2f6b45734a54} and vSphere shows as
      * {@code naa.600a098078304d2d383f2f6b45734a54}.</p>
      */
     private String toNaaWwid(String serialNumber) {
-        StringBuilder wwid = new StringBuilder(OntapStorageConstants.NETAPP_NAA_OUI);
+        StringBuilder wwid = new StringBuilder(OntapStorageConstants.NETAPP_NAA_PREFIX);
         for (byte b : serialNumber.getBytes(StandardCharsets.US_ASCII)) {
             wwid.append(String.format("%02x", b));
         }

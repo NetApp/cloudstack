@@ -45,65 +45,26 @@ import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
 
 /**
- * Serves {@link StoragePoolType#OntapiSCSI} pools: ONTAP FlexVols exposed over iSCSI with one LUN
- * per CloudStack volume.
+ * Serves {@link StoragePoolType#OntapiSCSI} pools:
  *
  * This must stay in the {@code com.cloud.hypervisor.kvm.storage} package: {@link KVMStoragePoolManager}
  * discovers adaptors by a Reflections scan of that package alone, and an unregistered type silently
  * falls back to {@link LibvirtStorageAdaptor} rather than failing at startup.
- *
- * <h2>Devices are identified by LUN WWID, never by logical unit number</h2>
- *
- * {@link IscsiAdmStorageAdaptor}, which serves the other iSCSI vendors, names devices by their
- * {@code /dev/disk/by-path/...-lun-N} alias. ONTAP exposes every LUN of an SVM through a single
- * target IQN and assigns the logical unit number per igroup, so one LUN answers at a different
- * number on each host and that alias is host-specific.
- *
- * That breaks live migration. {@code LibvirtMigrateCommandWrapper} only rewrites disk sources when
- * storage is migrated too; a plain host-to-host migration ships the source domain XML verbatim, so
- * the destination would open whichever LUN occupied that number there - silently, and possibly
- * another running instance's disk.
- *
- * So {@code OntapPrimaryDatastoreDriver} writes volume paths as {@code /<targetIQN>/<lunWwid>} and
- * this adaptor reports devices as {@code /dev/disk/by-id/scsi-3<lunWwid>}. The WWID is derived from
- * the LUN's own inquiry data (VPD page 0x83), so it is identical on every host and the domain XML
- * needs no rewriting during migration. PowerFlex resolves the same problem the same way, and it is
- * how vSphere identifies LUNs ({@code naa.<wwid>}).
- *
- * Nothing here reads {@code /dev/disk/by-path}. Where the superclass derives the portal, IQN and
- * logical unit number by parsing that alias, this reads them back from the device's iSCSI session
- * in sysfs.
- *
- * <h2>Why this implements the interface rather than extending the iSCSI adaptor</h2>
- *
- * Device naming runs through nearly every method that does real work - connect waits on the device,
- * disconnect locates and releases it, and the teardown decision depends on enumerating the LUNs of
- * a session. Inheriting those and overriding each one left the two classes coupled through
- * behaviour neither could change safely. The genuinely shared part is the iscsiadm session
- * handling, which is short, and {@link IscsiAdmStoragePool} is reused as-is.
  */
 public class OntapIscsiStorageAdaptor implements StorageAdaptor {
 
     protected Logger logger = LogManager.getLogger(getClass());
-
     private static final Map<String, KVMStoragePool> MAP_STORAGE_UUID_TO_STORAGE_POOL = new HashMap<>();
-
-    /**
-     * udev's scsi_id builtin prepends the NAA designator type to the WWID, so a LUN whose WWID is
-     * {@code 600a0980...} is published as {@code scsi-3600a0980...}.
-     */
-    private static final String BY_ID_SCSI_PREFIX = "/dev/disk/by-id/scsi-3";
+    private static final String BY_ID_WWN_PREFIX = "/dev/disk/by-id/wwn-0x";
 
     /**
      * A LUN WWID is NetApp's NAA prefix (type 6, OUI 00a098, vendor nibble 0) followed by the hex of
-     * a 12-character serial: 32 hex digits. The prefix must stay in step with NETAPP_NAA_OUI in the
-     * ONTAP storage plugin, which builds every WWID this adaptor sees. Lower case only: udev
-     * publishes lower case, and so does the plugin.
-     *
-     * Anchoring on the prefix is what stops this adaptor claiming another vendor's scsi-3 device
+     * a 12-character serial: 32 hex digits.
+     * Anchoring on the prefix is what stops this adaptor claiming another vendor's WWN device
      * when KVMStoragePoolManager.disconnectPhysicalDiskByPath scans every adaptor.
      */
-    private static final Pattern LUN_WWID = Pattern.compile("600a0980[0-9a-f]{24}");
+    private static  final String NETAPP_NAA_PREFIX = "600a0980";
+    private static final Pattern LUN_WWID = Pattern.compile(NETAPP_NAA_PREFIX + "[0-9a-f]{24}");
 
     private static final String SYS_BLOCK = "/sys/block";
     private static final String SYS_ISCSI_SESSION = "/sys/class/iscsi_session";
@@ -250,7 +211,7 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
             return false;
         }
 
-        return disconnectLun(null, 0, iqn, localPath.substring(BY_ID_SCSI_PREFIX.length()));
+        return disconnectLun(null, 0, iqn, localPath.substring(BY_ID_WWN_PREFIX.length()));
     }
 
     @Override
@@ -752,12 +713,12 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
 
     private boolean isOntapDevicePath(String localPath) {
         return localPath != null
-                && localPath.startsWith(BY_ID_SCSI_PREFIX)
-                && LUN_WWID.matcher(localPath.substring(BY_ID_SCSI_PREFIX.length())).matches();
+                && localPath.startsWith(BY_ID_WWN_PREFIX)
+                && LUN_WWID.matcher(localPath.substring(BY_ID_WWN_PREFIX.length())).matches();
     }
 
     private String getDeviceById(String lunWwid) {
-        return BY_ID_SCSI_PREFIX + lunWwid;
+        return BY_ID_WWN_PREFIX + lunWwid;
     }
 
     private String getTargetIqn(String volumePath) {

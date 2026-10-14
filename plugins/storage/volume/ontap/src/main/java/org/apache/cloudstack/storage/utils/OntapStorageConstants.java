@@ -66,13 +66,20 @@ public class OntapStorageConstants {
     public static final String SERIAL_NUMBER = "serial_number";
 
     /**
-     * NetApp's IEEE OUI, which prefixes the NAA identifier of every ONTAP LUN.
-     *
-     * <p>A LUN's WWID is this followed by the hex of its 12-character serial number, giving the
-     * 32-hex-character value udev publishes as {@code /dev/disk/by-id/wwn-0x<wwid>} and (with the
-     * NAA designator type prepended by {@code scsi_id}) as {@code /dev/disk/by-id/scsi-3<wwid>}.</p>
+     * NAA format designator.
+     * {@code 6} = "IEEE Registered Extended" (128-bit WWID).
      */
-    public static final String NETAPP_NAA_OUI = "600a0980";
+    public static final String NAA_IEEE_REG_EXT = "6";
+    /**
+     * NetApp's IEEE-registered OUI. Lookup: https://standards-oui.ieee.org/ → "NetApp, Inc."
+     */
+    public static final String NETAPP_OUI = "00a098";
+    /**
+     *  the 4-bit pad nibble
+     * <p>The full WWID is {@code NETAPP_NAA_PREFIX} + {@code serial_number_hex} (12 ASCII
+     * bytes of the LUN serial, hex-encoded), yielding 32 hex chars / 128 bits.</p>
+     */
+    public static final String NETAPP_NAA_PREFIX = NAA_IEEE_REG_EXT + NETAPP_OUI + "0";
     public static final String SPACE_USED = "space.used";
     public static final String CLUSTER_NODE_ASUP_FIELDS = "model,is_all_flash_optimized,is_capacity_optimized,is_perf_optimized";
     public  static final String INITIATORS = "initiators";

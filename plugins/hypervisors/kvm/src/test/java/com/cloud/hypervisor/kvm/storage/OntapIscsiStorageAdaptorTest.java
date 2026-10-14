@@ -113,7 +113,7 @@ public class OntapIscsiStorageAdaptorTest {
 
         KVMPhysicalDisk disk = adaptor.getPhysicalDisk("/" + targetIqn + "/" + lunWwid, pool);
 
-        assertEquals("/dev/disk/by-id/scsi-3" + lunWwid, disk.getPath());
+        assertEquals("/dev/disk/by-id/wwn-0x" + lunWwid, disk.getPath());
         assertFalse("The reported path must carry nothing host-specific", disk.getPath().contains("lun-"));
         assertFalse("The reported path must not be derived from by-path", disk.getPath().contains("by-path"));
         assertEquals(PhysicalDiskFormat.RAW, disk.getFormat());
@@ -146,29 +146,29 @@ public class OntapIscsiStorageAdaptorTest {
         assertFalse("PowerFlex publishes its own by-id names",
                 adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/emc-vol-1235dc1s0-4a2f6b45"));
         assertFalse("A partition is not the LUN itself",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a51-part1"));
-        assertFalse("Only the scsi-3 form is handed out, never the wwn-0x alias",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600a098078304d2d383f2f6b45734a51"));
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600a098078304d2d383f2f6b45734a51-part1"));
+        assertFalse("Only the wwn-0x form is handed out, never the scsi-3 alias",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a51"));
         assertFalse("A bare kernel name carries no identity", adaptor.disconnectPhysicalDiskByPath("/dev/sdb"));
         assertFalse(adaptor.disconnectPhysicalDiskByPath(null));
     }
 
     /**
-     * Other vendors publish the same scsi-3 plus 32 hex shape. Only NetApp's NAA prefix is ours, so a
+     * Other vendors publish the same wwn-0x plus 32 hex shape. Only NetApp's NAA prefix is ours, so a
      * different array's LUN or a local RAID volume must fall through to the next adaptor.
      */
     @Test
-    public void disconnectByPathDoesNotClaimOtherVendorsScsiDevices() {
+    public void disconnectByPathDoesNotClaimOtherVendorsWwnDevices() {
         OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
 
-        assertFalse("Pure FlashArray also publishes scsi-3 names",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3624a9370f1f4f5a4b0d3c2e1000113aa"));
-        assertFalse("HPE Primera also publishes scsi-3 names",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-360002ac0000000000000012300020a1b"));
-        assertFalse("A local RAID volume also publishes scsi-3 names",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600508b1001c4d2e8a0f6b1c2d3e4f50"));
+        assertFalse("Pure FlashArray also publishes wwn-0x names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x624a9370f1f4f5a4b0d3c2e1000113aa"));
+        assertFalse("HPE Primera also publishes wwn-0x names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x60002ac0000000000000012300020a1b"));
+        assertFalse("A local RAID volume also publishes wwn-0x names",
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600508b1001c4d2e8a0f6b1c2d3e4f50"));
         assertFalse("NetApp E-Series is not managed by this adaptor",
-                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a0b800029e3a4000012345f6a7b8c"));
+                adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600a0b800029e3a4000012345f6a7b8c"));
     }
 
     /**
@@ -179,6 +179,6 @@ public class OntapIscsiStorageAdaptorTest {
     public void disconnectByPathSucceedsWhenTheClaimedDeviceIsAlreadyGone() {
         OntapIscsiStorageAdaptor adaptor = new OntapIscsiStorageAdaptor();
 
-        assertTrue(adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/scsi-3600a098078304d2d383f2f6b45734a51"));
+        assertTrue(adaptor.disconnectPhysicalDiskByPath("/dev/disk/by-id/wwn-0x600a098078304d2d383f2f6b45734a51"));
     }
 }
