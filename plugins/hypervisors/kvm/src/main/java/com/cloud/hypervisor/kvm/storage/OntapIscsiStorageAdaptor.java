@@ -436,7 +436,14 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
         }
 
         Integer sessionId = findSessionId(kernelDevice);
-        if (sessionId != null && hasOtherLunsInSession(sessionId, kernelDevice)) {
+        if (sessionId == null) {
+            logger.warn("Unable to resolve the iSCSI session id for device {} (LUN {}, target {}); "
+                    + "Removing the SCSI device only ", kernelDevice, lunWwid, iqn);
+            removeScsiDevice(kernelDevice);
+            return true;
+        }
+
+        if (hasOtherLunsInSession(sessionId, kernelDevice)) {
             logger.info("Skipping iSCSI logout for LUN {} on target {}: other LUNs on the same session are still "
                     + "active. Removing device {} only.", lunWwid, iqn, kernelDevice);
             removeScsiDevice(kernelDevice);
@@ -448,12 +455,13 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
             logger.info("No LUNs remain on target {} after removing LUN {}; proceeding with iSCSI logout", iqn, lunWwid);
         }
 
-        if (host == null && sessionId != null) {
+        if (host == null) {
             host = readConnectionAttribute(sessionId, "persistent_address");
             port = parsePort(readConnectionAttribute(sessionId, "persistent_port"));
         }
         if (host == null) {
-            logger.warn("Unable to determine the portal of target {}; removing device {} without logging out", iqn, kernelDevice);
+            logger.warn("Unable to determine the portal of target {} even with sessionId={}; removing device {} without logging out",
+                    iqn, sessionId, kernelDevice);
             removeScsiDevice(kernelDevice);
             return true;
         }
