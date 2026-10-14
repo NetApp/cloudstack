@@ -1129,7 +1129,7 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
 
         HypervisorType hypervisorType = _volsDao.getHypervisorType(volume.getId());
         DiskProfile diskProfile = new DiskProfile(volume, diskOffering, hypervisorType);
-        if (!storageMgr.storagePoolHasEnoughSpace(Collections.singletonList(new Pair<>(volume, diskProfile)), storagePool)) {
+        if (!storageMgr.storagePoolHasEnoughSpace(Collections.singletonList(new Pair<>(volume, diskProfile)), storagePool, storagePool.getClusterId())) {
             throw new InvalidParameterValueException(String.format("Storage pool %s does not have enough space to create volume %s.",
                     storagePool.getName(), volume.getUuid()));
         }
