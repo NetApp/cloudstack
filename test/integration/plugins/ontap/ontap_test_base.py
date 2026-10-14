@@ -741,6 +741,27 @@ class OntapRestClient:
                 raise
         return True
 
+    def list_snapshots(self, vol_name):
+        """Return FlexVol snapshot records (name, uuid) for the named volume.
+
+        Uses ``GET /api/storage/volumes/{uuid}/snapshots``.  An empty list means
+        the volume does not exist or has no snapshots.
+        """
+        vol = self.get_volume(vol_name)
+        if not vol:
+            return []
+        vol_uuid = vol.get("uuid", "")
+        if not vol_uuid:
+            return []
+        try:
+            data = self._get(
+                "/storage/volumes/%s/snapshots" % vol_uuid,
+                params={"fields": "name,uuid", "max_records": "1000"},
+            )
+        except Exception:
+            return []
+        return list(data.get("records", []) or [])
+
 
 # Invalid createStoragePool capacitybytes values.
 # (label, value, alternative fragment groups; any one group may match)

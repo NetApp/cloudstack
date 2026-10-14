@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 119 test cases across 12 test suites.
+Complete reference for all 151 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -133,7 +133,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `nfs3/instance/test_vm_volume_attach.py`
 **Class:** `TestOntapVMVolumeAttach`
 **Tag:** `vm_volume_workflow`
-**Total:** 13 tests | **Scope:** end-to-end — NFS3 pool, data volume resize, running VM (ROOT on the ONTAP pool via a tagged compute offering), primary template cache seed / reuse / survive VM delete, attach/detach lifecycle
+**Total:** 29 tests | **Scope:** end-to-end — NFS3 pool, data volume resize, running VM (ROOT on the ONTAP pool via a tagged compute offering), primary template cache seed / reuse / survive VM delete, attach/detach, guest SSH, volume snapshots, and VM snapshots. Guest login uses `guest_ssh.py` (paramiko) against the CentOS 5.5 template.
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
@@ -147,9 +147,25 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 06 | `test_06_grow_stopped_vm_volume` | Grow the attached volume while the VM is stopped | test_05 | Volume is `Ready` at the requested byte size | `qemu-img info` reports the requested virtual size; ONTAP file remains present | positive |
 | 07 | `test_07_shrink_rejected` | Attempt to shrink the grown qcow2 volume with `shrinkok=true` | test_06 | Resize is rejected; grown size remains unchanged | qcow2 virtual size remains unchanged | negative |
 | 08 | `test_08_start_vm_volume_accessible` | Start the stopped VM | test_07 | `vm.state == "Running"`; KVM data-disk capacity equals target | FlexVol still `online` | positive |
-| 09 | `test_09_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_08 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
-| 10 | `test_10_grow_detached_volume` | Grow the detached, materialized data volume | test_09 | API and DB size equal target | qcow2 virtual size equals target | positive |
-| 11 | `test_11_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_10 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
+| 09 | `test_09_open_ssh_and_write_root_data_files` | Port-forward SSH to the guest and write ROOT and DATA marker files | test_08 (`vm`, `volume`, guest network) | ROOT and DATA both on the ONTAP pool; DATA still attached; SSH login succeeds; both markers read back | FlexVol still `online` | positive |
+| 10 | `test_10_root_volume_snapshot_create` | VS-01: snapshot the ROOT volume of the running VM | test_09 | Snapshot `BackedUp`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 11 | `test_11_data_volume_snapshot_create` | VS-03: snapshot the attached DATA volume | test_10 | Snapshot `BackedUp`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 12 | `test_12_volume_revert_running_vm_rejected` | VS-19: revert a volume snapshot while the VM is Running | test_11 | Revert is rejected | FlexVol unchanged | negative |
+| 13 | `test_13_root_volume_revert` | VS-11: write A, snapshot ROOT, write B, stop, revert, start | test_12 | After revert and start, ROOT marker is A | New FlexVol snapshot for the snapshot; revert snapshot removed in tearDown | positive |
+| 14 | `test_14_data_volume_revert` | Write A, snapshot DATA, write B, stop, revert, start | test_13 | After revert and start, DATA marker is A | Same as test_13 for the DATA volume | positive |
+| 15 | `test_15_vm_snapshot_create_running` | VMS-01: VM snapshot of the running VM (kept for test_17) | test_14 | VM snapshot `Ready`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 16 | `test_16_vm_snapshot_create_stopped` | VMS-03: stop, VM snapshot, start (kept for test_17) | test_15 | VM snapshot `Ready` | One new FlexVol snapshot | positive |
+| 17 | `test_17_vm_snapshot_s1_running_s2_stopped_revert` | VMS-09: revert to the test_15 snapshot, then to the test_16 snapshot | test_15, test_16 | Each revert finishes; guest file matches that snapshot | FlexVol snapshots for both VM snapshots until tearDown | positive |
+| 18 | `test_18_vm_snapshot_duplicate_requests` | VMS-53: two VM snapshot requests for the same VM at once | test_17 | Both snapshots `Ready` (a rejected request is retried) | Two new FlexVol snapshots | positive |
+| 19 | `test_19_deploy_second_vm` | Deploy VM-B whose ROOT disk is on the same ONTAP pool | test_18 | VM-B `Running`; ROOT `storageid` = pool | ROOT file present on the shared FlexVol | positive |
+| 20 | `test_20_volume_revert_leaves_other_vm_untouched` | VS-28: revert VM-A's ROOT | test_19 | VM-A's ROOT marker is restored; VM-B's file is unchanged | FlexVol stays `online` | positive |
+| 21 | `test_21_concurrent_vm_snapshots_two_vms` | VMS-54: VM snapshots of both VMs at the same time | test_20 | Both VM snapshots `Ready` | Two new FlexVol snapshots | positive |
+| 22 | `test_22_concurrent_volume_snapshot_and_revert` | Volume snapshot of VM-A's ROOT while VM-B's ROOT reverts | test_21 | Snapshot `BackedUp` and revert both finish (retried on error 530) | New FlexVol snapshot for the volume snapshot | positive |
+| 23 | `test_23_concurrent_vm_snapshot_and_revert` | VM snapshot of VM-A while VM-B reverts to its VM snapshot | test_22 | Both operations finish; VM-A snapshot `Ready` | New FlexVol snapshot for VM-A | positive |
+| 24 | `test_24_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_23 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
+| 25 | `test_25_grow_detached_volume` | Grow the detached, materialized data volume | test_24 | API and DB size equal target | qcow2 virtual size equals target | positive |
+| 26 | `test_26_destroy_vm_with_vm_snapshot` | VMS-38: expunge VM-B while it still has a VM snapshot | test_19 (VM-B) | VM-B no longer listed | VM-B's FlexVol snapshot removed | positive |
+| 27 | `test_27_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_25, test_26 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
 
 ---
 
@@ -250,7 +266,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/instance/test_vm_volume_attach.py`
 **Class:** `TestOntapVMVolumeAttachISCSI`
 **Tag:** `iscsi_vm_workflow`
-**Total:** 13 tests | **Scope:** end-to-end — iSCSI pool, data volume resize (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach lifecycle
+**Total:** 29 tests | **Scope:** end-to-end — iSCSI pool, data volume resize (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach, guest SSH, volume snapshots, and VM snapshots. LUN-map checks are limited to the data volume's LUN. Guest login uses `guest_ssh.py` (paramiko) against the CentOS 5.5 template.
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
@@ -263,12 +279,28 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed (TDS VM Stop iSCSI) | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
 | 06 | `test_06_grow_stopped_vm_volume` | Grow the attached volume while the VM is stopped | test_05 | Volume is `Ready` at the requested byte size | LUN `space.size` equals the requested size; LUN remains unmapped | positive |
 | 07 | `test_07_shrink_rejected` | Attempt to shrink the grown LUN with `shrinkok=true` | test_06 | Resize is rejected; grown size remains unchanged | LUN `space.size` remains unchanged | negative |
-| 08 | `test_08_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_07 | `vm.state == "Running"`; KVM data-disk capacity equals target | ≥1 LUN-map re-created | positive |
-| 09 | `test_09_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_08 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
-| 10 | `test_10_grow_detached_volume` | Grow the detached, materialized data volume | test_09 | API and DB size equal target | LUN `space.size` equals target | positive |
-| 11 | `test_11_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_10 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
+| 08 | `test_08_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_07 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
+| 09 | `test_09_open_ssh_and_write_root_data_files` | Port-forward SSH to the guest and write ROOT and DATA marker files | test_08 (`vm`, `volume`, guest network) | ROOT and DATA both on the ONTAP pool; DATA still attached; SSH login succeeds; both markers read back | Data LUN still mapped | positive |
+| 10 | `test_10_root_volume_snapshot_create` | VS-01: snapshot the ROOT volume of the running VM | test_09 | Snapshot `BackedUp`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 11 | `test_11_data_volume_snapshot_create` | VS-03: snapshot the attached DATA volume | test_10 | Snapshot `BackedUp`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 12 | `test_12_volume_revert_running_vm_rejected` | VS-20: revert a volume snapshot while the VM is Running | test_11 | Revert is rejected | FlexVol unchanged | negative |
+| 13 | `test_13_root_volume_revert` | VS-12: write A, snapshot ROOT, write B, stop, revert, start | test_12 | After revert and start, ROOT marker is A | New FlexVol snapshot for the snapshot; revert snapshot removed in tearDown | positive |
+| 14 | `test_14_data_volume_revert` | Write A, snapshot DATA, write B, stop, revert, start | test_13 | After revert and start, DATA marker is A | Same as test_13 for the DATA LUN | positive |
+| 15 | `test_15_vm_snapshot_create_running` | VM snapshot of the running VM, ROOT + DATA LUNs (kept for test_17) | test_14 | VM snapshot `Ready`; VM stays `Running` | One new FlexVol snapshot | positive |
+| 16 | `test_16_vm_snapshot_create_stopped` | Stop, VM snapshot, start (kept for test_17) | test_15 | VM snapshot `Ready` | One new FlexVol snapshot | positive |
+| 17 | `test_17_vm_snapshot_s1_running_s2_stopped_revert` | VMS-09: revert to the test_15 snapshot, then to the test_16 snapshot | test_15, test_16 | Each revert finishes; guest file matches that snapshot | FlexVol snapshots for both VM snapshots until tearDown | positive |
+| 18 | `test_18_vm_snapshot_duplicate_requests` | VMS-53: two VM snapshot requests for the same VM at once | test_17 | Both snapshots `Ready` (a rejected request is retried) | Two new FlexVol snapshots | positive |
+| 19 | `test_19_deploy_second_vm` | Deploy VM-B whose ROOT LUN is on the same ONTAP pool | test_18 | VM-B `Running`; ROOT on pool | One more non-cache LUN; `cs_tmpl_*` still one | positive |
+| 20 | `test_20_volume_revert_leaves_other_vm_untouched` | VS-28: revert VM-A's ROOT | test_19 | VM-A's ROOT marker is restored; VM-B's file is unchanged | FlexVol stays `online`; both ROOT LUNs remain | positive |
+| 21 | `test_21_concurrent_vm_snapshots_two_vms` | VMS-55: VM snapshots of both VMs at the same time | test_20 | Both VM snapshots `Ready` | Two new FlexVol snapshots | positive |
+| 22 | `test_22_concurrent_volume_snapshot_and_revert` | Volume snapshot of VM-A's ROOT while VM-B's ROOT reverts | test_21 | Snapshot `BackedUp` and revert both finish (retried on error 530) | New FlexVol snapshot for the volume snapshot | positive |
+| 23 | `test_23_concurrent_vm_snapshot_and_revert` | VM snapshot of VM-A while VM-B reverts to its VM snapshot | test_22 | Both operations finish; VM-A snapshot `Ready` | New FlexVol snapshot for VM-A | positive |
+| 24 | `test_24_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_23 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps for the data LUN; LUN still in FlexVol | positive ⚠️ |
+| 25 | `test_25_grow_detached_volume` | Grow the detached, materialized data volume | test_24 | API and DB size equal target | LUN `space.size` equals target | positive |
+| 26 | `test_26_destroy_vm_with_vm_snapshot` | Expunge VM-B while it still has a VM snapshot | test_19 (VM-B) | VM-B no longer listed | VM-B ROOT LUN gone; `cs_tmpl_*` still present | positive |
+| 27 | `test_27_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_25, test_26 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
 
-> ⚠️ **test_09 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
+> ⚠️ **test_24 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
 
 ---
 
@@ -310,12 +342,12 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | NFS3 Pool with Volumes | NFS3 | Cluster | 12 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 5 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
-| NFS3 VM + Volume Attach | NFS3 | Cluster | 13 | ⏳ resize cases pending lab validation |
+| NFS3 VM + Volume Attach | NFS3 | Cluster | 29 | ⏳ resize and snapshot cases pending lab validation |
 | NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 21 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 13 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 5 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
-| iSCSI VM + Volume Attach | iSCSI | Cluster | 13 | ⏳ resize cases pending lab validation; detach limitation |
+| iSCSI VM + Volume Attach | iSCSI | Cluster | 29 | ⏳ resize and snapshot cases pending lab validation; detach limitation |
 | iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
-| **Total** | | | **119** | **VM resize cases pending lab validation** |
+| **Total** | | | **151** | **Resize and snapshot cases pending lab validation** |
