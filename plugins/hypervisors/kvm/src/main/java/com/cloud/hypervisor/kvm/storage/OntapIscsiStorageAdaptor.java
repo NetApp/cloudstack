@@ -442,17 +442,11 @@ public class OntapIscsiStorageAdaptor implements StorageAdaptor {
             removeScsiDevice(kernelDevice);
             return true;
         }
-
         if (hasOtherLunsInSession(sessionId, kernelDevice)) {
             logger.info("Skipping iSCSI logout for LUN {} on target {}: other LUNs on the same session are still "
                     + "active. Removing device {} only.", lunWwid, iqn, kernelDevice);
             removeScsiDevice(kernelDevice);
-
-            if (hasOtherLunsInSession(sessionId, kernelDevice)) {
-                logger.info("Other LUNs still active on target {} after removing LUN {}; session kept alive", iqn, lunWwid);
-                return true;
-            }
-            logger.info("No LUNs remain on target {} after removing LUN {}; proceeding with iSCSI logout", iqn, lunWwid);
+            return true;
         }
 
         if (host == null) {
