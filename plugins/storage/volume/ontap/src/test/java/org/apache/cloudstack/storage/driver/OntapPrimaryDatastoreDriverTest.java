@@ -1072,7 +1072,10 @@ class OntapPrimaryDatastoreDriverTest {
     @Test
     void testCreateAsync_VolumeClonedFromSnapshot_NfsWithIops_AttachesQosAfterClone() {
         stubVolumeCloneFromSnapshot(5368709120L, 5368709120L, ProtocolType.NFS3.name());
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
         storagePoolDetails.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
+        when(storagePool.getPoolType()).thenReturn(Storage.StoragePoolType.NetworkFilesystem);
+        when(volumeInfo.getUuid()).thenReturn("new-volume-uuid");
         when(volumeInfo.getVolumeType()).thenReturn(Volume.Type.DATADISK);
         when(volumeInfo.getMinIops()).thenReturn(100L);
         when(volumeInfo.getMaxIops()).thenReturn(200L);
@@ -2916,7 +2919,7 @@ class OntapPrimaryDatastoreDriverTest {
         when(volumeVO.getId()).thenReturn(100L);
         when(volumeVO.getSize()).thenReturn(currentSize);
         lenient().when(volumeVO.getPath()).thenReturn("/vol/vol1/lun1");
-        when(volumeDao.update(100L, volumeVO)).thenReturn(true);
+        lenient().when(volumeDao.update(100L, volumeVO)).thenReturn(true);
         when(storagePoolDao.findById(1L)).thenReturn(storagePool);
         when(storagePool.getId()).thenReturn(1L);
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
