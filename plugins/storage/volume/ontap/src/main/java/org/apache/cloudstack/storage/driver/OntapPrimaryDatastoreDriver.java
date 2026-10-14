@@ -1232,8 +1232,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         ensureAccessGroupForHost(sanStrategy, host, storagePool, svmName, accessGroupName);
 
-        // Create or retrieve existing LUN mapping. The logical unit number it returns is specific to
-        // this host's igroup and so is only useful for diagnostics; the path is keyed on the WWID.
+        // Create or retrieve existing LUN mapping.
         String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
         String lunWwid = resolveVolumeLunWwid(sanStrategy, svmName, cloudStackVolumeName, volumeVO.getId());
         logger.debug("grantAccessIscsi: LUN [{}] mapped to igroup [{}] as logical unit number [{}], WWID [{}]",
@@ -1338,17 +1337,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     /**
      * Builds the volume path the KVM agent expects for managed iSCSI: {@code /<targetIQN>/<lunWwid>}.
-     *
-     * <p>The second component is the LUN's SCSI WWID, not its logical unit number. ONTAP presents
-     * every LUN of an SVM through one target IQN and assigns the logical unit number per igroup, so
-     * the same LUN answers at a different number on each host. A plain host-to-host live migration
-     * ships the source domain XML verbatim, so anything host-specific in the device path would make
-     * the destination open whichever LUN happened to occupy that number there. The WWID comes from
-     * the LUN's own inquiry data and is identical on every host, so the path stays valid.</p>
-     *
-     * <p>The hex WWID is used rather than the raw serial deliberately: ONTAP serial numbers contain
-     * characters including {@code /}, which would break the {@code /targetIQN/LUN} parsing the
-     * hypervisor resources apply to this path.</p>
      */
     private String buildIscsiPath(StoragePoolVO storagePool, String lunWwid) {
         return OntapStorageConstants.SLASH + storagePool.getPath() + OntapStorageConstants.SLASH + lunWwid;
@@ -1369,10 +1357,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String serialNumber = fetchLunSerialNumber(sanStrategy, svmName, lunName);
         String wwid = toNaaWwid(serialNumber);
 
-        // The serial is recorded as well as the WWID it encodes, because the serial is what 'lun show'
-        // reports on the array while the WWID is what 'ls /dev/disk/by-id' reports on the host. The
-        // path carries the WWID rather than the serial: ONTAP serials contain characters such as '/'
-        // and '?' that are unsafe in a value flowing through paths, globs and API responses.
         volumeDetailsDao.addDetail(volumeId, OntapStorageConstants.LUN_DOT_SERIAL_NUMBER, serialNumber, false);
         volumeDetailsDao.addDetail(volumeId, DiskTO.SCSI_NAA_DEVICE_ID, wwid, false);
         return wwid;

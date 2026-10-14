@@ -387,15 +387,6 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
-    /**
-     * Fetches a LUN's serial number, the array-assigned identity its SCSI WWID is derived from.
-     *
-     * <p>Kept separate from {@link #getCloudStackVolume(Map)} rather than widening that method's
-     * query: ONTAP narrows a response to the requested {@code fields}, and existing callers of
-     * {@code getCloudStackVolume} rely on {@code name} and {@code uuid} being present.</p>
-     *
-     * @return the serial number, or null if the LUN no longer exists on the array
-     */
     public String getLunSerialNumber(String svmName, String lunName) {
         logger.trace("getLunSerialNumber: fetching serial number of LUN [{}] on SVM [{}]", lunName, svmName);
         if (svmName == null || svmName.isEmpty() || lunName == null || lunName.isEmpty()) {
