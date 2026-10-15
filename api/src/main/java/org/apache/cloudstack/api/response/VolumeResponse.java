@@ -118,7 +118,7 @@ public class VolumeResponse extends BaseResponseWithTagInformation implements Co
     private Long maxIops;
 
     @SerializedName("iscustomizediops")
-    @Param(description = "True if the volume's disk offering uses custom IOPS, false otherwise", since = "4.23.0")
+    @Param(description = "True if the volume's disk offering uses custom IOPS, false otherwise")
     private Boolean customizedIops;
 
     @SerializedName(ApiConstants.CREATED)

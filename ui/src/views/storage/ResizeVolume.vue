@@ -105,7 +105,7 @@ export default {
       if (this.resource.size != null) {
         this.form.size = this.resource.size / (1024 * 1024 * 1024)
       }
-      this.customDiskOfferingIops = !!this.resource.iscustomizediops
+      this.customDiskOfferingIops = this.resource.iscustomizediops
       if (this.customDiskOfferingIops) {
         this.form.miniops = this.resource.miniops
         this.form.maxiops = this.resource.maxiops
