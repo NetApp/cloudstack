@@ -145,7 +145,7 @@ public class OntapPrimaryDatastoreLifecycleTest {
         node.setName("node-a");
         aggregate.setNode(node);
         when(storageStrategy.isAff()).thenReturn(true);
-        when(storageStrategy.chooseAggregate(any())).thenReturn(aggregate);
+        when(storageStrategy.chooseAggregate(any(), any())).thenReturn(aggregate);
         when(storageStrategy.getNetworkInterface(any())).thenReturn(
                 Map.of(OntapStorageConstants.DATA_LIF, "testNetworkInterface"));
 
