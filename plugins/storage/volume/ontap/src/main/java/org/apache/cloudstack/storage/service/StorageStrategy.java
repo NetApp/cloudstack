@@ -789,6 +789,9 @@ public abstract class StorageStrategy {
             IpInterface fallbackInterface = null;
 
             for (IpInterface iface : response.getRecords()) {
+                if (iface == null || iface.getIp() == null) {
+                    continue;
+                }
                 if (!Boolean.TRUE.equals(iface.getEnabled()) || !OntapStorageConstants.LIF_STATE_UP.equals(iface.getState())) {
                     continue;
                 }

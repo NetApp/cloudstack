@@ -1346,6 +1346,27 @@ public class StorageStrategyTest {
                 "Should warn that the home-node LIF is not in use");
     }
 
+    /**
+     * A LIF with no ip object is skipped. A later valid LIF on the same node is still selected.
+     */
+    @Test
+    public void testGetNetworkInterface_nfs_nullIpSkipped() {
+        Aggregate aggregate = buildAggregate("aggr1", "aggr-uuid-1", 10000000000.0, "node-a");
+
+        IpInterface lifWithoutIp = buildLif("10.0.0.1", OntapStorageConstants.LIF_STATE_UP, true, "node-a", "node-a");
+        lifWithoutIp.setIp(null);
+        IpInterface lifWithIp = buildLif("10.0.0.2", OntapStorageConstants.LIF_STATE_UP, true, "node-a", "node-a");
+
+        when(networkFeignClient.getNetworkIpInterfaces(anyString(), anyMap()))
+                .thenReturn(wrapLifs(List.of(lifWithoutIp, lifWithIp)));
+
+        Map<String, String> result = storageStrategy.getNetworkInterface(aggregate);
+
+        assertEquals("10.0.0.2", result.get(OntapStorageConstants.DATA_LIF));
+        assertTrue(result.get(OntapStorageConstants.LIF_WARNING) == null,
+                "The valid same-node LIF should be selected with no warning");
+    }
+
     // ========== Helper Methods ==========
 
     private void setupSuccessfulJobCreation() {
