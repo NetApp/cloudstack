@@ -44,6 +44,7 @@ from marvin.cloudstackAPI import (
     deleteVolume as deleteVolumeAPI,
     enableStorageMaintenance,
     listDiskOfferings as listDiskOfferingsAPI,
+    listTemplates as listTemplatesAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
     resizeVolume as resizeVolumeAPI,
