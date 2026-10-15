@@ -198,7 +198,7 @@ public class UnifiedSANStrategy extends SANStrategy {
     public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         if (cloudstackVolume == null || cloudstackVolume.getLun() == null
                 || cloudstackVolume.getLun().getUuid() == null) {
-            throw new CloudRuntimeException("Invalid iSCSI volume QoS update request");
+            throw new CloudRuntimeException("Invalid iSCSI volume request");
         }
         Lun lunUpdate = new Lun();
         lunUpdate.setQosPolicy(cloudstackVolume.getLun().getQosPolicy());
