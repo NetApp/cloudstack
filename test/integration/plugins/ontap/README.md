@@ -83,7 +83,7 @@ The ONTAP plugin (`plugins/storage/volume/ontap/`) integrates CloudStack's prima
 ### NFS3 vs iSCSI — key differences
 
 | Aspect | NFS3 | iSCSI |
-|--------|------|-------|
+| -------- | ------ | ------- |
 | ONTAP object per pool | FlexVol + export policy | FlexVol + igroup per KVM host |
 | ONTAP object per CS volume | None (FlexVol is shared) | One LUN inside the FlexVol |
 | Host connectivity | NFS mount | iSCSI login (IQN-based) |
@@ -173,7 +173,7 @@ bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
 Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
 
 | Command | What it runs |
-|---------|--------------|
+| --------- | -------------- |
 | `run_tests.sh iscsi` | All 6 iSCSI suites + unified iSCSI report |
 | `run_tests.sh nfs3` | All 6 NFS3 suites + unified NFS3 report |
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
@@ -303,7 +303,7 @@ self.assertEqual(result.state, "Maintenance")
 `OntapTestBase` provides everything individual test classes inherit:
 
 | What | Purpose |
-|------|---------|
+| ------ | --------- |
 | `_setup_cloudstack_resources()` | Creates a test account, domain, disk offering; resolves zone/cluster/hosts |
 | `tearDownClass()` | Best-effort cleanup: deletes pool (forced=True), volume, disk offering, account |
 | `_poll_pool_state(pool_id, state, timeout)` | Polls `listStoragePools` until pool reaches the target state |
@@ -315,7 +315,7 @@ self.assertEqual(result.state, "Maintenance")
 ### `OntapRestClient` methods at a glance
 
 | Method | What it checks | Used in |
-|--------|---------------|---------|
+| -------- | --------------- | --------- |
 | `get_volume(name)` | FlexVol existence and state | All suites |
 | `get_export_policy(name)` | NFS export policy existence | NFS3 suites |
 | `get_data_lifs(svm_name)` | NFS data LIF count | NFS3 pool lifecycle |
@@ -329,7 +329,7 @@ self.assertEqual(result.state, "Maintenance")
 ## Test suite quick reference
 
 | Suite | File | Tests | What it covers |
-|-------|------|-------|---------------|
+| ------- | ------ | ------- | --------------- |
 | NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete |
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
@@ -350,7 +350,7 @@ For the goal, dependencies, and exact success criteria of every individual test,
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
-|---------|-------------|-----|
+| --------- | ------------- | ----- |
 | `ModuleNotFoundError: No module named 'ontap_test_base'` | Missing `PYTHONPATH` prefix | Prefix every run with `PYTHONPATH=test/integration/plugins/ontap` |
 | `Marvin Init Failed` | CloudStack API unreachable | Check `mgtSvrIp:8096` is reachable; restart `cloudstack-management` |
 | `Lost connection to MySQL` | MySQL not accepting remote connections | Enable remote MySQL access (see Prerequisites §3) |

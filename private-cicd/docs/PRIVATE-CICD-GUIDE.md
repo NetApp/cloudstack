@@ -189,7 +189,7 @@ The timer starts `SOURCE_MODE=discover`. Discovery lists open non-draft PRs agai
 with the latest successful discovery watermark, and self-queues `SOURCE_MODE=pull_request` workers with:
 
 | Parameter | Source |
-|---|---|
+| --- | --- |
 | `PR_ID` | pull request number |
 | `PR_ACTION` | `opened` for the first SHA of that PR, otherwise `synchronize` |
 | `PR_DRAFT` | `false` |
@@ -313,7 +313,7 @@ installed on the VM, where systemd is available.
 Create credentials in a scope visible to the job:
 
 | Suggested ID | Kind | Use |
-|---|---|---|
+| --- | --- | --- |
 | `cloudstack-presubmit-inventory` | Secret file | Populated inventory outside Git |
 | `cloudstack-presubmit-ssh` | Username with password | Initial VM login |
 | `cloudstack-vcenter` | Username with password | Snapshot revert/power-on |
@@ -328,7 +328,7 @@ Create credentials in a scope visible to the job:
 Parameter mapping:
 
 | Parameter | Credential |
-|---|---|
+| --- | --- |
 | `VM_INVENTORY_CREDENTIALS_ID` | Inventory Secret file |
 | `VM_SSH_CREDENTIALS_ID` | VM username/password |
 | `VCENTER_CREDENTIALS_ID` | vCenter username/password |
@@ -366,7 +366,7 @@ tokens, or keys.
 Each enabled VM needs:
 
 | Field | Contract |
-|---|---|
+| --- | --- |
 | `id` | Unique readable ID |
 | `enabled` | Omitted or `true` |
 | `lock_resource` | Unique Jenkins resource name |
@@ -452,7 +452,7 @@ Create an organization-owned app, install it only on `NetApp/cloudstack`, disabl
 no events. Grant:
 
 | Permission | Level |
-|---|---|
+| --- | --- |
 | Checks | Read and write |
 | Contents | Read-only |
 | Metadata | Read-only |

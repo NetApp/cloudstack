@@ -83,7 +83,7 @@ presubmit that hangs on the lock or configures the wrong VM.
 The following items should already exist from `cloudstack-presubmit-manual`:
 
 | Section | Existing state | What to do now |
-|---|---|---|
+| --- | --- | --- |
 | 4.1 | Most plugins already installed | Confirm every plugin; install any missing plugin |
 | 4.3 | Extended E-mail SMTP configured | Confirm sender still resolves |
 | 4.4 | Kubernetes cloud proven by manual runs | Confirm the same cloud remains available |
@@ -111,7 +111,7 @@ resolve and the build fails during **Validate source request**.
 The following work is new for the automatic job:
 
 | Section | New because |
-|---|---|
+| --- | --- |
 | 4.1 | GitHub Branch Source is required for the GitHub App credential |
 | 4.2 | Jenkins URL is still required for Check **Details** links, not for inbound GitHub webhooks |
 | 7 | Self-queued workers need committed non-interactive defaults |
@@ -190,7 +190,7 @@ head-repository restriction before using this design.
 Record these values before opening Jenkins:
 
 | Value | Example or required form |
-|---|---|
+| --- | --- |
 | Jenkins external URL | `https://jenkins.example.net/` |
 | Jenkins job name | `cloudstack-ontap-presubmit` |
 | Trusted pipeline branch | `feature/CSTACKEX-223` |
@@ -251,7 +251,7 @@ In Jenkins:
 4. Search for and confirm each plugin:
 
 | Plugin | Pipeline use |
-|---|---|
+| --- | --- |
 | Pipeline | Declarative pipeline execution |
 | Pipeline Utility Steps | `readYaml` for VM inventory |
 | Kubernetes | Jenkins agent pod |
@@ -402,7 +402,7 @@ They must be created in the same folder or an ancestor visible to the job.
 Create or confirm these credentials:
 
 | Suggested ID | Jenkins Kind | Value |
-|---|---|---|
+| --- | --- | --- |
 | `cloudstack-presubmit-inventory` | Secret file | populated inventory YAML |
 | `cloudstack-vcenter` | Username with password | vCenter account |
 | `cloudstack-presubmit-ssh` | Username with password | initial VM login |
@@ -565,7 +565,7 @@ is the signature of this gap.
 Two further steps in that guide do not apply here:
 
 | Guide step | This presubmit |
-|---|---|
+| --- | --- |
 | Subscribe to all events | Subscribe to no events and leave the webhook inactive |
 | Create a Jenkins GitHub Organization item | Create one Pipeline job; an Organization folder would run `Jenkinsfile` from the PR branch |
 
@@ -852,7 +852,7 @@ In Jenkins:
 3. Enter:
 
 | Parameter | Value |
-|---|---|
+| --- | --- |
 | `SOURCE_MODE` | `pull_request` |
 | `SOURCE_BRANCH` | blank |
 | `SOURCE_SHA` | blank |
@@ -956,7 +956,7 @@ discovery build always means discovery itself is broken.
 Build titles distinguish the three kinds of run in the history:
 
 | Title | Meaning |
-|---|---|
+| --- | --- |
 | `#N discover: queued 1, deferred 0` | a poll that queued one worker |
 | `#N discover: skipped, lock held` | a poll that overlapped a slower one |
 | `#N PR-98 diff #3 synchronize` | the presubmit for PR-98's third commit |
@@ -1131,7 +1131,7 @@ the current PR head SHA is the merge gate.
 ## 18. Expected trigger cases
 
 | Change | Expected result |
-|---|---|
+| --- | --- |
 | Non-draft PR to `main` updated after the watermark | discovery queues a worker |
 | New commit pushed to an eligible PR | discovery queues `synchronize` for the new SHA |
 | Same SHA already queued or recorded | discovery skips it |
@@ -1219,7 +1219,7 @@ Use `SOURCE_MODE=discover`. Do not ask GitHub to redeliver.
 ### GitHub Check API failure
 
 | Response | Likely cause |
-|---|---|
+| --- | --- |
 | 401 | invalid App ID/key or installation token |
 | 403 | missing Checks write permission, policy, or rate limit |
 | 404 | App not installed on `NetApp/cloudstack` or wrong repository |
