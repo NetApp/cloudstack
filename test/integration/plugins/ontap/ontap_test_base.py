@@ -35,6 +35,7 @@ import requests
 import sys
 import time
 import urllib3
+from unittest import SkipTest
 from urllib.parse import urlparse
 
 from marvin.cloudstackAPI import (
@@ -684,6 +685,84 @@ class OntapRestClient:
         encoded_path = quote(path, safe="")
         self._delete("/storage/volumes/%s/files/%s" % (vol_uuid, encoded_path))
         return True
+
+
+# Invalid createStoragePool capacitybytes values.
+# (label, value, alternative fragment groups; any one group may match)
+# The API rejects zero, a negative number, special characters, and a decimal
+# as an invalid capacitybytes. A build that reaches the plugin instead reports
+# that capacity must be at least the ONTAP minimum.
+INVALID_CAPACITYBYTES_CASES = (
+    ("zero", 0, (("invalid value", "capacitybytes"), ("must be at least",))),
+    ("negative", -1, (("invalid value", "capacitybytes"), ("must be at least",))),
+    ("special-characters", "!@#$", (("invalid value", "capacitybytes"),)),
+    ("decimal", "1.5", (("invalid value", "capacitybytes"),)),
+)
+
+
+def run_invalid_capacitybytes_rejections(test, create_pool, cleanup_pool, log):
+    """Reject createStoragePool for every invalid capacitybytes value.
+
+    create_pool(pool_name, capacitybytes) calls createStoragePool.
+    cleanup_pool(pool, pool_name) removes a pool or FlexVol left behind.
+    Failures are collected so every value is attempted.
+    """
+    test._sweep_tracked_pool2()
+    failures = []
+    for label, capacity, fragments in INVALID_CAPACITYBYTES_CASES:
+        pool_name = test._throwaway_pool_name(
+            "BadCap%s" % label.replace("-", "")
+        )
+        log_progress(
+            log, "info",
+            "Requesting pool '%s' with capacitybytes=%r (expect reject: %s)",
+            pool_name, capacity, label,
+        )
+        created = None
+        try:
+            try:
+                created = create_pool(pool_name, capacity)
+                test.__class__.pool2 = created
+                failures.append(
+                    "[%s] createStoragePool succeeded for capacitybytes=%r"
+                    % (label, capacity)
+                )
+            except CloudstackAPIException as exc:
+                error_text = str(exc)
+                log_progress(
+                    log, "info",
+                    "Rejected capacitybytes=%r for '%s': %s",
+                    capacity, pool_name, error_text,
+                )
+                if not any(all(frag in error_text for frag in group)
+                           for group in fragments):
+                    failures.append(
+                        "[%s] error matched none of %s, got: %s"
+                        % (label, fragments, error_text)
+                    )
+            if created is None:
+                try:
+                    test._assert_no_pool_named(pool_name)
+                except AssertionError as exc:
+                    failures.append("[%s] %s" % (label, exc))
+                if test.ontap.get_volume(pool_name) is not None:
+                    failures.append(
+                        "[%s] ONTAP FlexVol '%s' was created despite the "
+                        "rejected pool create" % (label, pool_name)
+                    )
+        except SkipTest:
+            raise
+        except Exception as exc:
+            failures.append(
+                "[%s] %s: %s" % (label, type(exc).__name__, exc)
+            )
+        finally:
+            cleanup_pool(created, pool_name)
+    if failures:
+        test.fail(
+            "Invalid capacitybytes create was not rejected cleanly:\n%s"
+            % "\n".join(failures)
+        )
 
 
 # ---------------------------------------------------------------------------

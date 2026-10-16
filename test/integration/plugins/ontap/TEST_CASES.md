@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 93 test cases across 12 test suites.
+Complete reference for all 95 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -42,22 +42,23 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `nfs3/pool/test_pool_lifecycle.py`
 **Class:** `TestOntapNFS3PrimaryStorageWorkflow`
 **Tag:** `nfs3_workflow`
-**Total:** 12 tests | **Scope:** cluster-scoped NFS3 pool, no-volume workflow through test 08. test 01 is isolated; test 03 reuses the pool from test 02; tests 11–12 are isolated
+**Total:** 13 tests | **Scope:** cluster-scoped NFS3 pool, no-volume workflow through test 09. tests 01 and 02 are isolated; test 04 reuses the pool from test 03; tests 12–13 are isolated
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_reject_create_when_no_aggregate_space` | Reject pool creation when requested capacity exceeds every assigned online aggregate's available space | isolated | `CloudstackAPIException` containing `No suitable aggregates`; no CS pool created | No FlexVol created | negative |
-| 02 | `test_02_create_primary_storage_pool` | Create a cluster-scoped NFS3 primary storage pool | setUpClass (zone, cluster, account) | `pool.state == "Up"`, `pool.type == "NetworkFilesystem"`, `nfsmountopts` contains `vers=3` | FlexVol exists and `state == "online"`, export policy exists with each cluster host IP as a rule, at least one NFS data LIF present on SVM | positive |
-| 03 | `test_03_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 02 already exists on ONTAP | test_02 | `CloudstackAPIException`; only the test_02 pool remains, still `Up` | Existing FlexVol stays `online`; export policy still present | negative |
-| 04 | `test_04_disable_storage_pool` | Disable the pool (admin operation) | test_06 | `pool.state == "Disabled"` | FlexVol still `online`; export policy still present | positive |
-| 05 | `test_05_enable_storage_pool` | Re-enable the pool | test_08 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
-| 06 | `test_06_enter_maintenance_mode` | Put pool into maintenance (drains new volume allocations) | test_05 | `pool.state == "Maintenance"` | FlexVol still `online`; export policy still present (maintenance is CS-only state) | positive |
-| 07 | `test_07_cancel_maintenance_mode` | Cancel maintenance, return pool to service | test_11 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
-| 08 | `test_08_delete_pool_from_maintenance` | Enter maintenance then permanently delete the original pool | test_07 | Pool no longer returned by `listStoragePools` (CS 431 error expected on ID lookup) | FlexVol and export policy deleted | positive |
-| 09 | `test_09_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack data volume | test_08 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; export policy present | positive |
-| 10 | `test_10_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_17 | VM destroyed; volume and pool no longer listed | FlexVol and export policy deleted | cleanup |
-| 11 | `test_11_delete_pool_with_flexvol_predeleted` | Delete an empty pool after its FlexVol was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol remains absent; export policy cleaned up | negative |
-| 12 | `test_12_delete_pool_with_export_policy_predeleted` | Delete an empty pool after its export policy was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol deleted; export policy remains absent | negative |
+| 02 | `test_02_reject_create_with_invalid_capacitybytes_values` | Reject pool creation when `capacitybytes` has invalid values | isolated | `CloudstackAPIException` for each value containing `invalid value` for `capacitybytes`, or `must be at least` when the plugin validates the size; no CS pool created | No FlexVol created | negative |
+| 03 | `test_03_create_primary_storage_pool` | Create a cluster-scoped NFS3 primary storage pool | setUpClass (zone, cluster, account) | `pool.state == "Up"`, `pool.type == "NetworkFilesystem"`, `nfsmountopts` contains `vers=3` | FlexVol exists and `state == "online"`, export policy exists with each cluster host IP as a rule, at least one NFS data LIF present on SVM | positive |
+| 04 | `test_04_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 03 already exists on ONTAP | test_03 | `CloudstackAPIException`; only the test_03 pool remains, still `Up` | Existing FlexVol stays `online`; export policy still present | negative |
+| 05 | `test_05_disable_storage_pool` | Disable the pool (admin operation) | test_03 | `pool.state == "Disabled"` | FlexVol still `online`; export policy still present | positive |
+| 06 | `test_06_enable_storage_pool` | Re-enable the pool | test_05 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
+| 07 | `test_07_enter_maintenance_mode` | Put pool into maintenance (drains new volume allocations) | test_06 | `pool.state == "Maintenance"` | FlexVol still `online`; export policy still present (maintenance is CS-only state) | positive |
+| 08 | `test_08_cancel_maintenance_mode` | Cancel maintenance, return pool to service | test_07 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
+| 09 | `test_09_delete_pool_from_maintenance` | Enter maintenance then permanently delete the original pool | test_08 | Pool no longer returned by `listStoragePools` (CS 431 error expected on ID lookup) | FlexVol and export policy deleted | positive |
+| 10 | `test_10_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack data volume | test_09 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; export policy present | positive |
+| 11 | `test_11_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_10 | VM destroyed; volume and pool no longer listed | FlexVol and export policy deleted | cleanup |
+| 12 | `test_12_delete_pool_with_flexvol_predeleted` | Delete an empty pool after its FlexVol was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol remains absent; export policy cleaned up | negative |
+| 13 | `test_13_delete_pool_with_export_policy_predeleted` | Delete an empty pool after its export policy was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol deleted; export policy remains absent | negative |
 
 ---
 
@@ -145,22 +146,23 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/pool/test_pool_lifecycle.py`
 **Class:** `TestOntapISCSIPoolLifecycle`
 **Tag:** `iscsi_workflow`
-**Total:** 12 tests | **Scope:** cluster-scoped iSCSI pool, no-volume workflow through test 08. test 01 is isolated; test 03 reuses the pool from test 02; tests 11–12 are isolated
+**Total:** 13 tests | **Scope:** cluster-scoped iSCSI pool, no-volume workflow through test 09. tests 01 and 02 are isolated; test 04 reuses the pool from test 03; tests 12–13 are isolated
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_reject_create_when_no_aggregate_space` | Reject pool creation when requested capacity exceeds every assigned online aggregate's available space | isolated | `CloudstackAPIException` containing `No suitable aggregates`; no CS pool created | No FlexVol created | negative |
-| 02 | `test_02_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "Iscsi"` | FlexVol `online`; shared `cs_{hostUuid}_{svmName}` igroups unchanged from suite-start baseline | positive |
-| 03 | `test_03_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 02 already exists on ONTAP | test_02 | `CloudstackAPIException`; only the test_02 pool remains, still `Up` | Existing FlexVol stays `online` | negative |
-| 04 | `test_04_disable_storage_pool` | Disable the pool | test_06 | `pool.state == "Disabled"` | FlexVol still `online` | positive |
-| 05 | `test_05_enable_storage_pool` | Re-enable the pool | test_08 | `pool.state == "Up"` | FlexVol still `online` | positive |
-| 06 | `test_06_enter_maintenance_mode` | Put pool into maintenance | test_05 | `pool.state == "Maintenance"` | FlexVol still `online`; igroups unchanged | positive |
-| 07 | `test_07_cancel_maintenance_mode` | Cancel maintenance | test_11 | `pool.state == "Up"` | FlexVol still `online` | positive |
-| 08 | `test_08_enter_maintenance_and_delete_pool` | Enter maintenance then delete the original pool | test_07 | Pool no longer listed | FlexVol and test-pool LUN maps deleted; shared igroup baseline restored | positive |
-| 09 | `test_09_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack volume | test_08 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; at least one LUN present | positive |
-| 10 | `test_10_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_17 | VM destroyed; volume and pool no longer listed | LUN, FlexVol, and test-pool maps deleted; shared igroup baseline restored | cleanup |
-| 11 | `test_11_delete_pool_with_flexvol_predeleted` | Delete an empty pool after its FlexVol was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol remains absent; igroups cleaned up | negative |
-| 12 | `test_12_delete_pool_with_igroups_predeleted` | Delete an empty pool after host igroups were removed directly from ONTAP | isolated | Pool removed successfully | FlexVol deleted; igroups remain absent | negative |
+| 02 | `test_02_reject_create_with_invalid_capacitybytes_values` | Reject pool creation when `capacitybytes` has invalid values | isolated | `CloudstackAPIException` for each value containing `invalid value` for `capacitybytes`, or `must be at least` when the plugin validates the size; no CS pool created | No FlexVol created | negative |
+| 03 | `test_03_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "Iscsi"` | FlexVol `online`; shared `cs_{hostUuid}_{svmName}` igroups unchanged from suite-start baseline | positive |
+| 04 | `test_04_reject_create_when_flexvol_name_exists` | Reject a second pool create when the FlexVol from test 03 already exists on ONTAP | test_03 | `CloudstackAPIException`; only the test_03 pool remains, still `Up` | Existing FlexVol stays `online` | negative |
+| 05 | `test_05_disable_storage_pool` | Disable the pool | test_03 | `pool.state == "Disabled"` | FlexVol still `online` | positive |
+| 06 | `test_06_enable_storage_pool` | Re-enable the pool | test_05 | `pool.state == "Up"` | FlexVol still `online` | positive |
+| 07 | `test_07_enter_maintenance_mode` | Put pool into maintenance | test_06 | `pool.state == "Maintenance"` | FlexVol still `online`; igroups unchanged | positive |
+| 08 | `test_08_cancel_maintenance_mode` | Cancel maintenance | test_07 | `pool.state == "Up"` | FlexVol still `online` | positive |
+| 09 | `test_09_enter_maintenance_and_delete_pool` | Enter maintenance then delete the original pool | test_08 | Pool no longer listed | FlexVol and test-pool LUN maps deleted; shared igroup baseline restored | positive |
+| 10 | `test_10_create_volume_on_pool` | Create a fresh pool and allocate a CloudStack volume | test_09 | New pool is `Up`; `createVolume` returns a volume | FlexVol `online`; at least one LUN present | positive |
+| 11 | `test_11_delete_volume_and_pool` | Detach and destroy the VM, delete the volume, then force-delete the pool | test_10 | VM destroyed; volume and pool no longer listed | LUN, FlexVol, and test-pool maps deleted; shared igroup baseline restored | cleanup |
+| 12 | `test_12_delete_pool_with_flexvol_predeleted` | Delete an empty pool after its FlexVol was removed directly from ONTAP | isolated | Pool removed successfully | FlexVol remains absent; igroups cleaned up | negative |
+| 13 | `test_13_delete_pool_with_igroups_predeleted` | Delete an empty pool after host igroups were removed directly from ONTAP | isolated | Pool removed successfully | FlexVol deleted; igroups remain absent | negative |
 
 ---
 
