@@ -226,3 +226,60 @@ CREATE TABLE IF NOT EXISTS `cloud`.`instance_boot_group_details` (
     PRIMARY KEY (`id`),
     CONSTRAINT `fk_instance_boot_group_details__group_id` FOREIGN KEY (`boot_group_id`) REFERENCES `instance_boot_group` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- Re-tag NetApp ONTAP iSCSI storage pools to the dedicated 'OntapiSCSI' pool type.
+--
+-- Up to and including 4.23.0.0 the NetApp ONTAP primary store driver registered its iSCSI
+-- pools under the generic 'Iscsi' StoragePoolType (originally meant for ZFS Comstar), because
+-- no NetApp-specific enum existed yet. 24.0.0.0 introduces 'OntapiSCSI' as a first-class pool
+-- type (see api/.../Storage.java::StoragePoolType) so that KVM path construction, the iSCSI
+-- cleanup monitor, the data-motion strategy and the UI can key off the pool type rather than
+-- having to probe storage_pool_details or storage_provider_name on every call.
+--
+-- These three UPDATE statements re-tag the existing rows for a NetApp ONTAP provider only
+-- (storage_provider_name = 'NetApp ONTAP', the string exposed as
+-- DataStoreProvider.ONTAP_PLUGIN_NAME). All three are naturally idempotent on re-run because
+-- they filter on the pre-migration value - a second attempt matches zero rows. Rows soft-
+-- deleted via `removed` are intentionally included so historical / un-deleted pools report
+-- the correct type.
+--
+
+-- 1. The pool itself.
+UPDATE  `cloud`.`storage_pool`
+SET     `pool_type` = 'OntapiSCSI'
+WHERE   `storage_provider_name` = 'NetApp ONTAP'
+  AND   `pool_type`              = 'Iscsi';
+
+-- 2. The denormalized copy on every volume that lives on such a pool.
+--
+-- The sp.pool_type IN ('Iscsi', 'OntapiSCSI') guard here is defense-in-depth, not a
+-- correctness requirement: it excludes volumes whose underlying storage_pool is NFS-backed
+-- NetApp ('NetworkFilesystem') even if, by some historical anomaly, their v.pool_type still
+-- reads 'Iscsi'. Flipping those to 'OntapiSCSI' would be wrong, so we gate on the pool's
+-- current type. The IN (...) form keeps the statement order-independent with statement 1.
+UPDATE  `cloud`.`volumes` v
+    JOIN    `cloud`.`storage_pool` sp ON sp.`id` = v.`pool_id`
+    SET     v.`pool_type` = 'OntapiSCSI'
+WHERE   sp.`storage_provider_name` = 'NetApp ONTAP'
+  AND   sp.`pool_type`             IN ('Iscsi', 'OntapiSCSI')
+  AND   v.`pool_type`              = 'Iscsi';
+
+-- 3. Volume format realignment.
+--
+-- The ONTAP primary store driver on 24.0 returns ImageFormat.RAW for every iSCSI volume
+-- (OntapPrimaryDatastoreDriver::getFormat). On 4.23 volumes created against the generic
+-- 'Iscsi' pool type may have been persisted with the wrong format literal depending on which
+-- code path created them (template-backed, snapshot copies, migrated-from-NFS, etc). Force
+-- the full set to 'RAW' so that KVM / libvirt see the authoritative format on next grant.
+--
+-- sp.pool_type IN ('Iscsi', 'OntapiSCSI') makes this statement order-independent with
+-- statement 1: it works whether or not the pool has been rebranded yet. NFS-backed NetApp
+-- pools ('NetworkFilesystem') are deliberately excluded - they stay QCOW2.
+UPDATE  `cloud`.`volumes` v
+    JOIN    `cloud`.`storage_pool` sp ON sp.`id` = v.`pool_id`
+    SET     v.`format` = 'RAW'
+WHERE   sp.`storage_provider_name` = 'NetApp ONTAP'
+  AND   sp.`pool_type`             IN ('Iscsi', 'OntapiSCSI')
+  AND   (v.`format` IS NULL OR v.`format` <> 'RAW');
+
