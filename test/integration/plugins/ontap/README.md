@@ -43,7 +43,7 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (90 tests)
+├── TEST_CASES.md                 # Full test case reference table (96 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -54,7 +54,7 @@ test/integration/plugins/ontap/
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
 │   ├── instance/
-│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach + template cache
+│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/resize/detach + template cache
 │   └── template/
 │       └── test_template_cache_negative.py  # Template-cache boundary cases
 │
@@ -66,7 +66,7 @@ test/integration/plugins/ontap/
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
     ├── instance/
-    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle + template cache
+    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/resize/LUN-map lifecycle + template cache
     └── template/
         └── test_template_cache_negative.py  # Template-cache boundary cases
 ```
@@ -83,7 +83,7 @@ The ONTAP plugin (`plugins/storage/volume/ontap/`) integrates CloudStack's prima
 ### NFS3 vs iSCSI — key differences
 
 | Aspect | NFS3 | iSCSI |
-|--------|------|-------|
+| -------- | ------ | ------- |
 | ONTAP object per pool | FlexVol + export policy | FlexVol + igroup per KVM host |
 | ONTAP object per CS volume | None (FlexVol is shared) | One LUN inside the FlexVol |
 | Host connectivity | NFS mount | iSCSI login (IQN-based) |
@@ -173,7 +173,7 @@ bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
 Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
 
 | Command | What it runs |
-|---------|--------------|
+| --------- | -------------- |
 | `run_tests.sh iscsi` | All 6 iSCSI suites + unified iSCSI report |
 | `run_tests.sh nfs3` | All 6 NFS3 suites + unified NFS3 report |
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
@@ -303,7 +303,7 @@ self.assertEqual(result.state, "Maintenance")
 `OntapTestBase` provides everything individual test classes inherit:
 
 | What | Purpose |
-|------|---------|
+| ------ | --------- |
 | `_setup_cloudstack_resources()` | Creates a test account, domain, disk offering; resolves zone/cluster/hosts |
 | `tearDownClass()` | Best-effort cleanup: deletes pool (forced=True), volume, disk offering, account |
 | `_poll_pool_state(pool_id, state, timeout)` | Polls `listStoragePools` until pool reaches the target state |
@@ -315,7 +315,7 @@ self.assertEqual(result.state, "Maintenance")
 ### `OntapRestClient` methods at a glance
 
 | Method | What it checks | Used in |
-|--------|---------------|---------|
+| -------- | --------------- | --------- |
 | `get_volume(name)` | FlexVol existence and state | All suites |
 | `get_export_policy(name)` | NFS export policy existence | NFS3 suites |
 | `get_data_lifs(svm_name)` | NFS data LIF count | NFS3 pool lifecycle |
@@ -331,18 +331,18 @@ self.assertEqual(result.state, "Maintenance")
 ## Test suite quick reference
 
 | Suite | File | Tests | What it covers |
-|-------|------|-------|---------------|
+| ------- | ------ | ------- | --------------- |
 | NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 16 | Create, grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, resize in maintenance, delete, then re-create with a volume, reject shrink below used capacity, deploy a VM and attach the volume, cleanup |
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle with stopped-VM qcow2 grow; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 16 | Create, grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, resize in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle; stopped-VM LUN grow and LUN-map checks; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
@@ -352,13 +352,13 @@ For the goal, dependencies, and exact success criteria of every individual test,
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
-|---------|-------------|-----|
+| --------- | ------------- | ----- |
 | `ModuleNotFoundError: No module named 'ontap_test_base'` | Missing `PYTHONPATH` prefix | Prefix every run with `PYTHONPATH=test/integration/plugins/ontap` |
 | `Marvin Init Failed` | CloudStack API unreachable | Check `mgtSvrIp:8096` is reachable; restart `cloudstack-management` |
 | `Lost connection to MySQL` | MySQL not accepting remote connections | Enable remote MySQL access (see Prerequisites §3) |
 | `sh: python: command not found` (repeated) | Marvin internal call — harmless on macOS | Ignore; Marvin Init still succeeds |
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
-| iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
+| iSCSI `test_09` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
 | `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
