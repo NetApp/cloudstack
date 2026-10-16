@@ -244,7 +244,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
     # Step 01 — Create zone-scoped pool
     # ------------------------------------------------------------------
 
-    @attr(tags=["zone_pool"], required_hardware=True)
+    @attr(tags=["nfs3_zone_pool"], required_hardware=True)
     def test_01_create_zone_scoped_pool(self):
         """
         Create a zone-scoped NFS3 primary storage pool (no clusterid/podid).
@@ -291,7 +291,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
     # Step 02 — Disable zone-scoped pool
     # ------------------------------------------------------------------
 
-    @attr(tags=["zone_pool"], required_hardware=True)
+    @attr(tags=["nfs3_zone_pool"], required_hardware=True)
     def test_02_disable_zone_scoped_pool(self):
         """
         Disable the zone-scoped pool.
@@ -328,7 +328,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
     # Step 03 — Enable zone-scoped pool
     # ------------------------------------------------------------------
 
-    @attr(tags=["zone_pool"], required_hardware=True)
+    @attr(tags=["nfs3_zone_pool"], required_hardware=True)
     def test_03_enable_zone_scoped_pool(self):
         """
         Re-enable the zone-scoped pool.
@@ -365,7 +365,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
     # Step 04 — Delete zone-scoped pool
     # ------------------------------------------------------------------
 
-    @attr(tags=["zone_pool"], required_hardware=True)
+    @attr(tags=["nfs3_zone_pool"], required_hardware=True)
     def test_04_delete_zone_scoped_pool(self):
         """
         Enter maintenance then delete the zone-scoped pool.
