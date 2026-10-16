@@ -37,7 +37,7 @@ Deeper design lives in the Cursor skill
 ## Confluence and specs
 
 | Doc | URL | pageId |
-|---|---|---|
+| --- | --- | --- |
 | Transfer of Information: NetApp ONTAP Storage Plugin | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/624932561 | `624932561` |
 | Admin Guide | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/669425954 | `669425954` |
 | Integrated Spec | https://netapp.atlassian.net/wiki/spaces/OSSG/pages/330407273 | `330407273` |
@@ -81,7 +81,7 @@ Apache CloudStack APIs:
 Typical layout used for this work:
 
 | Role | Host | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Management + KVM Cluster1 | `10.193.56.62` (cstack53) | jetty `:cloud-client-ui`; agent; NFS `/export/primary`, `/export/secondary` |
 | KVM Cluster2 | `10.193.56.63` (cstack54) | agent only |
 | Integration API | `http://10.193.56.62:8096` | `integration.api.port=8096` |
@@ -104,7 +104,7 @@ Data mover for Running VMs with storage: `handleLiveMigrationForKVM` →
 driver.
 
 | Source | Dest | Allowed |
-|---|---|---|
+| --- | --- | --- |
 | ONTAP NFS3 (same SVM) | ONTAP NFS3 | Yes — dest file QCOW2 |
 | ONTAP iSCSI (same SVM) | ONTAP iSCSI | Yes — dest LUN RAW |
 | DefaultPrimary / non-managed | ONTAP NFS3 or iSCSI | Yes |
@@ -130,7 +130,7 @@ before putting dest TOs on `PrepareForMigrationCommand`.
 ## Code map
 
 | Path | Why |
-|---|---|
+| --- | --- |
 | `engine/storage/datamotion/.../StorageSystemDataMotionStrategy.java` | `handleLiveMigrationForKVM`, `verifyLiveMigrationForKVM`, `isSupportedOntapMigrationPoolPair`, offline `CopyCommand` branch |
 | `server/.../vm/VirtualMachineManagerImpl.java` | `migrateWithStorage`, `executeManagedStorageChecksWhenTargetStoragePoolProvided` |
 | `server/.../vm/UserVmManagerImpl.java` | `migrateVirtualMachineWithVolume` |
@@ -152,7 +152,7 @@ Do not widen `handleLiveMigrationForKVM` for other vendors. Do not set
 ## Marvin suites
 
 | Tag | File |
-|---|---|
+| --- | --- |
 | `live_storage` | `test_01_live_vm_with_storage_migration.py` (22 cases; 01–13 same cluster; 14–22 cross-cluster) |
 | `stopped_vm` | `test_02_stopped_vm_storage_migration.py` |
 | `volume_migration` | `test_03_volume_migration.py` |
@@ -295,7 +295,7 @@ curl -sk -u "$USER:$PASS" "https://$ONTAP/api/protocols/san/igroups?svm.name=$SV
 ## Failure patterns (do not misdiagnose)
 
 | Symptom | Likely cause |
-|---|---|
+| --- | --- |
 | `Image is not in qcow2 format` | Dest NFS file created RAW; QCOW2 stamp missing |
 | API `NullPointerException` on live with-storage | Check `vmops.log`. May be **cleanup NPE after a real error**. test_19 was `migration of disk vdb failed: No space left on device` then `VolumeObject.stateTransit` NPE on already-deleted dest volume |
 | `KVMStoragePool.getType() because pool is null` | Dest storage pool not in libvirt on dest host (`PrepareForMigration`) |
