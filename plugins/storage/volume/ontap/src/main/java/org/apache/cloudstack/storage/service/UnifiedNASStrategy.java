@@ -139,7 +139,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     public CloudStackVolume updateCloudStackVolume(CloudStackVolume cloudstackVolume) {
         if (cloudstackVolume == null || cloudstackVolume.getVolumeInfo() == null
                 || cloudstackVolume.getFlexVolumeUuid() == null || cloudstackVolume.getFile() == null) {
-            throw new CloudRuntimeException("Invalid NFS volume QoS update request");
+            throw new CloudRuntimeException("Invalid NFS volume request");
         }
         FileInfo fileInfo = new FileInfo();
         fileInfo.setQosPolicy(cloudstackVolume.getFile().getQosPolicy());
