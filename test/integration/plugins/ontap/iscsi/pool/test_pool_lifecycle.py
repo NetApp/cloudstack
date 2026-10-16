@@ -31,7 +31,7 @@ Workflow:
   06  Grow and shrink the pool while it is disabled
   07  Enable storage pool
   08  Enter maintenance mode
-  09  Resize storage pool while in maintenance mode
+  09  Grow and shrink the pool while it is in maintenance mode
   10  Cancel maintenance mode
   11  Enter maintenance mode and delete the storage pool
   12  Create a new pool and allocate a CloudStack data volume (LUN created)
@@ -565,11 +565,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 06 - Resize storage pool while disabled
+    # Step 06 - Grow and shrink the pool while it is disabled
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_06_resize_storage_pool_while_disabled(self):
+    def test_06_grow_and_shrink_storage_pool_while_disabled(self):
         """
         Grow and shrink the disabled pool and verify:
           - Both capacity updates are accepted
@@ -695,19 +695,17 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 09 - Resize storage pool while in maintenance mode
+    # Step 09 - Grow and shrink the pool while it is in maintenance mode
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_09_resize_storage_pool_in_maintenance(self):
+    def test_09_grow_and_shrink_storage_pool_in_maintenance(self):
         """
-        Grow the pool while it is in maintenance mode and verify:
-          - updateStoragePool is accepted while the pool is in Maintenance
-          - CloudStack reports the new capacity
-          - ONTAP: FlexVol is resized and still online
-          - The pool stays in Maintenance throughout (resize must not
-            implicitly return it to Up)
-          - ONTAP: per-host igroups are unchanged
+        Grow and shrink the pool while it is in maintenance mode and verify:
+          - Both capacity updates are accepted
+          - CloudStack and ONTAP reach each requested size
+          - The pool remains in Maintenance throughout
+          - The FlexVol remains online and per-host igroups are unchanged
         """
         self.assertIsNotNone(
             self.__class__.pool, "Pool absent - test_01 must pass first"
@@ -719,44 +717,42 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self.assertEqual(
             listed[0].state, "Maintenance",
             "Pool must be in Maintenance - test_08 must pass first, got '%s'"
-            % listed[0].state
+            % listed[0].state,
         )
 
         ontap_vol = self.ontap.get_volume(pool.name)
         self.assertIsNotNone(
             ontap_vol, "ONTAP FlexVol missing before maintenance resize"
         )
-        current_size = max(
+        original_size = max(
             int(getattr(listed[0], "capacitybytes", 0) or 0),
             int(ontap_vol.get("space", {}).get("size", 0) or 0),
         )
-        requested_size = current_size + TestData.ONTAP_MIN_VOLUME_SIZE
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
 
-        log_progress(
-            logger, "info",
-            "Resizing iSCSI pool '%s' while in Maintenance: current=%d B, "
-            "requested=%d B",
-            pool.name, current_size, requested_size,
-        )
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s iSCSI pool '%s' while in Maintenance: target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
 
-        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
-        cmd.id = pool.id
-        cmd.capacitybytes = requested_size
-        self.apiClient.updateStoragePool(cmd)
-
-        resized_pool = self._poll_pool_capacity(
-            pool.id, requested_size, timeout=120
-        )
-        self.assertEqual(
-            resized_pool.state, "Maintenance",
-            "Pool should remain in Maintenance after resize, got '%s'"
-            % resized_pool.state
-        )
-
-        resized_ontap_vol = self._poll_ontap_volume_size(
-            pool.name, requested_size, timeout=120
-        )
-        self.assertEqual(resized_ontap_vol.get("state"), "online")
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Maintenance",
+                "Pool should remain in Maintenance after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
 
         for host in self.cluster_hosts:
             iqn = (
@@ -767,7 +763,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
                 igroup_name = _igroup_name(self.svm_name, host.name)
                 self.assertIsNotNone(
                     self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared after maintenance resize"
+                    "ONTAP igroup '%s' disappeared during maintenance resize"
                     % igroup_name,
                 )
 
@@ -1130,11 +1126,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             self._delete_filler_file(pool.name, filler_name)
 
     # ------------------------------------------------------------------
-    # Step 15 - Resize the pool while the VM holds the volume
+    # Step 15 - Grow and shrink the pool while the VM holds the volume
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_workflow"], required_hardware=True)
-    def test_15_resize_pool_with_vm_attached(self):
+    def test_15_grow_and_shrink_pool_with_vm_attached(self):
         """
         Grow the pool and shrink it straight back while the volume is
         attached to the running VM from test_13, so resize is exercised
