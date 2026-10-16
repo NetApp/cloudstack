@@ -27,7 +27,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 ## How to read the tables
 
 | Column | Meaning |
-|--------|---------|
+| -------- | --------- |
 | **Test method** | Exact Python method name |
 | **Goal** | What CloudStack workflow step is being exercised |
 | **Depends on** | Which earlier tests must have passed (class state they consume) |
@@ -45,7 +45,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 8 tests | **Scope:** cluster-scoped NFS3 pool, no volumes for tests 01–06
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_primary_storage_pool` | Create a cluster-scoped NFS3 primary storage pool | setUpClass (zone, cluster, account) | `pool.state == "Up"`, `pool.type == "NetworkFilesystem"`, `nfsmountopts` contains `vers=3` | FlexVol exists and `state == "online"`, export policy exists with each cluster host IP as a rule, at least one NFS data LIF present on SVM | positive |
 | 02 | `test_02_disable_storage_pool` | Disable the pool (admin operation) | test_01 (`pool`) | `pool.state == "Disabled"` | FlexVol still `online`; export policy still present | positive |
 | 03 | `test_03_enable_storage_pool` | Re-enable the pool | test_02 | `pool.state == "Up"` | FlexVol still `online`; export policy still present | positive |
@@ -65,7 +65,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 7 tests | **Scope:** cluster-scoped NFS3 pool with a live CloudStack volume throughout
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_pool_and_volume` | Create NFS3 pool and immediately allocate a data volume | setUpClass | `pool.state == "Up"`, volume object non-None | FlexVol `online`; export policy present | positive |
 | 02 | `test_02_disable_pool_volume_survives` | Disable pool while a volume exists — volume must survive | test_01 (`pool`, `volume`) | `pool.state == "Disabled"`; volume still listed in `listVolumes` | FlexVol still `online` | positive |
 | 03 | `test_03_enable_pool_volume_intact` | Re-enable pool with volume present | test_02 | `pool.state == "Up"`; volume still listed | FlexVol still `online` | positive |
@@ -84,7 +84,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 4 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped NFS3 pool; CloudStack calls `attachZone()` to connect all eligible KVM hosts | setUpClass | `pool.state == "Up"` | FlexVol `online`; export policy exists and contains **every** cluster host IP; at least one NFS data LIF present | positive |
 | 02 | `test_02_disable_zone_scoped_pool` | Disable the zone-scoped pool | test_01 (`pool`) | `pool.state == "Disabled"` | FlexVol unchanged; export policy unchanged | positive |
 | 03 | `test_03_enable_zone_scoped_pool` | Re-enable the zone-scoped pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; export policy unchanged | positive |
@@ -100,7 +100,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 5 tests | **Scope:** NFS3 CloudStack volume create/delete semantics (NFS3 volumes are metadata-only in CS)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_pool_and_volume` | Create NFS3 pool and allocate a CloudStack data volume | setUpClass | `pool.state == "Up"`; volume object non-None | FlexVol `online` after volume allocation; export policy present — **no new ONTAP object per volume** (FlexVol is shared) | positive |
 | 02 | `test_02_delete_volume` | Delete the CS data volume — for NFS3 only the CS record is removed | test_01 (`pool`, `volume`) | Volume no longer listed in `listVolumes` | FlexVol still `online` and **unaffected**; export policy still present | positive |
 | 03 | `test_03_recreate_volume_for_delete_tests` | Re-create a volume on the pool (setup for negative tests 04–05) | test_02 | New volume object non-None | FlexVol still `online` | positive |
@@ -117,7 +117,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 10 tests | **Scope:** end-to-end — NFS3 pool, data volume, running VM (ROOT on the ONTAP pool via a tagged compute offering), primary template cache seed / reuse / survive VM delete, attach/detach lifecycle
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_nfs3_pool` | Create NFS3 ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (zone, cluster, template, tagged SO) | `pool.state == "Up"` | FlexVol `online`; export policy present | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume on the ONTAP pool | test_01 (`pool`) | Volume non-None and listed in `listVolumes` | FlexVol still `online` | positive |
 | 03 | `test_03_deploy_vm` | Deploy a VM with the tagged SO — ROOT on ONTAP; seeds template cache | test_02 (`pool`, `volume`) | `vm.state == "Running"`; ROOT `storageid` = pool; `template_spool_ref` Ready/DOWNLOADED | Cache file present at spool `install_path` | positive |
@@ -139,7 +139,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 8 tests | **Scope:** cluster-scoped iSCSI pool, no volumes for tests 01–06
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_primary_storage_pool` | Create a cluster-scoped iSCSI primary storage pool | setUpClass | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; one igroup per cluster host (named `cs_{svmName}_{hostShortName}`) with host IQN as initiator | positive |
 | 02 | `test_02_disable_storage_pool` | Disable the pool | test_01 (`pool`) | `pool.state == "Disabled"` | FlexVol still `online` | positive |
 | 03 | `test_03_enable_storage_pool` | Re-enable the pool | test_02 | `pool.state == "Up"` | FlexVol still `online` | positive |
@@ -159,7 +159,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 7 tests | **Scope:** cluster-scoped iSCSI pool with a live CloudStack volume (LUN) throughout
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_pool_and_volume` | Create iSCSI pool and allocate a data volume (creates LUN) | setUpClass | `pool.state == "Up"`; volume non-None | FlexVol `online`; ≥1 LUN in FlexVol | positive |
 | 02 | `test_02_disable_pool_volume_survives` | Disable pool with volume present | test_01 (`pool`, `volume`) | `pool.state == "Disabled"`; volume still listed | FlexVol still `online`; LUN still present | positive |
 | 03 | `test_03_enable_pool_volume_intact` | Re-enable pool with volume | test_02 | `pool.state == "Up"`; volume still listed | FlexVol still `online`; LUN still present | positive |
@@ -178,7 +178,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 4 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_zone_scoped_pool` | Create a zone-scoped iSCSI pool; CS calls `attachZone()` to connect all eligible KVM hosts | setUpClass | `pool.state == "Up"` | FlexVol `online`; igroup per cluster host, each with host IQN as initiator | positive |
 | 02 | `test_02_disable_zone_scoped_pool` | Disable pool | test_01 (`pool`) | `pool.state == "Disabled"` | FlexVol unchanged; igroups unchanged | positive |
 | 03 | `test_03_enable_zone_scoped_pool` | Re-enable pool | test_02 | `pool.state == "Up"` | FlexVol unchanged; igroups unchanged | positive |
@@ -194,7 +194,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 5 tests | **Scope:** iSCSI CloudStack volume create/delete semantics (each CS volume maps to an ONTAP LUN)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_pool_and_volume` | Create iSCSI pool and allocate a data volume — a LUN is created inside the pool's FlexVol | setUpClass | `pool.state == "Up"`; volume non-None | FlexVol `online`; ≥1 LUN in FlexVol (`list_luns_in_volume`) | positive |
 | 02 | `test_02_delete_volume` | Delete the volume — the LUN is removed from the FlexVol | test_01 (`pool`, `volume`) | Volume no longer listed | LUN no longer in FlexVol; FlexVol itself still `online` | positive |
 | 03 | `test_03_recreate_volume_for_delete_tests` | Re-create a volume (LUN re-created) — setup for negative tests | test_02 | New volume non-None | LUN present in FlexVol again | positive |
@@ -211,7 +211,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 10 tests | **Scope:** end-to-end — iSCSI pool, data volume (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach lifecycle
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
 | 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
 | 03 | `test_03_deploy_vm` | Deploy VM with the tagged SO — ROOT on ONTAP; seeds `cs_tmpl_*`; verify 0 data-volume LUN-maps before attach | test_02 (`volume`) | `vm.state == "Running"`; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | Exactly one `/vol/<flex>/cs_tmpl_<id>` LUN; 0 data-volume LUN-maps | positive |
@@ -235,7 +235,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 3 tests | **Scope:** Boundary conditions for NFS3 primary template cache (isolated from happy path)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | Deploy may succeed elsewhere; ROOT not on ONTAP pool; no `template_spool_ref` for pool | No cache file for template on FlexVol | negative |
 | 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but `capacitybytes` ≪ template size | setUpClass | Deploy fails / never Running; spool_ref not Ready/DOWNLOADED | No cache file | negative |
 | 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete file out-of-band, redeploy | setUpClass | spool_ref still Ready after ONTAP delete; second deploy fails | Cache file absent after delete | negative |
@@ -250,7 +250,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **Total:** 3 tests | **Scope:** Boundary conditions for iSCSI primary template cache (isolated from happy path)
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
-|---|-------------|------|------------|-----------------------------|------------------------|------|
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_tag_mismatch_does_not_seed_cache` | SO tags ≠ pool tags | setUpClass | ROOT not on ONTAP pool; no `template_spool_ref` | No `cs_tmpl_*` LUN | negative |
 | 02 | `test_02_undersized_pool_deploy_fails` | Matching tags but undersized capacity | setUpClass | Deploy fails; spool_ref not Ready/DOWNLOADED | No `cs_tmpl_*` LUN | negative |
 | 03 | `test_03_deleted_cache_blocks_reuse` | Seed cache, delete LUN out-of-band, redeploy | setUpClass | spool_ref still Ready; second deploy fails | `cs_tmpl_*` absent after delete | negative |
@@ -260,7 +260,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 ## Cross-suite summary
 
 | Suite | Protocol | Scope | Tests | Status |
-|-------|---------|-------|-------|--------|
+| ------- | --------- | ------- | ------- | -------- |
 | NFS3 Pool Lifecycle | NFS3 | Cluster | 8 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 7 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
