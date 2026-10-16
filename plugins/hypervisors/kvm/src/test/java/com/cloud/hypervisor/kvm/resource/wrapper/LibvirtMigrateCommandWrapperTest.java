@@ -70,6 +70,7 @@ import com.cloud.agent.api.to.VirtualMachineTO;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
 import com.cloud.hypervisor.kvm.resource.LibvirtConnection;
 import com.cloud.hypervisor.kvm.resource.LibvirtVMDef.DiskDef;
+import com.cloud.storage.Storage;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.gpu.GpuDevice;
 
@@ -803,6 +804,33 @@ public class LibvirtMigrateCommandWrapperTest {
         inOrderVerifyDeleteOrDisconnect(inOrder, spyLibvirtMigrateCmdWrapper, libvirtComputingResource, migrateDiskInfoList, diskDef0, 1, 0);
         inOrderVerifyDeleteOrDisconnect(inOrder, spyLibvirtMigrateCmdWrapper, libvirtComputingResource, migrateDiskInfoList, diskDef1, 0, 1);
         inOrderVerifyDeleteOrDisconnect(inOrder, spyLibvirtMigrateCmdWrapper, libvirtComputingResource, migrateDiskInfoList, diskDef2, 0, 1);
+    }
+
+    @Test
+    public void disconnectDestinationOntapIscsiDisksOnSourceHostTest() {
+        String ontapIscsiPath = "/dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.test-lun-1";
+        MigrateDiskInfo duplicateOntapIscsiDisk = new MigrateDiskInfo(
+                "serial-2", DiskType.BLOCK, DriverType.RAW, Source.DEV, ontapIscsiPath);
+        duplicateOntapIscsiDisk.setDestPoolType(Storage.StoragePoolType.OntapiSCSI);
+        MigrateDiskInfo nfsDisk = new MigrateDiskInfo(
+                "nfsSerial", DiskType.FILE, DriverType.QCOW2, Source.FILE, "/mnt/pool/volume");
+        nfsDisk.setDestPoolType(Storage.StoragePoolType.NetworkFilesystem);
+
+        Map<String, MigrateDiskInfo> migrateStorage = new HashMap<>();
+        migrateStorage.put("source-1", new MigrateDiskInfo(
+                "serial-1", DiskType.BLOCK, DriverType.RAW, Source.DEV, ontapIscsiPath));
+        migrateStorage.get("source-1").setDestPoolType(Storage.StoragePoolType.OntapiSCSI);
+        migrateStorage.put("source-2", duplicateOntapIscsiDisk);
+        migrateStorage.put("source-3", nfsDisk);
+
+        LibvirtComputingResource libvirtComputingResource = Mockito.mock(LibvirtComputingResource.class);
+        Mockito.when(libvirtComputingResource.cleanupDisk(Mockito.any(DiskDef.class))).thenReturn(true);
+
+        libvirtMigrateCmdWrapper.disconnectDestinationOntapIscsiDisksOnSourceHost(libvirtComputingResource, migrateStorage);
+
+        Mockito.verify(libvirtComputingResource).cleanupDisk(Mockito.<DiskDef>argThat(
+                disk -> ontapIscsiPath.equals(disk.getDiskPath())));
+        Mockito.verifyNoMoreInteractions(libvirtComputingResource);
     }
 
     private MigrateDiskInfo createMigrateDiskInfo(boolean isSourceDiskOnStorageFileSystem) {
