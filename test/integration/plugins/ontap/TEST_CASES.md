@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 95 test cases across 12 test suites.
+Complete reference for all 101 test cases across 12 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -124,7 +124,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `nfs3/instance/test_vm_volume_attach.py`
 **Class:** `TestOntapVMVolumeAttach`
 **Tag:** `vm_volume_workflow`
-**Total:** 10 tests | **Scope:** end-to-end — NFS3 pool, data volume, running VM (ROOT on the ONTAP pool via a tagged compute offering), primary template cache seed / reuse / survive VM delete, attach/detach lifecycle
+**Total:** 13 tests | **Scope:** end-to-end — NFS3 pool, data volume resize, running VM (ROOT on the ONTAP pool via a tagged compute offering), primary template cache seed / reuse / survive VM delete, attach/detach lifecycle
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
@@ -133,11 +133,14 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 03 | `test_03_deploy_vm` | Deploy a VM with the tagged SO — ROOT on ONTAP; seeds template cache | test_02 (`pool`, `volume`) | `vm.state == "Running"`; ROOT `storageid` = pool; `template_spool_ref` Ready/DOWNLOADED | Cache file present at spool `install_path` | positive |
 | 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuses cache | test_03 | VM-2 Running; ROOT on pool; still exactly one `template_spool_ref` | Same cache file (no second cache) | positive |
 | 03b | `test_03b_expunge_second_vm_template_cache_survives` | Expunge VM-2 — cache must remain (lazy GC) | test_03a | spool_ref still Ready | Cache file still present | positive |
-| 04 | `test_04_attach_volume_to_vm` | Attach the ONTAP data volume to the running VM (hot-plug) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id`; `attachVolume` job succeeds | FlexVol `online`; after attach, a data file matching volume UUID present in FlexVol (`list_files_in_volume`) | positive |
+| 04 | `test_04_attach_volume_to_vm` | Attach the ONTAP data volume to the running VM (hot-plug) | test_03b (`vm`, `volume`) | `volume.virtualmachineid == vm.id`; `attachVolume` job succeeds | FlexVol `online`; after attach, a data file matching volume UUID present in FlexVol (`list_files_in_volume`) | positive |
 | 05 | `test_05_stop_vm_export_retained` | Stop the running VM with volume attached | test_04 | `vm.state == "Stopped"` | FlexVol still `online`; NFS export policy still present | positive |
-| 06 | `test_06_start_vm_volume_accessible` | Start the stopped VM | test_05 | `vm.state == "Running"` | FlexVol still `online` | positive |
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_07 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
+| 06 | `test_06_grow_stopped_vm_volume` | Grow the attached volume while the VM is stopped | test_05 | Volume is `Ready` at the requested byte size | `qemu-img info` reports the requested virtual size; ONTAP file remains present | positive |
+| 07 | `test_07_shrink_rejected` | Attempt to shrink the grown qcow2 volume with `shrinkok=true` | test_06 | Resize is rejected; grown size remains unchanged | qcow2 virtual size remains unchanged | negative |
+| 08 | `test_08_start_vm_volume_accessible` | Start the stopped VM | test_07 | `vm.state == "Running"`; KVM data-disk capacity equals target | FlexVol still `online` | positive |
+| 09 | `test_09_detach_volume_from_vm` | Hot-detach the ONTAP volume from the running VM (TDS Detach NFS3) | test_08 (`vm`, `volume`) | `volume.virtualmachineid` cleared; `volume.state == "Ready"` | FlexVol still `online`; data file **still present** (NFS3: file persists until `deleteVolume`, not on detach) | positive |
+| 10 | `test_10_grow_detached_volume` | Grow the detached, materialized data volume | test_09 | API and DB size equal target | qcow2 virtual size equals target | positive |
+| 11 | `test_11_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_10 | VM no longer listed; spool_ref still Ready after VM expunge; volume no longer listed; pool no longer listed | Cache file present after VM expunge; FlexVol deleted; export policy deleted | cleanup |
 
 ---
 
@@ -229,22 +232,25 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/instance/test_vm_volume_attach.py`
 **Class:** `TestOntapVMVolumeAttachISCSI`
 **Tag:** `iscsi_vm_workflow`
-**Total:** 10 tests | **Scope:** end-to-end — iSCSI pool, data volume (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach lifecycle
+**Total:** 13 tests | **Scope:** end-to-end — iSCSI pool, data volume resize (LUN), running VM (ROOT on the ONTAP pool via a tagged compute offering), `cs_tmpl_<templateId>` LUN cache seed / reuse / survive VM delete, attach/stop/start/detach lifecycle
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
 | 01 | `test_01_create_iscsi_pool` | Create iSCSI ONTAP primary storage pool tagged `<storagePoolTags>-tmpl-cache` | setUpClass (tagged SO) | `pool.state == "Up"`, `pool.type == "OntapiSCSI"` | FlexVol `online`; igroup per cluster host with host IQN | positive |
-| 02 | `test_02_create_ontap_data_volume` | Allocate a CloudStack data volume (creates a LUN in the FlexVol) | test_01 (`pool`) | Volume non-None | ≥1 LUN in FlexVol | positive |
+| 02 | `test_02_create_ontap_data_volume` | Allocate and grow a detached data volume | test_01 (`pool`) | API and DB size equal target | LUN exists and `space.size` equals target | positive |
 | 03 | `test_03_deploy_vm` | Deploy VM with the tagged SO — ROOT on ONTAP; seeds `cs_tmpl_*`; verify 0 data-volume LUN-maps before attach | test_02 (`volume`) | `vm.state == "Running"`; ROOT on pool; spool_ref Ready (`local_path` = LUN uuid) | Exactly one `/vol/<flex>/cs_tmpl_<id>` LUN; 0 data-volume LUN-maps | positive |
 | 03a | `test_03a_deploy_second_vm_reuses_template_cache` | Deploy VM-2 — reuse cache | test_03 | VM-2 Running; ROOT on pool; still one spool_ref | Still one `cs_tmpl_*`; non-cache LUN count +1 | positive |
 | 03b | `test_03b_expunge_second_vm_template_cache_survives` | Expunge VM-2 — cache LUN remains | test_03a | spool_ref still Ready | VM-2 ROOT LUN gone (non-cache count back to baseline); `cs_tmpl_*` still present | positive |
-| 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created (TDS SN 27) | test_03 (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
+| 04 | `test_04_attach_volume_to_vm` | Hot-attach the ONTAP iSCSI volume to the running VM — a LUN-map is created (TDS SN 27) | test_03b (`vm`, `volume`) | `volume.virtualmachineid == vm.id` | ≥1 LUN-map linking the LUN to the host's igroup | positive |
 | 05 | `test_05_stop_vm_lun_unmapped` | Stop VM — LUN-maps must be removed (TDS VM Stop iSCSI) | test_04 | `vm.state == "Stopped"` | 0 LUN-maps; LUN itself **still present** in FlexVol | positive |
-| 06 | `test_06_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_05 | `vm.state == "Running"` | ≥1 LUN-map re-created | positive |
-| 07 | `test_07_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_06 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
-| 08 | `test_08_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, delete pool | test_07 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
+| 06 | `test_06_grow_stopped_vm_volume` | Grow the attached volume while the VM is stopped | test_05 | Volume is `Ready` at the requested byte size | LUN `space.size` equals the requested size; LUN remains unmapped | positive |
+| 07 | `test_07_shrink_rejected` | Attempt to shrink the grown LUN with `shrinkok=true` | test_06 | Resize is rejected; grown size remains unchanged | LUN `space.size` remains unchanged | negative |
+| 08 | `test_08_start_vm_lun_remapped` | Start VM — LUN-maps must be re-created (TDS VM Start iSCSI) | test_07 | `vm.state == "Running"`; KVM data-disk capacity equals target | ≥1 LUN-map re-created | positive |
+| 09 | `test_09_detach_volume_from_vm` | Hot-detach the iSCSI volume from the running VM (TDS Detach iSCSI) | test_08 (`vm`, `volume`) | `volume.virtualmachineid` cleared | 0 LUN-maps; LUN still in FlexVol | positive ⚠️ |
+| 10 | `test_10_grow_detached_volume` | Grow the detached, materialized data volume | test_09 | API and DB size equal target | LUN `space.size` equals target | positive |
+| 11 | `test_11_destroy_vm_and_cleanup` | Destroy VM (expunge), delete volume, enter maintenance, force-delete pool | test_10 | VM gone; spool_ref still Ready after VM expunge; volume gone; pool gone | `cs_tmpl_*` present after VM expunge; FlexVol deleted; all LUNs and igroups deleted | cleanup |
 
-> ⚠️ **test_07 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
+> ⚠️ **test_09 known status:** iSCSI hot-detach from a running VM relies on the KVM guest acknowledging the SCSI device removal. On this environment the guest does not acknowledge in time, causing CloudStack error 530. This is a KVM-host-level or guest-template limitation, not a test code defect.
 
 ---
 
@@ -282,16 +288,16 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 | Suite | Protocol | Scope | Tests | Status |
 | ------- | --------- | ------- | ------- | -------- |
-| NFS3 Pool Lifecycle | NFS3 | Cluster | 12 | ✅ |
+| NFS3 Pool Lifecycle | NFS3 | Cluster | 13 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 12 | ✅ |
 | NFS3 Zone-Scoped Pool | NFS3 | Zone | 4 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
-| NFS3 VM + Volume Attach | NFS3 | Cluster | 10 | 🆕 +2 template cache |
+| NFS3 VM + Volume Attach | NFS3 | Cluster | 13 | ⏳ resize cases pending lab validation |
 | NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
-| iSCSI Pool Lifecycle | iSCSI | Cluster | 12 | ✅ |
+| iSCSI Pool Lifecycle | iSCSI | Cluster | 13 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 13 | ✅ |
 | iSCSI Zone-Scoped Pool | iSCSI | Zone | 4 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
-| iSCSI VM + Volume Attach | iSCSI | Cluster | 10 | ⚠️ 7/8 + 🆕 2 template cache |
+| iSCSI VM + Volume Attach | iSCSI | Cluster | 13 | ⏳ resize cases pending lab validation; detach limitation |
 | iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
-| **Total** | | | **93** | **92 passing** |
+| **Total** | | | **101** | **Resize cases pending lab validation** |
