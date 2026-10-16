@@ -23,9 +23,9 @@ OntapPrimaryDatastoreLifecycle.attachZone(), which connects all eligible KVM
 hosts in the zone to the pool and creates an NFS export policy covering their
 IPs.
 
-Workflow:
+Test order — sequential workflow that must run in order:
   01  Create zone-scoped NFS3 pool — pool.state Up; ONTAP FlexVol online;
-                                     export policy has all cluster host IPs
+      export policy has all cluster host IPs
   02  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
   03  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
   04  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
@@ -41,7 +41,7 @@ Running:
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
     test/integration/plugins/ontap/nfs3/pool/test_zone_scoped_pool.py -v
 
-Note: Tests 01-04 share class-level state (sequential).  Running a single test
+Note: Tests share class-level state (sequential).  Running a single test
 with -m "test_NN" will invoke setUpClass but the guard assertion will fail
 immediately if earlier steps have not yet run.  Always run the full suite.
 """
@@ -55,13 +55,17 @@ from nose.plugins.attrib import attr
 
 from marvin.cloudstackAPI import (
     createStoragePool as createStoragePoolAPI,
-    enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config
+from ontap_test_base import (
+    OntapRestClient,
+    OntapTestBase,
+    _parse_pool_details,
+    get_datacenter_config,
+)
 
 logger = logging.getLogger("TestOntapZoneScopedPool")
 
@@ -380,10 +384,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
         pool_name = pool.name
         ep_name = self.__class__.pool_ep_name
 
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(pool.id)
 
         # Unmount the NFS on each KVM host BEFORE deleteStoragePool removes
         # the ONTAP export.  Without this, the mount becomes stale and
