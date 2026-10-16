@@ -34,15 +34,15 @@ Key iSCSI behaviour verified at each step via ONTAP REST API:
   - startVirtualMachine → LUN-map is re-created
   - detachVolume → LUN-map is removed
 
-Tests must run in order (test_01, test_02, test_03, test_03a, test_03b,
-test_04 ... test_08).  Each step builds on the shared state established by the
+Tests are numbered test_01 ... test_11, plus test_03a and test_03b, and must
+run in that order.  Each step builds on the shared state established by the
 previous step.
 
 The VM is deployed with a compute offering whose storage tags match the pool,
 so its ROOT volume lands on the ONTAP pool and exercises the primary
 template cache (``cs_tmpl_<templateId>`` LUN: seed / reuse / survive VM delete)
-alongside the data-volume workflow.  LUN-map assertions are filtered to the
-data volume's LUN, so the ROOT and cache LUNs in the same FlexVol do not
+alongside the data-volume resize workflow.  LUN-map assertions are filtered to
+the data volume's LUN, so the ROOT and cache LUNs in the same FlexVol do not
 affect them.
 
 Workflow:
@@ -53,9 +53,12 @@ Workflow:
   03b Expunge the second VM — its ROOT LUN is removed; cache LUN survives
   04  Attach iSCSI data volume to running VM (LUN-map created)
   05  Stop VM — LUN-map for attached volume is removed from ONTAP
-  06  Start VM — LUN-map is re-created on ONTAP
-  07  Detach data volume from running VM — LUN-map removed
-  08  Destroy VM (cache LUN still survives), delete data volume, delete pool
+  06  Grow the attached volume and ONTAP LUN while the VM is stopped
+  07  Verify shrinking the ONTAP LUN is rejected without changing its size
+  08  Start VM — LUN-map is re-created on ONTAP
+  09  Detach data volume from running VM — LUN-map removed
+  10  Grow the detached data volume
+  11  Destroy VM (cache LUN still survives), delete data volume, delete pool
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -215,6 +218,8 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     service_offering_id = None
     network_id = None
     _created_network_id = None  # network created by this suite for Advanced zones
+    initial_volume_size = None
+    target_volume_size = None
 
     _vol_name_prefix = "OntapISCSIVM"
 
@@ -320,7 +325,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     def tearDownClass(cls):
         """
         Safety-net cleanup: destroy VMs if still alive, delete the guest
-        network created for Advanced zones (if not already deleted by test_08),
+        network created for Advanced zones (if not already deleted by test_11),
         then delegate pool/volume/account cleanup to the base class.
         """
         for vm in (cls.vm2, cls.vm):
@@ -343,7 +348,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         cls.vm = None
 
         # Delete the guest network created for this account in Advanced zones.
-        # test_08 deletes it on the happy path; this is the fallback for
+        # test_11 deletes it on the happy path; this is the fallback for
         # mid-suite failures.
         if cls._created_network_id is not None:
             try:
@@ -456,6 +461,17 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                     self.svm_name, self.__class__.pool.name)
                 if lun.get("name") == lun_name]
 
+    def _data_lun_size(self):
+        """Return the ONTAP data LUN size in bytes."""
+        lun_name = self._data_lun_name()
+        lun = self.ontap.get_lun(self.svm_name, lun_name)
+        self.assertIsNotNone(
+            lun, "ONTAP LUN '%s' was not found" % lun_name)
+        size = int(lun.get("space", {}).get("size", 0))
+        self.assertGreater(
+            size, 0, "ONTAP LUN '%s' did not report space.size" % lun_name)
+        return size
+
     # ==================================================================
     # Test steps
     # ==================================================================
@@ -498,10 +514,12 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
     def test_02_create_ontap_data_volume(self):
         """
-        Allocate a CloudStack data volume on the iSCSI ONTAP pool.
+        Allocate and grow a detached CloudStack data volume on the iSCSI
+        ONTAP pool.
         Verifies:
           - createVolume returns a volume object
           - ONTAP: at least one LUN is created inside the pool's FlexVol
+          - detached resize updates CloudStack API, DB, and LUN space.size
         """
         self.assertIsNotNone(self.__class__.pool,
                              "Pool absent — test_01 must pass first")
@@ -517,6 +535,19 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             "volume creation, found none"
             % (self._data_lun_name(), self.__class__.pool.name)
         )
+
+        volume = self._poll_volume_size(vol.id, int(vol.size))
+        detached_target = (
+            (int(volume.size) // (1024 ** 3)) + 1
+        ) * (1024 ** 3)
+        self._resize_volume(vol.id, detached_target // (1024 ** 3))
+        self._poll_volume_size(vol.id, detached_target)
+        self.assertEqual(
+            self._get_db_volume_size(vol.id), detached_target,
+            "DB size does not match detached iSCSI grow target")
+        self.assertEqual(
+            self._data_lun_size(), detached_target,
+            "ONTAP LUN size does not match detached grow target")
 
     # ------------------------------------------------------------------
     # Step 03 — Deploy a VM
@@ -685,6 +716,15 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             "LUN is not accessible to the VM's host"
         )
 
+        initial_size = int(result.size)
+        self.__class__.initial_volume_size = initial_size
+        self.__class__.target_volume_size = (
+            (initial_size // (1024 ** 3)) + 1
+        ) * (1024 ** 3)
+        self.assertEqual(
+            self._data_lun_size(), initial_size,
+            "Initial ONTAP LUN size should match the CloudStack volume size")
+
     # ------------------------------------------------------------------
     # Step 05 — Stop VM — LUN-maps should be removed
     # ------------------------------------------------------------------
@@ -729,11 +769,99 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 06 — Start VM — LUN-maps should be re-created
+    # Step 06 — Grow attached volume while VM is stopped
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_06_start_vm_lun_remapped(self):
+    def test_06_grow_stopped_vm_volume(self):
+        """
+        Grow the attached iSCSI volume while its managed KVM VM is stopped.
+        Verifies:
+          - CloudStack reports the target size and Ready state
+          - ONTAP reports the target LUN space.size
+          - The LUN remains unmapped while the VM is stopped
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped")
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+
+        target_size = self.__class__.target_volume_size
+        self._resize_volume(
+            self.__class__.volume.id, target_size // (1024 ** 3))
+
+        volume = self._poll_volume_size(
+            self.__class__.volume.id, target_size)
+        self.assertIsNotNone(
+            volume, "CloudStack did not report the grown volume size")
+
+        # DB: cloud.volumes.size must be updated by the driver's volumeDao call
+        db_size = self._get_db_volume_size(self.__class__.volume.id)
+        self.assertEqual(
+            db_size, target_size,
+            "cloud DB volumes.size (%s) does not match target (%s) after grow"
+            % (db_size, target_size))
+
+        # ONTAP: LUN space.size must reflect the new allocation
+        self.assertEqual(
+            self._data_lun_size(), target_size,
+            "ONTAP LUN space.size does not match the requested size")
+        self.assertEqual(
+            len(self._lun_maps()), 0,
+            "The data LUN should remain unmapped while the VM is stopped")
+
+    # ------------------------------------------------------------------
+    # Step 07 — Shrink must fail
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
+    def test_07_shrink_rejected(self):
+        """
+        Attempt to shrink the grown iSCSI volume back to its initial size.
+        Verifies:
+          - The ONTAP driver rejects shrink even with shrinkok=true
+          - CloudStack and ONTAP LUN sizes remain at the grown value
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped")
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+        self.assertEqual(
+            self._get_db_volume_size(self.__class__.volume.id),
+            self.__class__.target_volume_size,
+            "Volume was not grown to the target size — test_06 must pass "
+            "before the shrink check")
+
+        initial_gib = self.__class__.initial_volume_size // (1024 ** 3)
+        with self.assertRaises(Exception) as context:
+            self._resize_volume(
+                self.__class__.volume.id, initial_gib, shrink_ok=True)
+        self.assertIn(
+            "Unable to shrink volume", str(context.exception),
+            "Shrink failed for an unexpected reason")
+
+        volume = self._poll_volume_size(
+            self.__class__.volume.id, self.__class__.target_volume_size)
+        self.assertIsNotNone(
+            volume, "CloudStack volume size changed after rejected shrink")
+
+        # DB: size must remain at grown value after rejected shrink
+        db_size = self._get_db_volume_size(self.__class__.volume.id)
+        self.assertEqual(
+            db_size, self.__class__.target_volume_size,
+            "cloud DB volumes.size did not remain at the grown target after "
+            "the rejected iSCSI shrink")
+
+        self.assertEqual(
+            self._data_lun_size(), self.__class__.target_volume_size,
+            "ONTAP LUN size changed after rejected shrink")
+
+    # ------------------------------------------------------------------
+    # Step 08 — Start VM — LUN-maps should be re-created
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
+    def test_08_start_vm_lun_remapped(self):
         """
         Start the stopped VM.
         Covers TDS VM Start (iSCSI): 'luns should be re-mapped again to
@@ -764,11 +892,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 07 — Detach volume from running VM
+    # Step 09 — Detach volume from running VM
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_07_detach_volume_from_vm(self):
+    def test_09_detach_volume_from_vm(self):
         """
         Detach the iSCSI data volume from the running VM.
         Verifies:
@@ -827,11 +955,34 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 08 — Destroy VM and clean up pool
+    # Step 10 — Grow detached data volume
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_08_destroy_vm_and_cleanup(self):
+    def test_10_grow_detached_volume(self):
+        """Grow the materialized LUN after it has been detached."""
+        self.assertIsNotNone(self.__class__.volume,
+                             "Volume absent — test_02 must pass first")
+        detached_target = self.__class__.target_volume_size + (1024 ** 3)
+        self._resize_volume(
+            self.__class__.volume.id, detached_target // (1024 ** 3))
+
+        self._poll_volume_size(self.__class__.volume.id, detached_target)
+        self.assertEqual(
+            self._get_db_volume_size(self.__class__.volume.id),
+            detached_target,
+            "DB size does not match detached iSCSI grow target")
+        self.assertEqual(
+            self._data_lun_size(), detached_target,
+            "ONTAP LUN size does not match detached grow target")
+        self.__class__.target_volume_size = detached_target
+
+    # ------------------------------------------------------------------
+    # Step 11 — Destroy VM and clean up pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
+    def test_11_destroy_vm_and_cleanup(self):
         """
         Destroy the VM (with expunge), delete the data volume, force-delete
         the ONTAP pool, and delete the guest network created for this suite.
