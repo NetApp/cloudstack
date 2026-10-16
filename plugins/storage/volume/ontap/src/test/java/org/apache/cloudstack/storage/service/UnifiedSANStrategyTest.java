@@ -1372,10 +1372,20 @@ class UnifiedSANStrategyTest {
 
     @Test
     void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
-        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
-                () -> unifiedSANStrategy.updateCloudStackVolume(new CloudStackVolume()));
-        assertTrue(ex.getMessage().contains("Invalid iSCSI volume QoS update request"));
+        CloudStackVolume lunWithoutUuid = new CloudStackVolume();
+        lunWithoutUuid.setLun(new Lun());
+
+        assertInvalidIscsiVolumeUpdate(null);
+        assertInvalidIscsiVolumeUpdate(new CloudStackVolume());
+        assertInvalidIscsiVolumeUpdate(lunWithoutUuid);
+
         verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    private void assertInvalidIscsiVolumeUpdate(CloudStackVolume request) {
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.updateCloudStackVolume(request));
+        assertEquals("Invalid iSCSI volume request", ex.getMessage());
     }
 
     @Test

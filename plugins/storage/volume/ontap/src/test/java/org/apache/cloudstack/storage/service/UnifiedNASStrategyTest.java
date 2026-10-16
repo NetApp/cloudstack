@@ -330,8 +330,21 @@ public class UnifiedNASStrategyTest {
 
     @Test
     public void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
-        assertThrows(CloudRuntimeException.class, () -> strategy.updateCloudStackVolume(new CloudStackVolume()));
+        CloudStackVolume missingFile = new CloudStackVolume();
+        missingFile.setVolumeInfo(mock(VolumeInfo.class));
+        missingFile.setFlexVolumeUuid("flex-uuid");
+
+        assertInvalidNfsVolumeUpdate(null);
+        assertInvalidNfsVolumeUpdate(new CloudStackVolume());
+        assertInvalidNfsVolumeUpdate(missingFile);
+
         verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
+    }
+
+    private void assertInvalidNfsVolumeUpdate(CloudStackVolume request) {
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.updateCloudStackVolume(request));
+        assertEquals("Invalid NFS volume request", ex.getMessage());
     }
 
     // Test createCloudStackVolume - Volume Not Found
