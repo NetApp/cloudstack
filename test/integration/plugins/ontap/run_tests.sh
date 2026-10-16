@@ -86,12 +86,6 @@ MIGRATION_SUITES=(
     "Volume migration|volume_migration|${ONTAP_DIR}/migration/test_03_volume_migration.py"
 )
 
-MIGRATION_SUITES=(
-    "Live VM with storage migration|live_storage|${ONTAP_DIR}/migration/test_01_live_vm_with_storage_migration.py"
-    "Stopped VM storage migration|stopped_vm|${ONTAP_DIR}/migration/test_02_stopped_vm_storage_migration.py"
-    "Volume migration|volume_migration|${ONTAP_DIR}/migration/test_03_volume_migration.py"
-)
-
 record_results() {
     local tag="$1"
     local label="$2"
