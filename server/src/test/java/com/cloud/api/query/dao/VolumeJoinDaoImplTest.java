@@ -137,6 +137,45 @@ public class VolumeJoinDaoImplTest extends GenericDaoBaseWithTagInformationBaseT
         assertFalse(response.isCustomizedIops());
     }
 
+    @Test
+    public void testNewVolumeResponseSetsCustomizedIopsFalseForFixedComputeOffering() {
+        VolumeJoinVO volumeJoin = mockVolumeWithDiskOffering();
+        DiskOfferingVO computeOnlyOffering = mock(DiskOfferingVO.class);
+        when(computeOnlyOffering.isCustomizedIops()).thenReturn(false);
+        ServiceOfferingVO serviceOffering = mock(ServiceOfferingVO.class);
+        when(serviceOffering.getId()).thenReturn(5L);
+        when(serviceOffering.getName()).thenReturn("Fixed_Compute");
+        when(serviceOffering.getDisplayText()).thenReturn("Fixed_Compute");
+
+        VolumeResponse response = newVolumeResponse(volumeJoin, apiDBUtils -> {
+            apiDBUtils.when(() -> ApiDBUtils.findComputeOnlyDiskOfferingById(DISK_OFFERING_ID))
+                    .thenReturn(computeOnlyOffering);
+            apiDBUtils.when(() -> ApiDBUtils.findServiceOfferingByComputeOnlyDiskOffering(DISK_OFFERING_ID, false))
+                    .thenReturn(serviceOffering);
+        });
+
+        assertFalse(response.isCustomizedIops());
+        assertEquals("5", response.getServiceOfferingId());
+        assertEquals("Fixed_Compute", response.getServiceOfferingName());
+        assertNull(response.getDiskOfferingId());
+    }
+
+    @Test
+    public void testNewVolumeResponseLeavesCustomizedIopsNullWhenOfferingValueIsNull() {
+        VolumeJoinVO volumeJoin = mockVolumeWithDiskOffering();
+        when(volumeJoin.getDiskOfferingUuid()).thenReturn("disk-offering-uuid");
+        DiskOfferingVO diskOffering = mock(DiskOfferingVO.class);
+        when(diskOffering.isCustomizedIops()).thenReturn(null);
+
+        VolumeResponse response = newVolumeResponse(volumeJoin, apiDBUtils -> {
+            apiDBUtils.when(() -> ApiDBUtils.findComputeOnlyDiskOfferingById(DISK_OFFERING_ID)).thenReturn(null);
+            apiDBUtils.when(() -> ApiDBUtils.findDiskOfferingById(DISK_OFFERING_ID)).thenReturn(diskOffering);
+        });
+
+        assertNull(response.isCustomizedIops());
+        assertNull(response.getCustomizedIops());
+    }
+
     private VolumeJoinVO mockVolumeWithDiskOffering() {
         VolumeJoinVO volumeJoin = mock(VolumeJoinVO.class);
         when(volumeJoin.getUuid()).thenReturn("volume-uuid");
