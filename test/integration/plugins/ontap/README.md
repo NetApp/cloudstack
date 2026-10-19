@@ -43,7 +43,7 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (101 tests)
+├── TEST_CASES.md                 # Full test case reference table (119 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -333,7 +333,9 @@ another ONTAP pool is present.
 | `get_igroup(svm_name, name)` | iSCSI igroup existence and initiator list | iSCSI suites |
 | `list_luns_in_volume(svm_name, vol_name)` | LUNs present in a FlexVol | iSCSI volume/instance suites |
 | `list_lun_maps_for_volume(svm_name, vol_name)` | Active LUN-maps for a volume | iSCSI pool-with-volumes/instance suites |
-| `list_files_in_volume(svm_name, vol_name)` | Files inside a FlexVol | NFS3 instance suite |
+| `list_files_in_volume(vol_name)` | Files inside a FlexVol | NFS3 instance and pool lifecycle suites |
+| `write_file_in_volume(vol_name, filename, size_bytes)` | Write incompressible data into a FlexVol file (no VM) | NFS3/iSCSI pool lifecycle suites |
+| `delete_file_in_volume(vol_name, filename)` | Remove a FlexVol file | NFS3/iSCSI pool lifecycle suites |
 
 ---
 
@@ -341,15 +343,15 @@ another ONTAP pool is present.
 
 | Suite | File | Tests | What it covers |
 | ------- | ------ | ------- | --------------- |
-| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 13 | Existing lifecycle plus duplicate-name, aggregate-space, and invalid-capacitybytes create rejects, and empty-pool deletion with pre-deleted FlexVol/export policy |
-| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Existing lifecycle plus deletion with pre-deleted FlexVol/export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |
+| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete, then re-create with a volume, reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or export policy |
+| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Lifecycle with a live volume, deletion with a pre-deleted FlexVol or export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP/KVM verification, disable, enable, and delete |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle with stopped-VM qcow2 grow; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
-| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 13 | Existing lifecycle plus duplicate-name, aggregate-space, and invalid-capacitybytes create rejects, and empty-pool deletion with pre-deleted FlexVol/igroups |
-| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Existing lifecycle plus deletion with pre-deleted FlexVol/igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone-scoped pool create, disable, enable, and delete |
+| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or igroups |
+| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Lifecycle with a live LUN, deletion with a pre-deleted FlexVol or igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP verification, disable, enable, and delete |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle; stopped-VM LUN grow and LUN-map checks; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |

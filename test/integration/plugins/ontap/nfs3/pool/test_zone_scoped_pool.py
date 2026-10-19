@@ -26,9 +26,10 @@ IPs.
 Test order — sequential workflow that must run in order:
   01  Create zone-scoped NFS3 pool — pool.state Up; ONTAP FlexVol online;
       export policy has all cluster host IPs
-  02  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
-  03  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
-  04  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
+  02  Grow and shrink zone-scoped pool — CloudStack, ONTAP, and KVM agree
+  03  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
+  04  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
+  05  Delete zone-scoped pool — pool gone; FlexVol deleted; export policy deleted
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -65,6 +66,7 @@ from ontap_test_base import (
     OntapTestBase,
     _parse_pool_details,
     get_datacenter_config,
+    log_progress,
 )
 
 logger = logging.getLogger("TestOntapZoneScopedPool")
@@ -292,18 +294,77 @@ class TestOntapZoneScopedPool(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 02 — Disable zone-scoped pool
+    # Step 02 — Grow and shrink zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_02_disable_zone_scoped_pool(self):
+    def test_02_grow_and_shrink_zone_scoped_pool(self):
+        """Grow the zone-scoped pool and shrink it back to its original size."""
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_01 must pass first"
+        )
+        pool = self.__class__.pool
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Zone-scoped pool missing before resize")
+        self.assertEqual(
+            listed[0].state, "Up",
+            "Zone-scoped pool must be Up before resize, got '%s'"
+            % listed[0].state,
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing before zone-scoped resize"
+        )
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s zone-scoped NFS3 pool '%s': target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
+
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Up",
+                "Zone-scoped pool should remain Up after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
+            self._poll_kvm_pool_capacity(
+                pool.id, pool.name, target, timeout=120
+            )
+
+        self._assert_export_policy_has_host_ips(
+            self.__class__.pool_ep_name
+        )
+
+    # ------------------------------------------------------------------
+    # Step 03 — Disable zone-scoped pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["zone_pool"], required_hardware=True)
+    def test_03_disable_zone_scoped_pool(self):
         """
         Disable the zone-scoped pool.
         Verifies:
           - pool.state is Disabled
           - ONTAP: FlexVol still online; export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -329,18 +390,18 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 03 — Enable zone-scoped pool
+    # Step 04 — Enable zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_03_enable_zone_scoped_pool(self):
+    def test_04_enable_zone_scoped_pool(self):
         """
         Re-enable the zone-scoped pool.
         Verifies:
           - pool.state is Up
           - ONTAP: FlexVol still online; export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -366,11 +427,11 @@ class TestOntapZoneScopedPool(OntapTestBase):
             )
 
     # ------------------------------------------------------------------
-    # Step 04 — Delete zone-scoped pool
+    # Step 05 — Delete zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["zone_pool"], required_hardware=True)
-    def test_04_delete_zone_scoped_pool(self):
+    def test_05_delete_zone_scoped_pool(self):
         """
         Enter maintenance then delete the zone-scoped pool.
         Verifies:
@@ -378,7 +439,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
           - ONTAP: FlexVol deleted
           - ONTAP: export policy deleted
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_04 must pass first")
 
         pool = self.__class__.pool
         pool_name = pool.name
@@ -427,7 +488,7 @@ class TestOntapZoneScopedPool(OntapTestBase):
         """
         Clean up any lingering zone-scoped pool NFS mounts on KVM hosts
         before the base-class teardown deletes the ONTAP FlexVol.  Without
-        this, a failed test_04 leaves a stale NFS mount that will cause
+        this, a failed test_05 leaves a stale NFS mount that will cause
         KVMHAMonitor to reboot the host.
         """
         for pool in [p for p in (cls.pool2, cls.pool) if p is not None]:
