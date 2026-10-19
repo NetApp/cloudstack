@@ -327,8 +327,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (min <= 0 && max <= 0) {
             return false;
         }
-        if (min > 0 && max > 0 && min >= max) {
-            throw new CloudRuntimeException("Minimum IOPS cannot be greater than or equal to maximum IOPS");
+        if (min > 0 && max > 0 && min > max) {
+            throw new CloudRuntimeException("Minimum IOPS cannot be greater than maximum IOPS");
         }
         if (min > 0) {
             String isAff = details.get(OntapStorageConstants.IS_AFF);
