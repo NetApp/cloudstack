@@ -573,6 +573,8 @@ public class CapacityManagerImpl extends ManagerBase implements CapacityManager,
         throw new CloudRuntimeException("Storage driver in CapacityManagerImpl.getUsedIops(StoragePoolVO) is not a PrimaryDataStoreDriver.");
     }
 
+    // Return only used bytes; template bytes are accounted for as part of the asking size
+    // in StorageManagerImpl.storagePoolHasEnoughSpace.
     @Override
     public long getAllocatedPoolCapacity(StoragePoolVO pool, VMTemplateVO templateForVmCreation) {
         long totalAllocatedSize;
