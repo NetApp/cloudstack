@@ -573,7 +573,6 @@ public class CapacityManagerImpl extends ManagerBase implements CapacityManager,
         throw new CloudRuntimeException("Storage driver in CapacityManagerImpl.getUsedIops(StoragePoolVO) is not a PrimaryDataStoreDriver.");
     }
 
-    
     //Managed pool, return value contains used size of the pool.
     //Unmanaged pool, return value contains used pool size and template size.
     @Override
