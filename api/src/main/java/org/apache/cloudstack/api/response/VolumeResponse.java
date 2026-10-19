@@ -724,6 +724,10 @@ public class VolumeResponse extends BaseResponseWithTagInformation implements Co
         return customizedIops;
     }
 
+    public Boolean getCustomizedIops() {
+        return customizedIops;
+    }
+
     public Date getCreated() {
         return created;
     }
