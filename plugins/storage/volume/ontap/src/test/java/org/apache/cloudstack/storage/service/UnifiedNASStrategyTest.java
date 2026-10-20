@@ -1127,7 +1127,7 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
-    public void testCloneCloudStackVolume_SnapshotSource_SendsSnapshotName() {
+    public void testCloneCloudStackVolume_SnapshotSource_UsesSnapshotSourcePath() {
         VolumeObject volumeObject = mock(VolumeObject.class);
         VolumeVO volumeVO = mock(VolumeVO.class);
         when(volumeObject.getId()).thenReturn(100L);
@@ -1140,7 +1140,7 @@ public class UnifiedNASStrategyTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
 
         FileInfo source = new FileInfo();
-        source.setPath("source-file-uuid");
+        source.setPath("./.snapshot/snap_cs200/source-file-uuid");
         CloudStackVolume request = new CloudStackVolume();
         request.setDatastoreId("1");
         request.setVolumeInfo(volumeObject);
@@ -1156,10 +1156,9 @@ public class UnifiedNASStrategyTest {
         assertEquals("snap_cs200", result.getSnapshotName());
         ArgumentCaptor<FileCloneRequest> captor = ArgumentCaptor.forClass(FileCloneRequest.class);
         verify(nasFeignClient).cloneFile(anyString(), captor.capture());
-        assertEquals("source-file-uuid", captor.getValue().getSourcePath());
+        assertEquals("./.snapshot/snap_cs200/source-file-uuid", captor.getValue().getSourcePath());
         assertEquals("new-volume-uuid", captor.getValue().getDestinationPath());
-        assertNotNull(captor.getValue().getSnapshot());
-        assertEquals("snap_cs200", captor.getValue().getSnapshot().getName());
+        assertNull(captor.getValue().getSnapshot());
     }
 
     @Test
