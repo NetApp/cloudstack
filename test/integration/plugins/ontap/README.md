@@ -44,7 +44,8 @@ test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
 ├── guest_ssh.py                  # Guest SSH (paramiko) for the VM workflow suites
-├── setup_env.sh                  # venv: Marvin, pyvmomi, paramiko<4
+├── setup_env.sh                  # venv: Marvin plus requirements.txt
+├── requirements.txt              # setuptools, pyvmomi, paramiko pins
 ├── TEST_CASES.md                 # Full test case reference table (151 tests)
 ├── README.md                     # This file
 │
@@ -133,8 +134,7 @@ bash test/integration/plugins/ontap/setup_env.sh
 The script is safe to re-run. It creates `test/integration/plugins/ontap/.venv` when that directory is missing, then installs into it:
 
 - Marvin (from `MARVIN_ARCHIVE` when set, otherwise from `tools/marvin` after generating `commands.xml`)
-- `pyvmomi==8.0.2.0.1` (pyvmomi 9.x needs Python 3.10+)
-- `paramiko>=3.4,<4`
+- the pins in `requirements.txt`: `setuptools>=40.3.0,<81`, `pyvmomi==8.0.2.0.1`, and `paramiko>=3.4,<4`
 
 `run_tests.sh` uses that venv automatically.
 
@@ -142,10 +142,10 @@ The script is safe to re-run. It creates `test/integration/plugins/ontap/.venv` 
 
 `nfs3/instance/test_vm_volume_attach.py` and `iscsi/instance/test_vm_volume_attach.py` log into the guest through `guest_ssh.py`. The lab template is CentOS 5.5, and its sshd only offers SHA-1 key exchange (`diffie-hellman-group14-sha1`) and `ssh-rsa` host keys. Paramiko 4.x removed SHA-1, so those logins fail unless the venv has Paramiko 3.x.
 
-`setup_env.sh` installs the pin:
+`setup_env.sh` installs the pin from `requirements.txt`:
 
 ```bash
-test/integration/plugins/ontap/.venv/bin/pip install "paramiko>=3.4,<4"
+test/integration/plugins/ontap/.venv/bin/pip install -r test/integration/plugins/ontap/requirements.txt
 ```
 
 `guest_ssh.check_paramiko()` checks for `diffie-hellman-group14-sha1` before the first guest connection and tells you to re-run `setup_env.sh` when the active interpreter has Paramiko 4. Guest login itself comes from `ontap.cfg` (`cloudstack.templateUsername` / `cloudstack.templatePassword`).

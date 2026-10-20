@@ -1,0 +1,8 @@
+# Pinned dependencies for the ONTAP Marvin venv.
+# Marvin itself is installed separately, from MARVIN_ARCHIVE or tools/marvin.
+# setuptools<81 keeps pkg_resources, which nose needs to find the Marvin plugin.
+# pyvmomi 9.x needs Python 3.10+.
+# paramiko 4.x dropped SHA-1 key exchange, which the CentOS 5.5 guest sshd requires.
+setuptools>=40.3.0,<81
+pyvmomi==8.0.2.0.1
+paramiko>=3.4,<4
