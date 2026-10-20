@@ -624,7 +624,7 @@ class OntapRestClient:
         """Return the ONTAP LUN record for the given full path, or None."""
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name, "name": lun_path,
-                                 "fields": "name,uuid,serial_number,enabled,status,space.size"})
+                                 "fields": "name,uuid,serial_number,qos_policy,enabled,status,space.size"})
         records = data.get("records", [])
         return records[0] if records else None
 
@@ -678,6 +678,24 @@ class OntapRestClient:
             return []
         return [r.get("name", "") for r in resp.get("records", [])
                 if r.get("name") not in (".", "..")]
+
+    def get_nfs_file(self, vol_name, file_name):
+        """Return one file record, including its QoS policy, or None."""
+        vol = self.get_volume(vol_name)
+        if not vol or not vol.get("uuid"):
+            return None
+        from urllib.parse import quote
+        encoded_path = quote("/" + str(file_name), safe="")
+        try:
+            resp = self._get(
+                "/storage/volumes/%s/files/%s" % (vol["uuid"], encoded_path),
+                params={"fields": "name,qos_policy"},
+            )
+        except Exception:
+            return None
+        if isinstance(resp, dict) and resp.get("records"):
+            return resp["records"][0]
+        return resp or None
 
     def _unmap_lun(self, svm_name, lun_uuid):
         """Best-effort removal of all lun-maps for a LUN UUID."""

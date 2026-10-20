@@ -1245,6 +1245,28 @@ class OntapMigrationTestBase(OntapTestBase):
         cls._cleanup.insert(0, offering)
         return offering
 
+    def _qos_disk_offering(self, disksize, miniops, maxiops, storage_tag=None):
+        """Create a disk offering that carries fixed min and max IOPS."""
+        data = {
+            "name": "ontap-migration-qos-%d-%d-%d" % (
+                miniops, maxiops, random.randint(0, 999999)
+            ),
+            "displaytext": "ONTAP migration QoS disk",
+            "disksize": disksize,
+            "miniops": miniops,
+            "maxiops": maxiops,
+        }
+        if storage_tag:
+            data["tags"] = storage_tag
+        offering = DiskOffering.create(self.apiClient, data)
+        self.__class__._cleanup.insert(0, offering)
+        return offering
+
+    def _qos_policy_name(self, miniops, maxiops):
+        """Return the ONTAP policy name the driver builds for these IOPS."""
+        svm = str(self.__class__.svm_name).replace(".", "_")
+        return "cs_%d_to_%d_iops_%s" % (miniops, maxiops, svm)
+
     @classmethod
     def _create_ontap_pool(cls, protocol, scope, cluster_id=None):
         config = cls.config_data
@@ -1324,9 +1346,11 @@ class OntapMigrationTestBase(OntapTestBase):
         )
         return pool
 
-    def _deploy_vm(self, storage_tag=None, host_id=None):
+    def _deploy_vm(self, storage_tag=None, host_id=None, root_offering=None):
         offering = self._service_offering()
-        root_disk_offering = self._root_disk_offering(storage_tag)
+        root_disk_offering = root_offering or self._root_disk_offering(
+            storage_tag
+        )
         cmd = deployVirtualMachineAPI.deployVirtualMachineCmd()
         cmd.zoneid = self.__class__.zone.id
         cmd.templateid = self.__class__.template_id
@@ -1453,9 +1477,12 @@ class OntapMigrationTestBase(OntapTestBase):
             )
         return cls.secondary_cluster_id
 
-    def _create_data_volume(self, pool):
+    def _create_data_volume(self, pool, offering=None):
         cls = self.__class__
-        offering_id = getattr(cls, "small_disk_offering_id", None)
+        if offering is not None:
+            offering_id = offering.id
+        else:
+            offering_id = getattr(cls, "small_disk_offering_id", None)
         if offering_id is None:
             offering = DiskOffering.create(cls.apiClient, {
                 "name": "ontap-migration-data-%d" % random.randint(0, 999999),
@@ -1474,6 +1501,67 @@ class OntapMigrationTestBase(OntapTestBase):
         volume = self.apiClient.createVolume(cmd)
         cls.created_volumes.append(volume)
         return volume
+
+    def _assert_volume_qos(self, volume, protocol, pool, miniops, maxiops):
+        """Check CloudStack IOPS and the destination ONTAP QoS policy."""
+        current = self._get_volume(volume.id)
+        self.assertEqual(int(current.miniops), miniops)
+        self.assertEqual(int(current.maxiops), maxiops)
+        expected = self._qos_policy_name(miniops, maxiops)
+        if protocol.upper() == "NFS3":
+            record = self.__class__.ontap.get_nfs_file(
+                pool.name, current.path
+            )
+        else:
+            record = self.__class__.ontap.get_lun(
+                self.__class__.svm_name,
+                self._backend_name("ISCSI", pool, current),
+            )
+        policy = (record or {}).get("qos_policy") or {}
+        self.assertEqual(
+            policy.get("name"),
+            expected,
+            "Volume %s on %s has QoS %s, expected %s"
+            % (current.id, pool.name, policy.get("name"), expected),
+        )
+        return current
+
+    def _assert_vm_qos(self, vm, protocol, pool, root_iops, data_iops):
+        """Check root and data disks after a VM storage migration."""
+        volumes = self._vm_volumes(vm.id)
+        roots = [
+            volume for volume in volumes
+            if str(getattr(volume, "type", "")).upper() == "ROOT"
+        ]
+        data = [
+            volume for volume in volumes
+            if str(getattr(volume, "type", "")).upper() != "ROOT"
+        ]
+        self.assertEqual(len(roots), 1)
+        self.assertTrue(data)
+        self._assert_volume_qos(
+            roots[0], protocol, pool, root_iops[0], root_iops[1]
+        )
+        for volume in data:
+            self._assert_volume_qos(
+                volume, protocol, pool, data_iops[0], data_iops[1]
+            )
+
+    def _prepare_qos_vm(self, root_iops, data_iops, stop=False):
+        """Deploy a DefaultPrimary VM whose root and data disks have IOPS."""
+        host = self._host_for_cluster(self.__class__.cluster.id)
+        root = self._qos_disk_offering(
+            8, root_iops[0], root_iops[1], self._default_storage_tag()
+        )
+        vm = self._deploy_vm(host_id=host.id, root_offering=root)
+        data = self._create_data_volume(
+            self.__class__.default_pool,
+            self._qos_disk_offering(1, data_iops[0], data_iops[1]),
+        )
+        self._attach_volume(vm, data)
+        if stop:
+            self._stop_vm(vm)
+        return self._get_vm(vm.id)
 
     def _attach_volume(self, vm, volume):
         cmd = attachVolumeAPI.attachVolumeCmd()

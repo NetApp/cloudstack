@@ -28,6 +28,9 @@ Workflow:
   21 reject running-attached migration without livemigrate
   22 reject running-attached migration with livemigrate
   23 reject migration to the volume's current pool
+  24-25 migrate a detached QoS volume between cluster pools
+  26-27 migrate one attached QoS disk and leave the root disk
+  28 migrate a detached QoS volume from DefaultPrimary onto NFS3
 
 Every successful migration verifies CloudStack identity and attachment state,
 the destination ONTAP object and access state, and source cleanup when the
@@ -488,3 +491,76 @@ class TestOntapVolumeMigration(OntapMigrationTestBase):
             False,
             "already on the destination storage pool",
         )
+
+    def _detached_qos(self, protocol, miniops, maxiops):
+        source = self._migration_pool(protocol)
+        destination = self._migration_pool(protocol, 1)
+        offering = self._qos_disk_offering(1, miniops, maxiops)
+        volume = self._create_data_volume(source, offering)
+        self._migrate_volume_offline(volume, destination)
+        self._assert_migration_success(
+            [volume], destination, protocol, source_pool=source
+        )
+        self._assert_volume_qos(
+            volume, protocol, destination, miniops, maxiops
+        )
+
+    def _attached_qos_leaves_root(self, protocol):
+        vm = self._prepare_qos_vm((100, 500), (200, 800), stop=True)
+        source = self._migration_pool(protocol)
+        self._migrate_stopped_vm_storage(vm, source)
+        root = self._root_volume(vm)
+        data = [
+            volume for volume in self._vm_volumes(vm.id)
+            if volume.id != root.id
+        ][0]
+        destination = self._migration_pool(protocol, scope="ZONE")
+        self._migrate_volume_offline(data, destination)
+        self._assert_migration_success(
+            [data], destination, protocol, vm=vm,
+            expected_vm_state="Stopped", expected_vm_id=vm.id,
+            source_pool=source,
+        )
+        self._assert_volume_qos(data, protocol, destination, 200, 800)
+        self.assertEqual(self._get_volume(root.id).storageid, source.id)
+        self._assert_volume_qos(root, protocol, source, 100, 500)
+
+    @attr(tags=["ontap_migration", "volume_migration"],
+          required_hardware=True)
+    def test_24_nfs3_qos_detached_cluster_to_cluster(self):
+        """Migrate a detached NFS3 volume that was created with QoS."""
+        self._detached_qos("NFS3", 100, 500)
+
+    @attr(tags=["ontap_migration", "volume_migration"],
+          required_hardware=True)
+    def test_25_iscsi_qos_detached_cluster_to_cluster(self):
+        """Migrate a detached iSCSI volume that was created with QoS."""
+        self._detached_qos("ISCSI", 100, 500)
+
+    @attr(tags=["ontap_migration", "volume_migration"],
+          required_hardware=True)
+    def test_26_nfs3_qos_attached_stopped_vm(self):
+        """Migrate one stopped NFS3 data disk and leave the root disk."""
+        self._attached_qos_leaves_root("NFS3")
+
+    @attr(tags=["ontap_migration", "volume_migration"],
+          required_hardware=True)
+    def test_27_iscsi_qos_attached_stopped_vm(self):
+        """Migrate one stopped iSCSI data disk and leave the root disk."""
+        self._attached_qos_leaves_root("ISCSI")
+
+    @attr(tags=["ontap_migration", "volume_migration"],
+          required_hardware=True)
+    def test_28_nfs3_qos_detached_default_primary_to_ontap(self):
+        """Migrate a QoS volume from DefaultPrimary onto NFS3."""
+        offering = self._qos_disk_offering(1, 100, 500)
+        volume = self._create_data_volume(
+            self.__class__.default_pool, offering
+        )
+        destination = self._migration_pool("NFS3")
+        self._migrate_volume_offline(volume, destination)
+        self._assert_migration_success(
+            [volume], destination, "NFS3",
+            source_pool=self.__class__.default_pool,
+        )
+        self._assert_volume_qos(volume, "NFS3", destination, 100, 500)

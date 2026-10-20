@@ -40,6 +40,8 @@ Workflow:
   13 reject NFS3-to-iSCSI storage migration
   14 reject iSCSI-to-NFS3 storage migration
   15 reject the stopped-VM API form once the VM is running
+  16-19 stopped QoS migration for NFS3 and iSCSI
+  20 stopped iSCSI move where root and data keep different QoS policies
 
 Migration out of ONTAP into non-ONTAP storage is never requested; the
 DefaultPrimary pool is only ever a source.
@@ -314,3 +316,52 @@ class TestOntapStoppedVmStorageMigration(OntapMigrationTestBase):
             "VM is not Stopped",
         )
         self.assertEqual(self._get_vm(vm.id).state, "Running")
+
+    def _stopped_qos(self, protocol, root_iops, data_iops, second_pool=False):
+        vm = self._prepare_qos_vm(root_iops, data_iops, stop=True)
+        volumes = self._vm_volumes(vm.id)
+        source = self._pool_by_id(volumes[0].storageid)
+        pool = self._migration_pool(protocol)
+        self._migrate_stopped_vm_storage(vm, pool)
+        self._assert_migration_success(
+            volumes, pool, protocol, vm=vm,
+            expected_vm_state="Stopped", expected_vm_id=vm.id,
+            source_pool=source,
+        )
+        self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
+        if not second_pool:
+            return
+        moved = self._vm_volumes(vm.id)
+        pool = self._migration_pool(protocol, 1)
+        self._migrate_stopped_vm_storage(vm, pool)
+        self._assert_migration_success(
+            moved, pool, protocol, vm=vm,
+            expected_vm_state="Stopped", expected_vm_id=vm.id,
+            source_pool=self._migration_pool(protocol),
+        )
+        self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
+
+    @attr(tags=["ontap_migration", "stopped_vm"], required_hardware=True)
+    def test_16_nfs3_qos_default_primary_to_cluster(self):
+        """Move stopped QoS disks from DefaultPrimary onto NFS3."""
+        self._stopped_qos("NFS3", (100, 500), (100, 500))
+
+    @attr(tags=["ontap_migration", "stopped_vm"], required_hardware=True)
+    def test_17_nfs3_qos_cluster_to_cluster(self):
+        """Move stopped QoS disks between two NFS3 cluster pools."""
+        self._stopped_qos("NFS3", (100, 500), (100, 500), second_pool=True)
+
+    @attr(tags=["ontap_migration", "stopped_vm"], required_hardware=True)
+    def test_18_iscsi_qos_default_primary_to_cluster(self):
+        """Move stopped QoS disks from DefaultPrimary onto iSCSI."""
+        self._stopped_qos("ISCSI", (100, 500), (100, 500))
+
+    @attr(tags=["ontap_migration", "stopped_vm"], required_hardware=True)
+    def test_19_iscsi_qos_cluster_to_cluster(self):
+        """Move stopped QoS disks between two iSCSI cluster pools."""
+        self._stopped_qos("ISCSI", (100, 500), (100, 500), second_pool=True)
+
+    @attr(tags=["ontap_migration", "stopped_vm"], required_hardware=True)
+    def test_20_iscsi_qos_root_and_data_different_policies(self):
+        """Stopped iSCSI move keeps a different QoS policy on each disk."""
+        self._stopped_qos("ISCSI", (100, 500), (200, 800))
