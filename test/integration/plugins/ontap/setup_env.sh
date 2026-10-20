@@ -54,11 +54,10 @@ if ! "${PIP}" install --upgrade pip wheel; then
     exit 1
 fi
 
-# nose discovers Marvin via setuptools entry points (needs pkg_resources).
-if ! "${PIP}" install "setuptools>=40.3.0,<81"; then
-    echo "Unable to install a Marvin-compatible setuptools version" >&2
-    exit 1
-fi
+# requirements.txt is applied after Marvin. Marvin asks for
+# setuptools>=40.3.0, paramiko>=1.13.0 and pyvmomi>=5.5.0, so its install
+# would otherwise take the newest of each.
+REQ="${ONTAP_DIR}/requirements.txt"
 
 if [[ -n "${MARVIN_ARCHIVE}" ]]; then
     if [[ ! -f "${MARVIN_ARCHIVE}" ]]; then
@@ -89,15 +88,9 @@ else
     fi
 fi
 
-echo "==> Pinning pyvmomi for Python 3.9 compatibility (pyvmomi 9.x requires 3.10+)"
-if ! "${PIP}" install "pyvmomi==8.0.2.0.1"; then
-    echo "Unable to install pyvmomi; verify access to the configured Python package index" >&2
-    exit 1
-fi
-
-echo "==> Pinning paramiko<4 (CentOS 5.5 guest sshd only offers SHA-1 kex and ssh-rsa)"
-if ! "${PIP}" install "paramiko>=3.4,<4"; then
-    echo "Unable to install paramiko; verify access to the configured Python package index" >&2
+echo "==> Installing pinned Python dependencies from requirements.txt"
+if ! "${PIP}" install -r "${REQ}"; then
+    echo "Unable to install pinned Python dependencies; verify access to the configured Python package index" >&2
     exit 1
 fi
 
