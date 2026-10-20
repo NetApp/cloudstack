@@ -26,7 +26,7 @@ this file is deliberately just a lookup table / cheat sheet.
 ## 1. Prerequisites
 
 | # | Requirement | Notes |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Python 3.9+ | No other version-specific features used; anything 3.9-3.12 should work. |
 | 2 | Network access to a CloudStack management server's API (`/client/api`) | Admin credentials with permission to create/delete storage pools, service/disk offerings, and deploy/destroy VMs. |
 | 3 | Network access (HTTPS/443) from **your machine** to the ONTAP cluster's management LIF | Only needed if you run the storage-pool scripts' `--cleanup-only` helper functions that talk to ONTAP directly for orphan checks; the benchmark scripts themselves only ever call the CloudStack API, never ONTAP directly. |
@@ -70,7 +70,7 @@ cluster IDs, and ONTAP connection details (see inline comments in
 ## 2. Shared library modules (not run directly)
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `benchmark_support.py` | Shared run ids, resource names, `mean_seconds`, and the one log format used by every script. |
 | `cloudstack_client.py` | Minimal CloudStack HTTP/REST client (session-key login, generic `call()`, automatic `queryAsyncJobResult` polling). Used by every benchmark script. |
 | `storage_pool_common.py` | Shared helpers for the storage-pool scripts: `createStoragePool`/`deleteStoragePool` request building, CSV logging (`RawLogger`, `append_summary_csv`), cleanup-by-filter, config loading. |
@@ -82,7 +82,7 @@ Reproduces Confluence sections 5.1 (sequential) and 6.1 (concurrency) -
 `createStoragePool` / `deleteStoragePool` timing at scale.
 
 | Script | What it does | Typical command |
-|---|---|---|
+| --- | --- | --- |
 | `run.py` | Entry point. Loads `config.yaml` and runs the test named by `--test`. | `python3 run.py --test storage-pool-sequential --config config.yaml` |
 | `benchmark_storage_pool_sequential.py` | Creates storage pools one at a time (per protocol) up to N=30, then deletes them one at a time, logging every call and reporting checkpoint totals at N = 1, 5, 10, 20, 30. | `python3 run.py --test storage-pool-sequential --config config.yaml` |
 | `benchmark_storage_pool_concurrency.py` | For each concurrency level C (default 2, 5, 10, 20, 30), creates C pools in parallel via a thread pool, records wall-clock time for the whole batch, then deletes the same C pools in parallel. | `python3 run.py --test storage-pool-concurrency --config config.yaml` |
@@ -90,7 +90,7 @@ Reproduces Confluence sections 5.1 (sequential) and 6.1 (concurrency) -
 Common flags (both scripts):
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--config PATH` | Config YAML to use (default `config.yaml`). Protocols, checkpoints, and concurrency levels are read from here. |
 | `--run-id ID` | Reuse a run id. Auto-generated otherwise as `RUN_<UTC timestamp>_<4 hex chars>`. Letters, digits, and underscores only — a hyphen is rewritten to `_` because storage-pool names (and the ONTAP volume behind them) disallow `-`. Use the **same id** across sequential and concurrency to merge one report. |
 | `--dry-run` | Simulate timings with no real API calls - use this first to sanity-check your config. |
@@ -100,7 +100,7 @@ Common flags (both scripts):
 `run.py` also requires `--test`. Protocols, checkpoints, and concurrency levels are not flags; change them in `config.yaml`.
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--test NAME` | Required. `storage-pool-sequential`, `storage-pool-concurrency`, `vm-instance-sequential`, `vm-instance-concurrency`, or `vm-instance-combined`. |
 
 ## 4. VM-instance benchmark scripts
@@ -126,7 +126,7 @@ VM getting both a root disk and a data disk on the same tagged pool.
 ### Scripts
 
 | Script | What it does | Typical command |
-|---|---|---|
+| --- | --- | --- |
 | `benchmark_vm_instance_sequential.py` | Deploys VMs one at a time (per protocol) up to N=30, then destroys them one at a time, reporting checkpoint totals at N = 1, 2, 5, 10, 20, 30. | `python3 run.py --test vm-instance-sequential --config config.yaml` |
 | `benchmark_vm_instance_concurrency.py` | For each concurrency level C, deploys C VMs in parallel, records wall-clock time, then destroys the same C VMs in parallel. | `python3 run.py --test vm-instance-concurrency --config config.yaml` |
 | `benchmark_vm_instance_combined.py` | Runs the sequential matrix immediately followed by the concurrency matrix, under one shared run id, in a single invocation. Use once you already trust your config/environment. | `python3 run.py --test vm-instance-combined --config config.yaml` |
@@ -143,7 +143,7 @@ with `--cleanup-only` once done.
 ## 5. Report rendering
 
 | Script | What it does | Typical command |
-|---|---|---|
+| --- | --- | --- |
 | `render_report.py` | Turns a run's `raw_ops_<run_id>.csv` + `summary_<run_id>.csv` into markdown tables (section layout plus Min/Avg/P95/Max rows for the Results Log). Writes to stdout and to `results/report_<run_id>.md`. | `python3 render_report.py --run-id RUN_20260927_081500_a1b2 --cloudstack-build 4.23.0.0-SNAPSHOT --ontap-version 9.17.1` |
 
 For VM-instance runs (which write `raw_ops_vm_<run_id>.csv` /
@@ -156,7 +156,7 @@ python3 render_report.py --run-id RUN_20260927_081500_a1b2 \
 ```
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--run-id ID` | **Required.** The run id used by the benchmark script(s). |
 | `--output-dir DIR` | Where the CSVs live / the report gets written (default `results`). |
 | `--cloudstack-build STR` | Label only, stamped into the Results Log rows. |
@@ -169,7 +169,7 @@ python3 render_report.py --run-id RUN_20260927_081500_a1b2 \
 ## 6. Config files at a glance
 
 | File | Committed? | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `config.example.yaml` | Yes | Sanitized template - copy to `config.yaml` and fill in your lab's real values. |
 | `config.yaml` | **No** (gitignored) | Your real, lab-specific config (real IPs/credentials) - never commit this. |
 | `config_sanity.yaml` | **No** (gitignored) | Optional scratch config some contributors keep locally for quick one-off dry-runs; not part of the checked-in tooling. |
@@ -180,7 +180,7 @@ All written under `results/` (gitignored - these are run artifacts, not
 source):
 
 | Pattern | Produced by | Contents |
-|---|---|---|
+| --- | --- | --- |
 | `raw_ops_<run_id>.csv` | storage-pool scripts | One row per individual API call (timestamps, duration, success/failure, error). |
 | `raw_ops_vm_<run_id>.csv` | VM-instance scripts | Same, for VM deploy/destroy calls. |
 | `summary_<run_id>.csv` / `summary_vm_<run_id>.csv` | both | One row per checkpoint/concurrency level (totals, averages, success/failure counts). |
