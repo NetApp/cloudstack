@@ -70,7 +70,7 @@ cluster IDs, and ONTAP connection details (see inline comments in
 ## 2. Shared library modules (not run directly)
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `benchmark_support.py` | Shared run ids, resource names, `mean_seconds`, and the one log format used by every script. |
 | `cloudstack_client.py` | Minimal CloudStack HTTP/REST client (session-key login, generic `call()`, automatic `queryAsyncJobResult` polling). Used by every benchmark script. |
 | `storage_pool_common.py` | Shared helpers for the storage-pool scripts: `createStoragePool`/`deleteStoragePool` request building, CSV logging (`RawLogger`, `append_summary_csv`), cleanup-by-filter, config loading. |
@@ -90,7 +90,7 @@ Reproduces Confluence sections 5.1 (sequential) and 6.1 (concurrency) -
 Common flags (both scripts):
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--config PATH` | Config YAML to use (default `config.yaml`). Protocols, checkpoints, and concurrency levels are read from here. |
 | `--run-id ID` | Reuse a run id. Auto-generated otherwise as `RUN_<UTC timestamp>_<4 hex chars>`. Letters, digits, and underscores only — a hyphen is rewritten to `_` because storage-pool names (and the ONTAP volume behind them) disallow `-`. Use the **same id** across sequential and concurrency to merge one report. |
 | `--dry-run` | Simulate timings with no real API calls - use this first to sanity-check your config. |
@@ -100,7 +100,7 @@ Common flags (both scripts):
 `run.py` also requires `--test`. Protocols, checkpoints, and concurrency levels are not flags; change them in `config.yaml`.
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--test NAME` | Required. `storage-pool-sequential`, `storage-pool-concurrency`, `vm-instance-sequential`, `vm-instance-concurrency`, or `vm-instance-combined`. |
 
 ## 4. VM-instance benchmark scripts
@@ -156,7 +156,7 @@ python3 render_report.py --run-id RUN_20260927_081500_a1b2 \
 ```
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--run-id ID` | **Required.** The run id used by the benchmark script(s). |
 | `--output-dir DIR` | Where the CSVs live / the report gets written (default `results`). |
 | `--cloudstack-build STR` | Label only, stamped into the Results Log rows. |
