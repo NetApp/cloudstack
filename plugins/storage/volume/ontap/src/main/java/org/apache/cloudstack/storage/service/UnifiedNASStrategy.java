@@ -181,8 +181,7 @@ public class UnifiedNASStrategy extends NASStrategy {
      * Clones a file inside the FlexVolume using ONTAP's file clone API.
      *
      * <p>The source is taken from {@code file.path} and the destination from
-     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.
-     * When {@code snapshotName} is set, the source is read from that FlexVolume snapshot.</p>
+     * {@code destinationPath}, both relative to the root of the FlexVolume backing the pool.</p>
      */
     @Override
     public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
@@ -208,7 +207,7 @@ public class UnifiedNASStrategy extends NASStrategy {
         logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}] from snapshot [{}]",
                 sourcePath, destinationPath, flexVolName, snapshotName);
         try {
-            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath, snapshotName);
+            FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath);
             JobResponse jobResponse = nasFeignClient.cloneFile(getAuthHeader(), request);
             pollJobIfPresent(jobResponse, "clone file [" + sourcePath + "] to [" + destinationPath + "]");
 
