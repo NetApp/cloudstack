@@ -23,7 +23,7 @@ Scale matrix: [ONTAP Plugin - CloudStack Operations, Scale & Parallel Test Matri
 Test ids written to the CSVs and report map to the page sections as follows:
 
 | Test id | Page section | What it measures |
-|---|---|---|
+| --- | --- | --- |
 | `pool_sequential_create` | 5.1.1 | Sequential create (1 pool at a time, cumulative to N) |
 | `pool_sequential_delete` | 5.1.2 | Sequential delete (1 pool at a time, from N remaining) |
 | `pool_concurrent_create` | 6.1.1 | Parallel pool creation |
