@@ -232,7 +232,7 @@ Use this structure for each triage comment. Use collapsed sections to keep it ti
 ### 📊 Assessment
 
 | Dimension | Value | Reasoning |
-|---|---|---|
+| --- | --- | --- |
 | **Type** | [type:* label or "none"] | [brief] |
 | **Component** | [component:* label(s) or "none"] | [brief] |
 | **Severity** | [Severity:* label or "n/a"] | [brief] |
