@@ -2293,7 +2293,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
 
         FileInfo file = new FileInfo();
-        file.setPath(OntapStorageUtils.toFlexVolRelativePath(sourceVolumePath, flexVolName));
+        String relativeSourcePath = OntapStorageUtils.toFlexVolRelativePath(sourceVolumePath, flexVolName);
+        file.setPath(OntapStorageConstants.DOT + OntapStorageConstants.SNAPSHOT_PATH_SEGMENT + snapshotName
+                + OntapStorageConstants.SLASH + relativeSourcePath);
 
         CloudStackVolume request = new CloudStackVolume();
         request.setDatastoreId(String.valueOf(storagePool.getId()));
