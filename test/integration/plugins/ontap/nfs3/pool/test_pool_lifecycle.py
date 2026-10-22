@@ -18,18 +18,32 @@
 """
 Sequential workflow integration tests for NetApp ONTAP NFS3 primary storage pool.
 
-Tests are numbered test_01 ... test_08 and must run in that order.  Each step
-builds on the shared state established by the previous step.
+Tests are numbered test_01 ... test_21 and must run in that order.  test_01
+and test_02 are isolated create rejections.  test_04 reuses the FlexVol created
+by test_03.  test_20 and test_21 are isolated delete cases.
 
 Workflow:
-  01  Create primary storage pool
-  02  Disable storage pool
-  03  Enable storage pool
-  04  Enter maintenance mode
-  05  Cancel maintenance mode
-  06  Delete the storage pool
-  07  Create fresh pool and allocate a CloudStack volume
-  08  Delete volume then force-delete the pool
+  01  Reject create when no online assigned aggregate has enough free space
+  02  Reject create when capacitybytes has invalid values
+  03  Create primary storage pool
+  04  Reject create when a FlexVol of that name already exists on ONTAP
+  05  Increase storage pool capacity to the maximum supported size
+  06  Reject a grow beyond the maximum supported size
+  07  Safely shrink storage pool capacity
+  08  Disable storage pool
+  09  Grow and shrink the pool while it is disabled
+  10  Enable storage pool
+  11  Enter maintenance mode
+  12  Grow and shrink the pool while it is in maintenance mode
+  13  Cancel maintenance mode
+  14  Delete the storage pool
+  15  Create fresh pool and allocate a CloudStack volume
+  16  Deploy a VM and attach the ONTAP volume to it
+  17  Reject shrink below the ONTAP used capacity of the attached volume
+  18  Grow and shrink the pool while the VM holds the volume
+  19  Detach/destroy the VM, delete volume, then force-delete the pool
+  20  Delete an empty pool whose FlexVol was deleted directly on ONTAP
+  21  Delete an empty pool whose NFS export policy was deleted on ONTAP
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -42,9 +56,10 @@ Running:
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
       test/integration/plugins/ontap/nfs3/pool/test_pool_lifecycle.py -v
 
-Note: Tests 01-06 share class-level state (sequential).  Running a single test
-with -m "test_NN" will invoke setUpClass but the guard assertion will fail
-immediately if earlier steps have not yet run.  Always run the full suite.
+Note: Tests 03-19 share class-level state (sequential).  test_04 reuses the
+FlexVol created by test_03.  Running a single test with -m "test_NN" will
+invoke setUpClass but the guard assertion will fail immediately if earlier
+steps have not yet run.  Always run the full suite.
 """
 
 import base64
@@ -55,10 +70,10 @@ import unittest
 from nose.plugins.attrib import attr
 
 from marvin.cloudstackAPI import (
-    cancelStorageMaintenance,
+    attachVolume as attachVolumeAPI,
     createStoragePool as createStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
-    enableStorageMaintenance,
+    deployVirtualMachine as deployVirtualMachineAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.cloudstackException import CloudstackAPIException
@@ -67,7 +82,7 @@ from marvin.lib.common import list_storage_pools
 
 from ontap_test_base import (
     OntapRestClient, OntapTestBase, _parse_pool_details, get_datacenter_config,
-    log_progress,
+    _wait_for_vm_state, log_progress, run_invalid_capacitybytes_rejections,
 )
 
 logger = logging.getLogger("TestOntapNFS3Workflow")
@@ -96,6 +111,16 @@ class TestData:
     DETAIL_NFS_MOUNT_OPTS = "nfsmountopts"
 
     ONTAP_MIN_VOLUME_SIZE = 1677721600
+
+    # Maximum FlexVol size on AFF/FAS, raised from 100 TB in ONTAP 9.12.1P2.
+    # ONTAP writes this as "300 TB" but means binary, hence 1024**4.  The
+    # value has to be hardcoded: no REST field reports the platform ceiling.
+    # Against an ONTAP older than 9.12.1P2 the real limit is 100 TB and the
+    # grow step will fail.  CloudStack enforces no maximum of its own (the
+    # plugin validates only a 20 MB floor), so it is ONTAP that refuses
+    # anything above this.
+    ONTAP_MAX_VOLUME_SIZE = 300 * 1024 ** 4
+    ONTAP_GROW_TARGET_SIZE = ONTAP_MAX_VOLUME_SIZE
 
     def __init__(self, storage_ip, svm_name, username, password,
                  protocol="NFS3", scope="CLUSTER", provider="NetApp ONTAP",
@@ -143,8 +168,12 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
 
     # ---- NFS3-specific shared state ------------------------------------
     pool_ep_name = None    # NFS export policy name for pool
-    pool2_ep_name = None   # export policy for pool stashed from test_01-04
+    pool2_ep_name = None   # export policy for pool stashed from tests 03-14
     cluster_host_ips = None
+    resize_original_size = None
+
+    # VM state (vm/template_id/network_id) lives in OntapTestBase.
+    _vm_network_name_prefix = "ontap-nfs3-lifecycle-net"
 
     _vol_name_prefix = "OntapNFS3Vol"
 
@@ -193,16 +222,22 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             if getattr(h, "ipaddress", None)
         ]
 
+        cls._discover_vm_deploy_resources()
+
     # No per-test tearDown — state intentionally persists between steps.
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _create_pool(self):
+    def _create_pool(self, pool_name=None, capacitybytes=None):
+        """Create a pool; name and capacity default to the suite values."""
         ps = self.testdata[TestData.primaryStorage]
         storage_ip = self.testdata[TestData.ontap][TestData.DETAIL_STORAGE_IP]
-        pool_name = "OntapNFS3_%d" % random.randint(0, 99999)
+        if pool_name is None:
+            pool_name = "OntapNFS3_%d" % random.randint(0, 99999)
+        if capacitybytes is None:
+            capacitybytes = ps["capacitybytes"]
 
         cmd = createStoragePoolAPI.createStoragePoolCmd()
         cmd.name = pool_name
@@ -213,7 +248,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         cmd.scope = ps[TestData.scope]
         cmd.provider = ps[TestData.provider]
         cmd.tags = ps[TestData.tags]
-        cmd.capacitybytes = ps["capacitybytes"]
+        cmd.capacitybytes = capacitybytes
         cmd.hypervisor = "KVM"
         cmd.managed = True
 
@@ -380,10 +415,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         self.assertTrue(listed, "Pool '%s' not found before delete" % pool.name)
         if listed[0].state != "Maintenance":
             self._assert_pool_capacity(pool, "volume-deleted")
-            maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-            maint_cmd.id = pool.id
-            self.apiClient.enableStorageMaintenance(maint_cmd)
-            self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+            self._enter_maintenance(pool.id)
 
         self._cleanup_kvm_storage_pool_mounts(pool.id)
         try:
@@ -396,12 +428,272 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         self._assert_pool_gone_from_cs(pool.id, pool.name)
         self._assert_ontap_pool_gone(pool.name, ep_name)
 
+    def _throwaway_pool_name(self, suffix):
+        return "OntapNFS3%s_%d" % (suffix, random.randint(0, 99999))
+
+    def _cleanup_throwaway_pool(self, pool, flexvol_name=None, ep_name=None):
+        """Best-effort teardown for an isolated test: CloudStack, then ONTAP.
+
+        Never raises, so a failed assertion in the test body is the error
+        that surfaces.  The KVM unmount happens while the export is still
+        reachable, i.e. before the FlexVol goes away.
+        """
+        backend_cleanup_safe = pool is None
+        if pool is not None:
+            try:
+                listed = list_storage_pools(self.apiClient, id=pool.id)
+            except Exception:
+                listed = None
+            backend_cleanup_safe = not listed
+            if listed:
+                try:
+                    if listed[0].state != "Maintenance":
+                        self._enter_maintenance(pool.id)
+                except Exception as exc:
+                    logger.warning(
+                        "cleanup: could not put pool '%s' into Maintenance: %s",
+                        pool.name, exc,
+                    )
+                try:
+                    self._cleanup_kvm_storage_pool_mounts(pool.id)
+                except Exception as exc:
+                    logger.warning(
+                        "cleanup: could not safely unmount pool '%s': %s",
+                        pool.name, exc,
+                    )
+                    return
+                backend_cleanup_safe = True
+                try:
+                    self._delete_pool(pool.id, forced=True)
+                except Exception as exc:
+                    logger.warning(
+                        "cleanup: could not delete pool '%s': %s",
+                        pool.name, exc,
+                    )
+            if flexvol_name is None:
+                flexvol_name = pool.name
+        if backend_cleanup_safe and flexvol_name:
+            try:
+                if self.ontap.get_volume(flexvol_name) is not None:
+                    self.ontap.offline_and_delete_volume(flexvol_name)
+            except Exception as exc:
+                logger.warning(
+                    "cleanup: could not delete ONTAP FlexVol '%s': %s",
+                    flexvol_name, exc,
+                )
+        if backend_cleanup_safe and ep_name:
+            try:
+                if self.ontap.get_export_policy(ep_name) is not None:
+                    self.ontap.delete_export_policy(ep_name)
+            except Exception as exc:
+                logger.warning(
+                    "cleanup: could not delete export policy '%s': %s",
+                    ep_name, exc,
+                )
+        if pool is None:
+            return
+        try:
+            remaining = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            remaining = None
+        if not remaining:
+            self.__class__.pool2 = None
+            self.__class__.pool2_ep_name = None
+
+    def _assert_only_original_pool(self, pool):
+        """Assert the rejected create did not add a second pool of this name."""
+        try:
+            listed = list_storage_pools(self.apiClient, name=pool.name) or []
+        except CloudstackAPIException:
+            listed = []
+        same_name = [
+            item for item in listed if getattr(item, "name", None) == pool.name
+        ]
+        self.assertEqual(
+            [item.id for item in same_name],
+            [pool.id],
+            "CloudStack should still list only pool '%s' after the rejected "
+            "create, found: %s" % (pool.name, same_name),
+        )
+        current = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(
+            current,
+            "Original pool '%s' disappeared after the rejected create"
+            % pool.name,
+        )
+        self.assertEqual(
+            current[0].state, "Up",
+            "Original pool '%s' should still be Up, got '%s'"
+            % (pool.name, current[0].state),
+        )
+
+    def _warn_if_duplicate_pool(self, duplicate, pool):
+        """Leave a stray duplicate in place.
+
+        Deleting it would remove the FlexVol and export policy that the
+        rest of the suite still uses.
+        """
+        if duplicate is None or getattr(duplicate, "id", None) == pool.id:
+            return
+        logger.warning(
+            "Duplicate pool '%s' (id=%s) was created against the shared "
+            "FlexVol; leaving it in place so cleanup does not delete the "
+            "pool the rest of the suite uses",
+            pool.name, duplicate.id,
+        )
+
+    def _assert_no_pool_named(self, pool_name):
+        """Assert CloudStack holds no storage pool with this name."""
+        try:
+            listed = list_storage_pools(self.apiClient, name=pool_name)
+        except CloudstackAPIException:
+            listed = None
+        self.assertFalse(
+            listed,
+            "CloudStack should hold no pool named '%s' after a rejected "
+            "create, found: %s" % (pool_name, listed),
+        )
+
+    def _sweep_tracked_pool2(self):
+        """Clean a prior leftover before reusing the shared pool2 slot."""
+        if self.__class__.pool2 is None:
+            return
+        self._cleanup_throwaway_pool(
+            self.__class__.pool2,
+            ep_name=self.__class__.pool2_ep_name,
+        )
+        if self.__class__.pool2 is not None:
+            self.skipTest("A previously tracked pool could not be cleaned up safely")
+
+    def _create_throwaway_pool(self, suffix):
+        """Create an isolated pool, park it in pool2, and return it."""
+        self._sweep_tracked_pool2()
+        pool = self._create_pool(pool_name=self._throwaway_pool_name(suffix))
+        self.__class__.pool2 = pool
+        ep_name = self._get_export_policy_name(pool)
+        self.__class__.pool2_ep_name = ep_name
+        self.assertEqual(
+            pool.state, "Up",
+            "Throwaway pool '%s' should be 'Up', got '%s'"
+            % (pool.name, pool.state),
+        )
+        self.assertIsNotNone(
+            self.ontap.get_volume(pool.name),
+            "ONTAP FlexVol missing for throwaway pool '%s'" % pool.name,
+        )
+        return pool, ep_name
+
     # ------------------------------------------------------------------
-    # Step 01 — Create primary storage pool
+    # Step 01 - reject create when no aggregate space
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_01_create_primary_storage_pool(self):
+    def test_01_reject_create_when_no_aggregate_space(self):
+        """
+        Ask for 1 GiB more than the largest online aggregate assigned to the
+        SVM can provide, so no aggregate qualifies and the plugin refuses
+        before creating anything.
+
+        Verifies:
+          - createStoragePool raises CloudstackAPIException
+          - the error names the aggregate shortage rather than some other
+            failure ('No suitable aggregates')
+          - no pool is left in CloudStack and no FlexVol on ONTAP
+        """
+        self._sweep_tracked_pool2()
+        max_free = self.ontap.max_online_aggregate_available_bytes(
+            self.svm_name
+        )
+        if not max_free:
+            self.skipTest(
+                "No online aggregate with reported free space is assigned to "
+                "SVM '%s'; cannot build an unsatisfiable request"
+                % self.svm_name
+            )
+        requested = int(max_free) + 1024 ** 3
+        if requested > TestData.ONTAP_MAX_VOLUME_SIZE:
+            self.skipTest(
+                "Largest aggregate free space (%d B) + 1 GiB exceeds the "
+                "ONTAP FlexVol maximum (%d B); the request would be refused "
+                "for the size limit rather than the aggregate shortage"
+                % (max_free, TestData.ONTAP_MAX_VOLUME_SIZE)
+            )
+
+        pool_name = self._throwaway_pool_name("NoSpace")
+        log_progress(
+            logger, "info",
+            "Requesting pool '%s' of %d B; largest online aggregate on SVM "
+            "'%s' has %d B free (expect reject)",
+            pool_name, requested, self.svm_name, max_free,
+        )
+        try:
+            with self.assertRaises(CloudstackAPIException) as caught:
+                self.__class__.pool2 = self._create_pool(
+                    pool_name=pool_name, capacitybytes=requested
+                )
+            error_text = str(caught.exception)
+            log_progress(
+                logger, "info",
+                "Rejected no-space create for '%s': %s", pool_name, error_text,
+            )
+            self.assertIn(
+                "No suitable aggregates", error_text,
+                "Expected the rejection to report 'No suitable aggregates', "
+                "got: %s" % error_text,
+            )
+            self._assert_no_pool_named(pool_name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool_name),
+                "ONTAP FlexVol '%s' was created despite the rejected pool "
+                "create" % pool_name,
+            )
+        finally:
+            self._cleanup_throwaway_pool(
+                self.__class__.pool2,
+                flexvol_name=pool_name,
+                ep_name="cs-%s-%s" % (self.svm_name, pool_name),
+            )
+
+    # ------------------------------------------------------------------
+    # Step 02 - reject create with invalid capacitybytes values
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_02_reject_create_with_invalid_capacitybytes_values(self):
+        """
+        Negative case: reject pool creation when capacitybytes has invalid
+        values.
+
+        Verifies, for each invalid value:
+          - createStoragePool raises CloudstackAPIException
+          - zero and negative report that capacity must be at least the
+            ONTAP minimum
+          - special characters and a decimal are rejected as an invalid
+            capacitybytes value
+          - no pool is left in CloudStack and no FlexVol on ONTAP
+        """
+        def cleanup(pool, pool_name):
+            self._cleanup_throwaway_pool(
+                pool,
+                flexvol_name=pool_name,
+                ep_name="cs-%s-%s" % (self.svm_name, pool_name),
+            )
+
+        run_invalid_capacitybytes_rejections(
+            self,
+            lambda name, capacity: self._create_pool(
+                pool_name=name, capacitybytes=capacity
+            ),
+            cleanup,
+            logger,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 03 - create primary storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_03_create_primary_storage_pool(self):
         """
         Create an NFS3 primary storage pool and verify:
           - CloudStack state is Up, type is NetworkFilesystem
@@ -457,18 +749,246 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         # Capacity reporting
         self._assert_pool_capacity(pool, "pool-created")
 
+
     # ------------------------------------------------------------------
-    # Step 02 — Disable storage pool
+    # Step 04 - reject create when flexvol name exists
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_02_disable_storage_pool(self):
+    def test_04_reject_create_when_flexvol_name_exists(self):
+        """
+        The pool from test_03 already has a FlexVol of that name on ONTAP.
+        A second createStoragePool with the same name must be rejected, and
+        the existing pool, FlexVol, and export policy must be left untouched.
+
+        Verifies:
+          - createStoragePool raises CloudstackAPIException
+          - CloudStack still lists only the pool from test_03
+          - the existing ONTAP FlexVol is still online
+          - the existing export policy is still present
+        """
+        pool = self.__class__.pool
+        self.assertIsNotNone(pool, "Pool absent — test_03 must pass first")
+        pool_name = pool.name
+        self.assertIsNotNone(
+            self.ontap.get_volume(pool_name),
+            "ONTAP FlexVol '%s' from test_03 is missing" % pool_name,
+        )
+        ep_name = self.__class__.pool_ep_name
+        self.assertIsNotNone(
+            self.ontap.get_export_policy(ep_name),
+            "Export policy '%s' from test_03 is missing" % ep_name,
+        )
+        log_progress(
+            logger, "info",
+            "Pool '%s' already owns a FlexVol; requesting another pool of "
+            "the same name (expect reject)", pool_name,
+        )
+        duplicate = None
+        try:
+            with self.assertRaises(CloudstackAPIException) as caught:
+                duplicate = self._create_pool(pool_name=pool_name)
+            log_progress(
+                logger, "info",
+                "Rejected duplicate-name create for '%s': %s",
+                pool_name, caught.exception,
+            )
+            self._assert_only_original_pool(pool)
+            ontap_vol = self.ontap.get_volume(pool_name)
+            self.assertIsNotNone(
+                ontap_vol,
+                "Existing ONTAP FlexVol '%s' was removed by the failed "
+                "pool create" % pool_name,
+            )
+            self.assertEqual(
+                ontap_vol.get("state"), "online",
+                "Existing ONTAP FlexVol '%s' should still be online, got '%s'"
+                % (pool_name, ontap_vol.get("state")),
+            )
+            self.assertIsNotNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' was removed by the rejected pool create"
+                % ep_name,
+            )
+        finally:
+            self._warn_if_duplicate_pool(duplicate, pool)
+
+    # ------------------------------------------------------------------
+    # Step 05 - grow storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_05_grow_storage_pool(self):
+        """Grow the original pool to 300 TiB and verify CloudStack and ONTAP converge."""
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent — test_03 must pass first"
+        )
+        pool = self.__class__.pool
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before capacity increase")
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(ontap_vol, "ONTAP FlexVol missing before increase")
+
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+            int(self.testdata[TestData.primaryStorage]["capacitybytes"]),
+        )
+        requested_size = TestData.ONTAP_GROW_TARGET_SIZE
+        self.assertGreater(
+            requested_size, original_size,
+            "Grow target %d B must exceed the current pool size %d B"
+            % (requested_size, original_size)
+        )
+        self.__class__.resize_original_size = original_size
+
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = requested_size
+        self.apiClient.updateStoragePool(cmd)
+
+        resized_pool = self._poll_pool_capacity(
+            pool.id, requested_size, timeout=120
+        )
+        self.assertEqual(resized_pool.state, "Up")
+        resized_ontap_vol = self._poll_ontap_volume_size(
+            pool.name, requested_size, timeout=120
+        )
+        self.assertEqual(resized_ontap_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, requested_size, timeout=120
+        )
+        self.assertIsNotNone(
+            self.ontap.get_export_policy(self.__class__.pool_ep_name),
+            "Export policy disappeared after capacity increase",
+        )
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 06 - reject grow above max size
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_06_reject_grow_above_max_size(self):
+        """
+        Request a capacity above the 300 TiB ONTAP FlexVol maximum and verify
+        it is refused, leaving the pool at the size test_05 grew it to.
+        ONTAP reports this as an autosize-maximum violation rather than an
+        oversized-volume error.
+        Verifies:
+          - updateStoragePool raises CloudstackAPIException
+          - the error text is about the size limit, not about some other
+            failure such as the aggregate running out of space
+          - CloudStack capacity and ONTAP FlexVol size are both unchanged
+          - Pool stays 'Up'
+          - ONTAP: export policy is untouched
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_05 must pass first"
+        )
+        pool = self.__class__.pool
+
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before over-max resize")
+        self.assertEqual(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            TestData.ONTAP_MAX_VOLUME_SIZE,
+            "Pool should sit at the 300 TiB maximum - test_05 must pass first"
+        )
+
+        # Overshoot by only 1 GiB: at 0.0003% of the limit this probes the
+        # 300 TiB boundary itself rather than asking for something absurd.
+        above_max = self._align_flexvol_bytes(
+            TestData.ONTAP_MAX_VOLUME_SIZE + 1024 ** 3
+        )
+        log_progress(
+            logger, "info",
+            "Requesting %d B for pool '%s' (ONTAP maximum is %d B, "
+            "expect reject)",
+            above_max, pool.name, TestData.ONTAP_MAX_VOLUME_SIZE,
+        )
+
+        # ONTAP enforces the platform cap through autosize rather than
+        # rejecting the size outright, reporting "Volume maximum autosize
+        # must be greater than or equal to the current volume size 300.0TB".
+        # Matching on that keeps the test from passing when the resize fails
+        # for an unrelated reason, such as the aggregate running out of space.
+        self._assert_capacity_update_rejected(
+            pool.id, above_max, "grow-above-max-flexvol",
+            pool.id, pool.name,
+            expected_error=(
+                "maximum autosize",
+                "maximum size",
+                "exceeds",
+            ),
+        )
+
+        after = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(after, "Pool disappeared after rejected over-max grow")
+        self.assertEqual(
+            after[0].state, "Up",
+            "Pool should stay 'Up' after a rejected resize, got '%s'"
+            % after[0].state
+        )
+        self.assertIsNotNone(
+            self.ontap.get_export_policy(self.__class__.pool_ep_name),
+            "Export policy disappeared after a rejected over-max grow",
+        )
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 07 - shrink storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_07_shrink_storage_pool(self):
+        """Shrink the original pool back to its initial safe capacity."""
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent — test_05 must pass first"
+        )
+        target_size = self.__class__.resize_original_size
+        self.assertIsNotNone(
+            target_size, "Original size absent — test_05 must pass first"
+        )
+        pool = self.__class__.pool
+
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = target_size
+        self.apiClient.updateStoragePool(cmd)
+
+        shrunk_pool = self._poll_pool_capacity(
+            pool.id, target_size, timeout=120
+        )
+        self.assertEqual(shrunk_pool.state, "Up")
+        shrunk_ontap_vol = self._poll_ontap_volume_size(
+            pool.name, target_size, timeout=120
+        )
+        self.assertEqual(shrunk_ontap_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, target_size, timeout=120
+        )
+        self.assertIsNotNone(
+            self.ontap.get_export_policy(self.__class__.pool_ep_name),
+            "Export policy disappeared after safe shrink",
+        )
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 08 - disable storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_08_disable_storage_pool(self):
         """
         Disable the pool and verify:
           - CloudStack reports Disabled
           - ONTAP: FlexVol is still online and export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -493,18 +1013,91 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 % self.__class__.pool_ep_name
             )
 
+
     # ------------------------------------------------------------------
-    # Step 03 — Enable storage pool
+    # Step 09 - grow and shrink storage pool while disabled
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_03_enable_storage_pool(self):
+    def test_09_grow_and_shrink_storage_pool_while_disabled(self):
+        """
+        Grow and shrink the disabled pool and verify:
+          - Both capacity updates are accepted
+          - CloudStack and ONTAP reach each requested size
+          - KVM hosts report each resized NFS capacity
+          - The pool remains Disabled throughout
+          - The FlexVol remains online and the export policy is unchanged
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_03 must pass first"
+        )
+        pool = self.__class__.pool
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before disabled resize")
+        self.assertEqual(
+            listed[0].state, "Disabled",
+            "Pool must be Disabled - test_08 must pass first, got '%s'"
+            % listed[0].state,
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing before disabled resize"
+        )
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s disabled NFS3 pool '%s': target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
+
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Disabled",
+                "Pool should remain Disabled after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
+            self._poll_kvm_pool_capacity(
+                pool.id, pool.name, target, timeout=120
+            )
+
+        if self.__class__.pool_ep_name:
+            self.assertIsNotNone(
+                self.ontap.get_export_policy(self.__class__.pool_ep_name),
+                "Export policy disappeared during disabled resize",
+            )
+            self._assert_export_policy_has_host_ips(
+                self.__class__.pool_ep_name
+            )
+
+
+    # ------------------------------------------------------------------
+    # Step 10 - enable storage pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_10_enable_storage_pool(self):
         """
         Re-enable the pool and verify:
           - CloudStack reports Up
           - ONTAP: FlexVol is still online and export policy unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -529,25 +1122,22 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 % self.__class__.pool_ep_name
             )
 
+
     # ------------------------------------------------------------------
-    # Step 04 — Enter maintenance mode
+    # Step 11 - enter maintenance mode
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_04_enter_maintenance_mode(self):
+    def test_11_enter_maintenance_mode(self):
         """
         Put the pool into maintenance mode and verify:
           - CloudStack reports Maintenance
           - ONTAP: FlexVol is still online and export policy unchanged
             (maintenance is a CS-only state change)
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
 
-        cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.enableStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(self.__class__.pool.id, "Maintenance", timeout=120)
+        result = self._enter_maintenance(self.__class__.pool.id)
         self.assertEqual(result.state, "Maintenance")
 
         ontap_vol = self.ontap.get_volume(self.__class__.pool.name)
@@ -565,12 +1155,80 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 % self.__class__.pool_ep_name
             )
 
+
     # ------------------------------------------------------------------
-    # Step 05 — Cancel maintenance mode
+    # Step 12 - grow and shrink storage pool in maintenance
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_05_cancel_maintenance_mode(self):
+    def test_12_grow_and_shrink_storage_pool_in_maintenance(self):
+        """
+        Grow and shrink the pool while it is in maintenance mode and verify:
+          - Both capacity updates are accepted
+          - CloudStack and ONTAP reach each requested size
+          - The pool remains in Maintenance throughout
+          - The FlexVol remains online and the export policy is unchanged
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_03 must pass first"
+        )
+        pool = self.__class__.pool
+
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before maintenance resize")
+        self.assertEqual(
+            listed[0].state, "Maintenance",
+            "Pool must be in Maintenance - test_11 must pass first, got '%s'"
+            % listed[0].state,
+        )
+
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing before maintenance resize"
+        )
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s NFS3 pool '%s' while in Maintenance: target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
+
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Maintenance",
+                "Pool should remain in Maintenance after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
+
+        if self.__class__.pool_ep_name:
+            self.assertIsNotNone(
+                self.ontap.get_export_policy(self.__class__.pool_ep_name),
+                "Export policy disappeared during maintenance resize",
+            )
+
+
+    # ------------------------------------------------------------------
+    # Step 13 - cancel maintenance mode
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_13_cancel_maintenance_mode(self):
         """
         Cancel maintenance mode and verify the pool returns to Up.
 
@@ -580,15 +1238,9 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
           - ONTAP: NFS export policy still present
         """
         self.assertIsNotNone(self.__class__.pool,
-                             "Pool absent — test_01 must pass first")
+                             "Pool absent — test_03 must pass first")
 
-        cmd = cancelStorageMaintenance.cancelStorageMaintenanceCmd()
-        cmd.id = self.__class__.pool.id
-        self.apiClient.cancelStorageMaintenance(cmd)
-
-        result = self._poll_pool_state(
-            self.__class__.pool.id, "Up", timeout=120
-        )
+        result = self._exit_maintenance(self.__class__.pool.id)
         self.assertEqual(
             result.state, "Up",
             "Pool should be 'Up' after cancel maintenance, got '%s'"
@@ -615,12 +1267,13 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 % self.__class__.pool_ep_name
             )
 
+
     # ------------------------------------------------------------------
-    # Step 06 — Delete the storage pool
+    # Step 14 - delete pool from maintenance
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_06_delete_pool_from_maintenance(self):
+    def test_14_delete_pool_from_maintenance(self):
         """
         Enter maintenance mode then delete the storage pool.
 
@@ -629,20 +1282,18 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
           - ONTAP: FlexVol is deleted
           - ONTAP: NFS export policy is deleted
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
         pool = self.__class__.pool
         pool_name = pool.name
         ep_name = self.__class__.pool_ep_name
 
-        # Pool is Up after test_05 succeeded; must enter Maintenance before deletion.
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+        # Pool is Up after test_13 succeeded; must enter Maintenance before deletion.
+        self._enter_maintenance(pool.id)
 
         self._delete_pool(pool.id)
         self.__class__.pool = None
         self.__class__.pool_ep_name = None
+        self.__class__.resize_original_size = None
 
         # CloudStack: pool must be gone
         try:
@@ -666,12 +1317,13 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
                 "Export policy '%s' still exists after pool deletion" % ep_name
             )
 
+
     # ------------------------------------------------------------------
-    # Step 07 - Create fresh pool and allocate a CloudStack volume
+    # Step 15 - create volume on pool
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_07_create_volume_on_pool(self):
+    def test_15_create_volume_on_pool(self):
         """
         Create a new NFS3 pool and allocate a CloudStack data volume.
         For NFS3, createAsync is a no-op on ONTAP (volume is a CloudStack record
@@ -686,7 +1338,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         self.__class__.pool = pool
         log_progress(
             logger, "info",
-            "test_07: created storage pool name='%s' id=%s state=%s",
+            "test_15: created storage pool name='%s' id=%s state=%s",
             pool.name, pool.id, pool.state,
         )
 
@@ -703,7 +1355,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         self.assertIsNotNone(vol, "createVolume returned None")
         log_progress(
             logger, "info",
-            "test_07: created CloudStack volume name='%s' id=%s state=%s "
+            "test_15: created CloudStack volume name='%s' id=%s state=%s "
             "on pool='%s' (id=%s) account='%s' domain='%s' — "
             "switch to this account in the UI to see the volume",
             getattr(vol, "name", "?"), getattr(vol, "id", "?"),
@@ -732,15 +1384,321 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         # Capacity reporting: FlexVol size and reported capacity unchanged after volume allocation
         self._assert_pool_capacity(pool, "volume-allocated")
 
+
     # ------------------------------------------------------------------
-    # Step 08 - Delete volume then force-delete the pool
+    # Step 16 - create vm and attach volume
     # ------------------------------------------------------------------
 
     @attr(tags=["nfs3_workflow"], required_hardware=True)
-    def test_08_delete_volume_and_pool(self):
+    def test_16_create_vm_and_attach_volume(self):
         """
-        Delete the volume from test_07, enter maintenance, then force-delete
-        the pool.
+        Deploy a VM and attach the ONTAP data volume from test_15 to it.
+        Verifies:
+          - VM reaches 'Running'
+          - attachVolume sets the volume's virtualmachineid (on NFS3 shared
+            storage CloudStack leaves the volume state at 'Ready', so
+            virtualmachineid is the reliable attach signal)
+          - VM is still 'Running' after the attach
+          - ONTAP: FlexVol stays online and the pool capacity is unchanged
+          - ONTAP: the volume's data file is materialised in the FlexVol
+            (NFS3 creates it lazily, during attach rather than createVolume)
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_15 must pass first"
+        )
+        self.assertIsNotNone(
+            self.__class__.volume, "Volume absent - test_15 must pass first"
+        )
+        if self.__class__.template_id is None:
+            self.skipTest(
+                "No ready user KVM template in the zone - cannot deploy a VM"
+            )
+        self.assertIsNotNone(
+            self.__class__.service_offering_id,
+            "No service offering available - check the CloudStack setup"
+        )
+
+        pool = self.__class__.pool
+        vol = self.__class__.volume
+
+        log_progress(
+            logger, "info",
+            "Deploying VM for NFS3 pool '%s' (template=%s, offering=%s)",
+            pool.name, self.__class__.template_id,
+            self.__class__.service_offering_id,
+        )
+
+        cmd = deployVirtualMachineAPI.deployVirtualMachineCmd()
+        cmd.zoneid = self.zone.id
+        cmd.templateid = self.__class__.template_id
+        cmd.serviceofferingid = self.__class__.service_offering_id
+        cmd.account = self.account.name
+        cmd.domainid = self.domain.id
+        if self.__class__.network_id:
+            cmd.networkids = self.__class__.network_id
+
+        vm = self.apiClient.deployVirtualMachine(cmd)
+        self.assertIsNotNone(vm, "deployVirtualMachine returned None")
+        self.__class__.vm = vm
+
+        vm_obj = _wait_for_vm_state(self.apiClient, vm.id, "Running",
+                                    timeout=600)
+        self.assertIsNotNone(
+            vm_obj, "VM %s never appeared in listVirtualMachines" % vm.id
+        )
+        self.assertEqual(
+            vm_obj.state, "Running",
+            "VM should be 'Running' before attach, got '%s'" % vm_obj.state
+        )
+
+        log_progress(
+            logger, "info",
+            "Attaching volume '%s' to VM '%s'", vol.id, vm.id,
+        )
+        attach_cmd = attachVolumeAPI.attachVolumeCmd()
+        attach_cmd.id = vol.id
+        attach_cmd.virtualmachineid = vm.id
+        self.assertIsNotNone(
+            self.apiClient.attachVolume(attach_cmd),
+            "attachVolume returned None"
+        )
+
+        vol_vmid = self._poll_volume_attached(vol.id, timeout=180)
+        self.assertEqual(
+            vol_vmid, vm.id,
+            "Volume %s should report virtualmachineid=%s after attach, got %s"
+            % (vol.id, vm.id, vol_vmid)
+        )
+
+        vm_after = _wait_for_vm_state(self.apiClient, vm.id, "Running",
+                                      timeout=60)
+        self.assertEqual(
+            vm_after.state, "Running",
+            "VM should still be 'Running' after attach, got '%s'"
+            % vm_after.state
+        )
+
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing after volume attach"
+        )
+        self.assertEqual(
+            ontap_vol.get("state"), "online",
+            "ONTAP FlexVol should be 'online' after attach, got '%s'"
+            % ontap_vol.get("state")
+        )
+
+        # NFS3 materialises the volume's backing file during attach, not at
+        # createVolume time, so it must be present now.
+        files = self.ontap.list_files_in_volume(pool.name)
+        self.assertIsNotNone(
+            next((f for f in files if vol.id in f), None),
+            "No data file matching volume UUID '%s' in FlexVol '%s' after "
+            "attach; files present: %s" % (vol.id, pool.name, files)
+        )
+
+        self._assert_pool_capacity(pool, "vm-attached")
+
+
+    # ------------------------------------------------------------------
+    # Step 17 - reject shrink below used capacity
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_17_reject_shrink_below_used_capacity(self):
+        """
+        Attempt to shrink the pool below ONTAP used space and verify the
+        request is rejected while the volume, pool capacity, and NFS export
+        policy remain unchanged.
+
+        Runs after test_16, so the FlexVol holds the data file of a volume
+        attached to a running VM.  That file is thin, though, and in practice
+        leaves used space under the 20 MiB FlexVol floor, so incompressible
+        data is written through the ONTAP files API to get above it and
+        removed before this test returns.  The fill is skipped whenever used
+        space is already high enough on its own.
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent — test_16 must pass first"
+        )
+        self.assertIsNotNone(
+            self.__class__.volume, "Volume absent — test_16 must pass first"
+        )
+        pool = self.__class__.pool
+        self.assertIsNotNone(
+            self.ontap.get_volume(pool.name),
+            "ONTAP FlexVol not found for pool '%s'" % pool.name,
+        )
+
+        export_policy_name = self.__class__.pool_ep_name
+        self.assertIsNotNone(
+            export_policy_name,
+            "Export policy name was not recorded by test_15",
+        )
+        export_policy_before = self.ontap.get_export_policy(
+            export_policy_name
+        )
+        self.assertIsNotNone(
+            export_policy_before,
+            "Export policy '%s' missing before rejected used-capacity shrink"
+            % export_policy_name,
+        )
+
+        vol_before = self._cs_volume_snapshot(self.__class__.volume.id)
+        # The attached volume is thin on both protocols, so it usually does
+        # not put 20 MiB on disk by itself.  This writes incompressible data
+        # only when used space is still under the FlexVol floor, and removes
+        # it before returning.
+        filler_name, used_bytes = self._fill_flexvol_above_minimum(pool.name)
+        self.__class__.filler_filename = filler_name
+        self.__class__.filler_flexvol = pool.name if filler_name else None
+        try:
+            below_used = self._shrink_target_below_used(used_bytes)
+            log_progress(
+                logger, "info",
+                "Shrinking NFS3 pool '%s' below ONTAP used capacity: "
+                "used=%d B, requested=%d B "
+                "(FlexVol minimum=%d B, expect reject)",
+                pool.name, used_bytes, below_used, self.ONTAP_MIN_FLEXVOL_SIZE,
+            )
+            self._assert_capacity_update_rejected(
+                pool.id, below_used, "shrink-below-used",
+                pool.id, pool.name,
+                # ONTAP's wording: "Selected volume size is too small to
+                # hold the current volume data.  New volume size must be at
+                # least 34.3MB ...".  Matching the specific phrase stops an
+                # unrelated resize failure from counting as a pass.
+                expected_error=(
+                    "too small to hold the current volume data",
+                    "too small to hold",
+                    "cannot reduce",
+                ),
+            )
+            self._assert_cs_volume_untouched(vol_before, "shrink-below-used")
+            self.assertGreater(
+                self._flexvol_used_bytes(pool.name),
+                self.ONTAP_MIN_FLEXVOL_SIZE,
+                "ONTAP used space dropped below the FlexVol minimum after "
+                "the rejected shrink",
+            )
+            export_policy_after_used = self.ontap.get_export_policy(
+                export_policy_name
+            )
+            self.assertIsNotNone(
+                export_policy_after_used,
+                "Export policy '%s' disappeared after rejected "
+                "used-capacity shrink" % export_policy_name,
+            )
+            self.assertEqual(
+                export_policy_after_used.get("name"),
+                export_policy_before.get("name"),
+                "Export policy changed during rejected used-capacity shrink",
+            )
+            self._assert_export_policy_has_host_ips(export_policy_name)
+        finally:
+            self._delete_filler_file(pool.name, filler_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 18 - grow and shrink pool with vm attached
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_18_grow_and_shrink_pool_with_vm_attached(self):
+        """
+        Grow the pool and shrink it straight back while the volume is
+        attached to the running VM from test_16, so resize is exercised
+        against a pool that is genuinely in use rather than an idle one.
+        Verifies:
+          - grow: CloudStack and ONTAP both reach the requested size
+          - shrink back: both return to the starting size
+          - the VM stays 'Running' and keeps the volume across both resizes
+          - ONTAP: FlexVol stays online
+          - ONTAP: export policy still covers every cluster host IP
+        """
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_15 must pass first"
+        )
+        self.assertIsNotNone(
+            self.__class__.volume, "Volume absent - test_15 must pass first"
+        )
+        if self.__class__.vm is None:
+            self.skipTest(
+                "No VM was deployed (test_16 skipped) - nothing to resize "
+                "a pool underneath"
+            )
+
+        pool = self.__class__.pool
+        vm = self.__class__.vm
+        vol = self.__class__.volume
+
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Pool missing before the in-use resize")
+        original_size = int(getattr(listed[0], "capacitybytes", 0) or 0)
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        log_progress(
+            logger, "info",
+            "Growing in-use pool '%s' from %d B to %d B (VM %s holds the "
+            "volume)", pool.name, original_size, grow_target, vm.id,
+        )
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = grow_target
+        self.apiClient.updateStoragePool(cmd)
+
+        grown = self._poll_pool_capacity(pool.id, grow_target, timeout=120)
+        self.assertEqual(
+            grown.state, "Up",
+            "Pool should stay 'Up' after growing under a VM, got '%s'"
+            % grown.state
+        )
+        grown_vol = self._poll_ontap_volume_size(
+            pool.name, grow_target, timeout=120
+        )
+        self.assertEqual(grown_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, grow_target, timeout=120
+        )
+        self._assert_vm_running_with_volume(vm.id, vol.id, "grow-with-vm")
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+        log_progress(
+            logger, "info",
+            "Shrinking in-use pool '%s' back from %d B to %d B",
+            pool.name, grow_target, original_size,
+        )
+        cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+        cmd.id = pool.id
+        cmd.capacitybytes = original_size
+        self.apiClient.updateStoragePool(cmd)
+
+        shrunk = self._poll_pool_capacity(pool.id, original_size, timeout=120)
+        self.assertEqual(
+            shrunk.state, "Up",
+            "Pool should stay 'Up' after shrinking under a VM, got '%s'"
+            % shrunk.state
+        )
+        shrunk_vol = self._poll_ontap_volume_size(
+            pool.name, original_size, timeout=120
+        )
+        self.assertEqual(shrunk_vol.get("state"), "online")
+        self._poll_kvm_pool_capacity(
+            pool.id, pool.name, original_size, timeout=120
+        )
+        self._assert_vm_running_with_volume(vm.id, vol.id, "shrink-with-vm")
+        self._assert_export_policy_has_host_ips(self.__class__.pool_ep_name)
+
+
+    # ------------------------------------------------------------------
+    # Step 19 - delete volume and pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_19_delete_volume_and_pool(self):
+        """
+        Detach the volume and destroy the VM from test_16, then delete the
+        volume, enter maintenance, and force-delete the pool.
         Verifies:
           - deleteVolume completes (or expected NFS3 libvirt pool-not-found)
           - Pool transitions to Maintenance
@@ -748,8 +1706,13 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
           - ONTAP: FlexVol deleted
           - ONTAP: export policy deleted
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_07 must pass first")
-        self.assertIsNotNone(self.__class__.volume, "Volume absent - test_07 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_15 must pass first")
+        self.assertIsNotNone(self.__class__.volume, "Volume absent - test_15 must pass first")
+
+        # A volume still attached to a VM cannot be deleted, so unwind test_16
+        # first.  Both steps are no-ops when test_16 skipped.
+        self._detach_volume_if_attached(self.__class__.volume.id)
+        self.__class__._destroy_vm_if_present()
 
         pool = self.__class__.pool
         pool_name = pool.name
@@ -771,7 +1734,7 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
         self.__class__.volume = None
         self.__class__.pool_ep_name = None
 
-        # Clean up pool from test_01-04 (left in Maintenance when test_05/06 skipped).
+        # Clean up pool from test_03-04 (left in Maintenance when test_08/06 skipped).
         pool2 = self.__class__.pool2
         if pool2 is not None:
             self._force_delete_pool_in_maintenance(
@@ -779,3 +1742,117 @@ class TestOntapNFS3PrimaryStorageWorkflow(OntapTestBase):
             )
             self.__class__.pool2 = None
             self.__class__.pool2_ep_name = None
+
+    # ------------------------------------------------------------------
+    # Step 20 - delete pool with flexvol predeleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_20_delete_pool_with_flexvol_predeleted(self):
+        """
+        Delete the backing FlexVol directly on ONTAP, then delete the empty
+        pool through CloudStack.  Deletion must tolerate the missing volume
+        rather than leaving an undeletable pool behind.
+
+        Verifies:
+          - deleteStoragePool succeeds with the FlexVol already gone
+          - the pool is removed from CloudStack
+          - the export policy is cleaned up as well
+        """
+        pool, ep_name = self._create_throwaway_pool("PreDelVol")
+        try:
+            self._enter_maintenance(pool.id)
+            # Unmount on the KVM hosts first: once the FlexVol is gone the
+            # export is unreachable and a stale mount can wedge the host.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+            log_progress(
+                logger, "info",
+                "Deleting ONTAP FlexVol '%s' behind CloudStack's back",
+                pool.name,
+            )
+            self.ontap.offline_and_delete_volume(pool.name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "ONTAP FlexVol '%s' still present after direct deletion"
+                % pool.name,
+            )
+
+            self._delete_pool(pool.id)
+            self._assert_pool_gone_from_cs(pool.id, pool.name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "ONTAP FlexVol '%s' reappeared after pool deletion"
+                % pool.name,
+            )
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' still exists after pool deletion"
+                % ep_name,
+            )
+            self.__class__.pool2 = None
+            self.__class__.pool2_ep_name = None
+        finally:
+            self._cleanup_throwaway_pool(
+                self.__class__.pool2,
+                flexvol_name=pool.name,
+                ep_name=ep_name,
+            )
+
+    # ------------------------------------------------------------------
+    # Step 21 - delete pool with export policy predeleted
+    # ------------------------------------------------------------------
+
+    @attr(tags=["nfs3_workflow"], required_hardware=True)
+    def test_21_delete_pool_with_export_policy_predeleted(self):
+        """
+        Delete the NFS export policy directly on ONTAP, then delete the
+        empty pool through CloudStack.  Deletion must tolerate the missing
+        policy and still remove the FlexVol.
+
+        Verifies:
+          - deleteStoragePool succeeds with the export policy already gone
+          - the pool is removed from CloudStack
+          - ONTAP: the FlexVol is deleted
+        """
+        pool, ep_name = self._create_throwaway_pool("PreDelEp")
+        try:
+            self.assertIsNotNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' missing for the fresh throwaway pool"
+                % ep_name,
+            )
+            self._enter_maintenance(pool.id)
+            # Dropping the policy revokes the hosts' NFS access, so unmount
+            # before it disappears.
+            self._cleanup_kvm_storage_pool_mounts(pool.id)
+            log_progress(
+                logger, "info",
+                "Deleting NFS export policy '%s' behind CloudStack's back",
+                ep_name,
+            )
+            self.ontap.reassign_volume_export_policy(pool.name)
+            self.ontap.delete_export_policy(ep_name)
+            self.assertIsNone(
+                self.ontap.get_export_policy(ep_name),
+                "Export policy '%s' still present after direct deletion"
+                % ep_name,
+            )
+
+            self._delete_pool(pool.id)
+            self._assert_pool_gone_from_cs(pool.id, pool.name)
+            self.assertIsNone(
+                self.ontap.get_volume(pool.name),
+                "ONTAP FlexVol '%s' still exists after pool deletion"
+                % pool.name,
+            )
+            self.__class__.pool2 = None
+            self.__class__.pool2_ep_name = None
+        finally:
+            self._cleanup_throwaway_pool(
+                self.__class__.pool2,
+                flexvol_name=pool.name,
+                ep_name=ep_name,
+            )
+
+
+    # ------------------------------------------------------------------

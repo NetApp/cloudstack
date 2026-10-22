@@ -18,16 +18,17 @@
 """
 Zone-scoped primary storage lifecycle tests for NetApp ONTAP (iSCSI).
 
-Creates a zone-scoped pool (scope=ZONE, no clusterid/podid).  CloudStack calls
-OntapPrimaryDatastoreLifecycle.attachZone(), which connects all eligible KVM
-hosts in the zone and creates igroups for each host's IQN.
+Creates a zone-scoped pool (scope=ZONE, no clusterid/podid). Host igroups are
+shared by host and SVM and are created only when a LUN is granted to a host,
+not when an empty pool is created.
 
-Workflow:
+Test order — sequential workflow that must run in order:
   01  Create zone-scoped iSCSI pool — pool.state Up; ONTAP FlexVol online;
-                                      igroup present for each cluster host IQN
-  02  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
-  03  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
-  04  Delete zone-scoped pool — pool gone; FlexVol deleted; igroups deleted
+      pre-existing shared igroups unchanged
+  02  Grow and shrink zone-scoped pool — CloudStack and ONTAP agree
+  03  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
+  04  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
+  05  Delete zone-scoped pool — pool gone; FlexVol deleted; baseline restored
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -40,27 +41,29 @@ Running:
       --marvin-config=test/integration/plugins/ontap/ontap.cfg \\
       test/integration/plugins/ontap/iscsi/pool/test_zone_scoped_pool.py -v
 
-Note: Tests 01-04 share class-level state (sequential).  Always run the full
-suite.
+Note: Tests share class-level state (sequential).  Always run the full suite.
 """
 
 import base64
 import logging
 import random
-import re
 import unittest
 
 from nose.plugins.attrib import attr
 
 from marvin.cloudstackAPI import (
     createStoragePool as createStoragePoolAPI,
-    enableStorageMaintenance,
     updateStoragePool as updateStoragePoolAPI,
 )
 from marvin.lib.base import StoragePool
 from marvin.lib.common import list_storage_pools
 
-from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
+from ontap_test_base import (
+    OntapRestClient,
+    OntapTestBase,
+    get_datacenter_config,
+    log_progress,
+)
 
 logger = logging.getLogger("TestOntapISCSIZoneScopedPool")
 
@@ -123,17 +126,6 @@ class TestData:
 
 
 # ---------------------------------------------------------------------------
-# iSCSI path helpers
-# ---------------------------------------------------------------------------
-
-def _igroup_name(svm_name, host_name):
-    """Mirror OntapStorageUtils.getIgroupName: cs_{svmName}_{sanitizedHostName}"""
-    short = host_name.split(".")[0]
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", short)
-    return "cs_%s_%s" % (svm_name, sanitized)
-
-
-# ---------------------------------------------------------------------------
 # Sequential workflow test class
 # ---------------------------------------------------------------------------
 
@@ -176,6 +168,7 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
         cls.svm_name = svm_name
 
         cls._setup_cloudstack_resources(config, cls.testdata[TestData.account])
+        cls._capture_igroup_baseline()
 
     # No per-test tearDown — state intentionally persists between steps.
 
@@ -209,35 +202,6 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
         response = self.apiClient.createStoragePool(cmd)
         return StoragePool(response.__dict__)
 
-    def _assert_igroups_for_hosts(self, expect_present):
-        """Assert igroups are present (or absent) for each cluster host IQN."""
-        for host in self.cluster_hosts:
-            iqn = (getattr(host, "storageurl", None)
-                   or getattr(host, "StorageUrl", None))
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            if expect_present:
-                self.assertIsNotNone(
-                    igroup,
-                    "ONTAP igroup '%s' not found for host '%s' after pool creation"
-                    % (igroup_name, host.name)
-                )
-                initiator_names = [
-                    i.get("name", "") for i in igroup.get("initiators", [])
-                ]
-                self.assertIn(
-                    iqn, initiator_names,
-                    "Host IQN '%s' not in igroup '%s' initiators: %s"
-                    % (iqn, igroup_name, initiator_names)
-                )
-            else:
-                self.assertIsNone(
-                    igroup,
-                    "ONTAP igroup '%s' still exists after pool deletion" % igroup_name
-                )
-
     # ------------------------------------------------------------------
     # Step 01 — Create zone-scoped iSCSI pool
     # ------------------------------------------------------------------
@@ -246,12 +210,10 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
     def test_01_create_zone_scoped_pool(self):
         """
         Create a zone-scoped iSCSI primary storage pool (no clusterid/podid).
-        CloudStack calls attachZone(), which connects all eligible KVM hosts
-        in the zone and creates igroups for each host's IQN.
         Verifies:
           - pool.state is Up, type is OntapiSCSI
           - ONTAP: FlexVol is online
-          - ONTAP: igroup exists for each cluster host with the correct IQN
+          - ONTAP: pre-existing shared igroups are unchanged
         """
         pool = self._create_zone_pool()
         self.__class__.pool = pool
@@ -276,22 +238,81 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
             "ONTAP FlexVol should be 'online', got '%s'" % ontap_vol.get("state")
         )
 
-        # ONTAP: igroups must exist for each cluster host with IQN
-        self._assert_igroups_for_hosts(expect_present=True)
+        # ONTAP: the plugin creates an igroup only when a host is first
+        # granted access to a LUN, so creating an empty pool must not make
+        # new ones.
+        self._assert_igroup_baseline_unchanged(
+            "after creating an empty zone-scoped pool"
+        )
 
     # ------------------------------------------------------------------
-    # Step 02 — Disable zone-scoped pool
+    # Step 02 — Grow and shrink zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_zone_pool"], required_hardware=True)
-    def test_02_disable_zone_scoped_pool(self):
+    def test_02_grow_and_shrink_zone_scoped_pool(self):
+        """Grow the zone-scoped pool and shrink it back to its original size."""
+        self.assertIsNotNone(
+            self.__class__.pool, "Pool absent - test_01 must pass first"
+        )
+        pool = self.__class__.pool
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Zone-scoped pool missing before resize")
+        self.assertEqual(
+            listed[0].state, "Up",
+            "Zone-scoped pool must be Up before resize, got '%s'"
+            % listed[0].state,
+        )
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol missing before zone-scoped resize"
+        )
+        original_size = max(
+            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
+        )
+        grow_target = original_size + TestData.ONTAP_MIN_VOLUME_SIZE
+
+        for target, operation in (
+                (grow_target, "grow"),
+                (original_size, "shrink")):
+            log_progress(
+                logger, "info",
+                "%s zone-scoped iSCSI pool '%s': target=%d B",
+                operation.capitalize(), pool.name, target,
+            )
+            cmd = updateStoragePoolAPI.updateStoragePoolCmd()
+            cmd.id = pool.id
+            cmd.capacitybytes = target
+            self.apiClient.updateStoragePool(cmd)
+
+            resized = self._poll_pool_capacity(pool.id, target, timeout=120)
+            self.assertEqual(
+                resized.state, "Up",
+                "Zone-scoped pool should remain Up after %s, got '%s'"
+                % (operation, resized.state),
+            )
+            resized_ontap = self._poll_ontap_volume_size(
+                pool.name, target, timeout=120
+            )
+            self.assertEqual(resized_ontap.get("state"), "online")
+            self._assert_igroup_baseline_unchanged(
+                "after %s of empty zone-scoped pool" % operation
+            )
+
+    # ------------------------------------------------------------------
+    # Step 03 — Disable zone-scoped pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_zone_pool"], required_hardware=True)
+    def test_03_disable_zone_scoped_pool(self):
         """
         Disable the zone-scoped iSCSI pool.
         Verifies:
           - pool.state is Disabled
           - ONTAP: FlexVol still online; igroups unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_02 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -308,22 +329,24 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
             "ONTAP FlexVol should still be 'online' after disable"
         )
 
-        # igroups must still be present after a simple disable
-        self._assert_igroups_for_hosts(expect_present=True)
+        # The pool has no volumes, so shared igroups must remain unchanged.
+        self._assert_igroup_baseline_unchanged(
+            "after disabling an empty zone-scoped pool"
+        )
 
     # ------------------------------------------------------------------
-    # Step 03 — Enable zone-scoped pool
+    # Step 04 — Enable zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_zone_pool"], required_hardware=True)
-    def test_03_enable_zone_scoped_pool(self):
+    def test_04_enable_zone_scoped_pool(self):
         """
         Re-enable the zone-scoped iSCSI pool.
         Verifies:
           - pool.state is Up
           - ONTAP: FlexVol still online; igroups unchanged
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_03 must pass first")
 
         cmd = updateStoragePoolAPI.updateStoragePoolCmd()
         cmd.id = self.__class__.pool.id
@@ -340,31 +363,30 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
             "ONTAP FlexVol should be 'online' after enable"
         )
 
-        # igroups must still be present after re-enable
-        self._assert_igroups_for_hosts(expect_present=True)
+        # The pool has no volumes, so shared igroups must remain unchanged.
+        self._assert_igroup_baseline_unchanged(
+            "after re-enabling an empty zone-scoped pool"
+        )
 
     # ------------------------------------------------------------------
-    # Step 04 — Delete zone-scoped pool
+    # Step 05 — Delete zone-scoped pool
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_zone_pool"], required_hardware=True)
-    def test_04_delete_zone_scoped_pool(self):
+    def test_05_delete_zone_scoped_pool(self):
         """
         Enter maintenance then delete the zone-scoped iSCSI pool.
         Verifies:
           - Pool is removed from CloudStack
           - ONTAP: FlexVol deleted
-          - ONTAP: igroups deleted for all cluster hosts
+          - ONTAP: this pool's maps are gone and shared igroups are restored
         """
-        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_01 must pass first")
+        self.assertIsNotNone(self.__class__.pool, "Pool absent - test_04 must pass first")
 
         pool = self.__class__.pool
         pool_name = pool.name
 
-        maint_cmd = enableStorageMaintenance.enableStorageMaintenanceCmd()
-        maint_cmd.id = pool.id
-        self.apiClient.enableStorageMaintenance(maint_cmd)
-        self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+        self._enter_maintenance(pool.id)
 
         self._delete_pool(pool.id, forced=True)
         self.__class__.pool = None
@@ -383,5 +405,9 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
             "ONTAP FlexVol '%s' still exists after pool deletion" % pool_name
         )
 
-        # ONTAP: igroups for each cluster host must be deleted
-        self._assert_igroups_for_hosts(expect_present=False)
+        self._assert_no_lun_maps_for_volume(
+            pool_name, "after zone-scoped pool deletion"
+        )
+        self._assert_igroup_baseline_unchanged(
+            "after zone-scoped pool deletion"
+        )

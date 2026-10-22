@@ -43,7 +43,7 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (72 tests)
+├── TEST_CASES.md                 # Full test case reference table (119 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -54,7 +54,7 @@ test/integration/plugins/ontap/
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
 │   ├── instance/
-│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/detach + template cache
+│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/resize/detach + template cache
 │   └── template/
 │       └── test_template_cache_negative.py  # Template-cache boundary cases
 │
@@ -66,7 +66,7 @@ test/integration/plugins/ontap/
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
     ├── instance/
-    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/LUN-map lifecycle + template cache
+    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/resize/LUN-map lifecycle + template cache
     └── template/
         └── test_template_cache_negative.py  # Template-cache boundary cases
 ```
@@ -84,7 +84,7 @@ The ONTAP plugin (`plugins/storage/volume/ontap/`) integrates CloudStack's prima
 
 | Aspect | NFS3 | iSCSI |
 | -------- | ------ | ------- |
-| ONTAP object per pool | FlexVol + export policy | FlexVol + igroup per KVM host |
+| ONTAP object per pool | FlexVol + export policy | FlexVol; igroups are shared per KVM host and SVM |
 | ONTAP object per CS volume | None (FlexVol is shared) | One LUN inside the FlexVol |
 | Host connectivity | NFS mount | iSCSI login (IQN-based) |
 | Volume detach from running VM | Works via virtio hot-unplug | Requires KVM guest to support SCSI hot-unplug |
@@ -270,13 +270,15 @@ pool = self.__class__.pool
 self.pool = pool
 ```
 
-**Guard assertion at the start of every test (except test_01)**
+**Guard assertion at the start of every test that depends on a previous one**
 
-Every test after the first starts with an assertion that the previous step's resource exists. This produces a clear, readable failure message instead of a confusing `AttributeError`:
+Every test in a sequential workflow starts with an assertion that the previous step's resource exists. This produces a clear, readable failure message instead of a confusing `AttributeError`:
 ```python
-def test_03_enable_storage_pool(self):
-    self.assertIsNotNone(self.__class__.pool, "Pool absent — test_01 must pass first")
+def test_05_enable_storage_pool(self):
+    self.assertIsNotNone(self.__class__.pool, "Pool absent — test_03 must pass first")
 ```
+
+Isolated negative tests own everything they create, so they carry no such guard. In the pool lifecycle suites the two create-rejection negatives are numbered `test_01` (no aggregate space) and `test_02` (invalid capacitybytes) so that a bad create fails within a minute rather than after the full workflow.
 
 **Creating a storage pool — always use indexed `details[N].key` syntax**
 
@@ -295,6 +297,15 @@ CloudStack operations are asynchronous. Use `_poll_pool_state()` rather than rea
 result = self._poll_pool_state(pool.id, "Maintenance", timeout=120)
 self.assertEqual(result.state, "Maintenance")
 ```
+
+**Shared iSCSI igroups**
+
+iSCSI igroups are named from the host UUID and SVM, not from the storage pool.
+Each iSCSI suite snapshots existing host igroups during `setUpClass()` and
+checks that pool-only operations preserve that baseline. Tests may therefore
+run while another ONTAP iSCSI pool uses the same SVM. The negative tests that
+deliberately delete igroups still require exclusive SVM use and skip when
+another ONTAP pool is present.
 
 ---
 
@@ -321,8 +332,10 @@ self.assertEqual(result.state, "Maintenance")
 | `get_data_lifs(svm_name)` | NFS data LIF count | NFS3 pool lifecycle |
 | `get_igroup(svm_name, name)` | iSCSI igroup existence and initiator list | iSCSI suites |
 | `list_luns_in_volume(svm_name, vol_name)` | LUNs present in a FlexVol | iSCSI volume/instance suites |
-| `list_lun_maps_for_volume(svm_name, vol_name)` | Active LUN-maps for a volume | iSCSI instance suite |
-| `list_files_in_volume(svm_name, vol_name)` | Files inside a FlexVol | NFS3 instance suite |
+| `list_lun_maps_for_volume(svm_name, vol_name)` | Active LUN-maps for a volume | iSCSI pool-with-volumes/instance suites |
+| `list_files_in_volume(vol_name)` | Files inside a FlexVol | NFS3 instance and pool lifecycle suites |
+| `write_file_in_volume(vol_name, filename, size_bytes)` | Write incompressible data into a FlexVol file (no VM) | NFS3/iSCSI pool lifecycle suites |
+| `delete_file_in_volume(vol_name, filename)` | Remove a FlexVol file | NFS3/iSCSI pool lifecycle suites |
 
 ---
 
@@ -330,17 +343,17 @@ self.assertEqual(result.state, "Maintenance")
 
 | Suite | File | Tests | What it covers |
 | ------- | ------ | ------- | --------------- |
-| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete |
-| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 7 | Same + live volume present; negative delete guard |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 4 | Zone scope — all hosts connected via `attachZone` |
+| NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete, then re-create with a volume, reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or export policy |
+| NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Lifecycle with a live volume, deletion with a pre-deleted FlexVol or export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP/KVM verification, disable, enable, and delete |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle with hot-plug/detach; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle with stopped-VM qcow2 grow; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
-| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 8 | Create, disable, enable, maintenance, delete + igroups |
-| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 7 | Same + live LUN present; negative delete guard |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 4 | Zone scope |
+| iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or igroups |
+| iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Lifecycle with a live LUN, deletion with a pre-deleted FlexVol or igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP verification, disable, enable, and delete |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 10 | Full VM lifecycle; LUN-maps on VM start/stop/detach; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle; stopped-VM LUN grow and LUN-map checks; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
@@ -356,7 +369,7 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | `Lost connection to MySQL` | MySQL not accepting remote connections | Enable remote MySQL access (see Prerequisites §3) |
 | `sh: python: command not found` (repeated) | Marvin internal call — harmless on macOS | Ignore; Marvin Init still succeeds |
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
-| iSCSI `test_07` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
+| iSCSI `test_09` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
 | `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
