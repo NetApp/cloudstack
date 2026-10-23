@@ -1787,7 +1787,11 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
                 VolumeObjectTO newVolume = new VolumeObjectTO();
 
                 newVolume.setSize(volumeInfo.getSize());
-                newVolume.setPath(volumeInfo.get_iScsiName());
+                String path = volumeInfo.get_iScsiName();
+                if (path == null) {
+                    path = volumeInfo.getPath();
+                }
+                newVolume.setPath(path);
                 newVolume.setFormat(volumeInfo.getFormat());
 
                 copyCmdAnswer = new CopyCmdAnswer(newVolume);
