@@ -52,6 +52,8 @@ import org.springframework.stereotype.Component;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.CheckVirtualMachineAnswer;
+import com.cloud.agent.api.CheckVirtualMachineCommand;
 import com.cloud.agent.api.MigrateAnswer;
 import com.cloud.agent.api.MigrateCommand;
 import com.cloud.agent.api.MigrateCommand.MigrateDiskInfo;
@@ -90,7 +92,7 @@ import com.cloud.vm.dao.VMInstanceDao;
 
 /**
  * KVM volume and VM-with-volume migration when either side is NetApp ONTAP primary storage.
- * Same-SVM NFS and same-SVM iSCSI offline copies are normally done by the ONTAP driver before this strategy runs.
+ * Same-SVM NFS offline copy is a CopyCommand from this strategy. Same-SVM iSCSI offline copy is done by the ONTAP driver before this strategy runs.
  */
 @Component
 public class OntapDataMotionStrategy implements DataMotionStrategy {
@@ -237,6 +239,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
 
                 VolumeVO destVolume = duplicateVolumeOnAnotherStorage(srcVolume, destStoragePool);
                 VolumeInfo destVolumeInfo = _volumeDataFactory.getVolume(destVolume.getId(), destDataStore);
+                // The destination volume row already exists. Failure cleanup only expunges volumes
+                // recorded here, so record it before grant, create, or connect can throw.
+                srcVolumeInfoToDestVolumeInfo.put(srcVolumeInfo, destVolumeInfo);
 
                 destVolumeInfo.processEvent(Event.MigrationCopyRequested);
                 destVolumeInfo.processEvent(Event.MigrationCopySucceeded);
@@ -251,6 +256,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                 destVolumeInfo = _volumeDataFactory.getVolume(destVolume.getId(), destDataStore);
                 _volumeService.grantAccess(destVolumeInfo, destHost, destDataStore);
                 destVolumeInfo = _volumeDataFactory.getVolume(destVolume.getId(), destDataStore);
+                // grantAccess can change the path and iSCSI name. Disconnect and revoke on failure
+                // must use refreshed volume.
+                srcVolumeInfoToDestVolumeInfo.put(srcVolumeInfo, destVolumeInfo);
 
                 String destPath = connectHostToVolume(destHost, destVolumeInfo.getPoolId(), getVolumeIdentifier(destVolumeInfo, destStoragePool));
 
@@ -280,8 +288,6 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                 if (!srcVolumeInfo.getPath().equals(migrateDiskInfo.getSerialNumber())) {
                     migrateStorage.put(migrateDiskInfo.getSerialNumber(), migrateDiskInfo);
                 }
-
-                srcVolumeInfoToDestVolumeInfo.put(srcVolumeInfo, destVolumeInfo);
             }
 
             PrepareForMigrationCommand pfmc = new PrepareForMigrationCommand(vmTO);
@@ -312,7 +318,19 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                 migrateCommand.setNewVmCpuShares(newVmCpuShares);
             }
 
-            MigrateAnswer migrateAnswer = (MigrateAnswer)_agentMgr.send(srcHost.getId(), migrateCommand);
+            // The migrate command can time out after libvirt has already started the VM on the
+            // destination. If that host reports PowerOn, finish the migration. Treating the timeout
+            // as failure would expunge disks that VM is using.
+            MigrateAnswer migrateAnswer;
+            try {
+                migrateAnswer = (MigrateAnswer)_agentMgr.send(srcHost.getId(), migrateCommand);
+            } catch (OperationTimedoutException ex) {
+                if (!isVmRunningOnDestination(vm, destHost)) {
+                    throw ex;
+                }
+                logger.info("VM [{}] is running on destination host [{}] after a migration timeout", vmTO.getId(), destHost.getId());
+                migrateAnswer = new MigrateAnswer(migrateCommand, true, ex.getMessage(), null);
+            }
             if (migrateAnswer == null) {
                 throw new CloudRuntimeException("Unable to get an answer to the migrate command");
             }
@@ -351,6 +369,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
         if (ScopeType.HOST.equals(destVolumeInfo.getDataStore().getScope().getScopeType())) {
             return _hostDao.findById(destVolumeInfo.getDataStore().getScope().getScopeId());
         }
+        // A cluster-scoped source is copied by an enabled host in that cluster, because grantAccess
+        // then lets that host reach the destination pool. A source with no cluster uses an enabled
+        // host in the destination zone.
         StoragePoolVO srcStoragePoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
         List<HostVO> hosts;
         if (srcStoragePoolVO.getClusterId() != null) {
@@ -369,6 +390,19 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             }
         }
         throw new CloudRuntimeException("Unable to locate a host to migrate the volume on");
+    }
+
+    // Returns true when the destination host reports the VM as PowerOn. A migrate timeout in that
+    // state means the VM is already using the destination disks, so the migration should complete.
+    private boolean isVmRunningOnDestination(VMInstanceVO vm, Host destHost) {
+        try {
+            Answer answer = _agentMgr.send(destHost.getId(), new CheckVirtualMachineCommand(vm.getInstanceName()));
+            return answer instanceof CheckVirtualMachineAnswer && answer.getResult()
+                    && VirtualMachine.PowerState.PowerOn.equals(((CheckVirtualMachineAnswer)answer).getState());
+        } catch (Exception e) {
+            logger.warn("Could not check whether VM [{}] is running on destination host [{}]", vm.getId(), destHost.getId(), e);
+            return false;
+        }
     }
 
     private String sendVolumeMigrationCommand(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo, HostVO hostVO, boolean useCopyCommand) {
