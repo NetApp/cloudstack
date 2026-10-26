@@ -24,8 +24,7 @@ Workflow:
   14 relocate one host once, then NFS3 cross-cluster C1/C2/Z cases
   18-21 iSCSI cross-cluster C1/C2/Z cases
   22 reject a cluster-1 pool mapped to a cluster-2 destination host
-  23-26 live QoS migration for NFS3 and iSCSI, including two policies
-  27 live NFS3 move where root and data keep different QoS policies
+  23-27 put both hosts back in the primary cluster, then live QoS
 """
 
 import unittest
@@ -596,14 +595,25 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self._assert_host_snapshot_unchanged(host_snapshot, vm)
 
     def _live_qos(self, protocol, root_iops, data_iops, second_pool=False):
-        vm = self._prepare_qos_vm(root_iops, data_iops)
-        pool = self._c1a(protocol)
+        # test_14 leaves one host in each cluster. Live migration needs
+        # two hosts in the primary cluster, same as test_01 through test_13.
+        self.__class__._ensure_hosts_in_primary_cluster(2)
+        self.__class__._refresh_host_inventory()
+        vm = self._prepare_qos_vm(
+            root_iops, data_iops,
+            protocol=protocol if second_pool else None,
+        )
+        if second_pool:
+            source = self._pool_by_id(self._vm_volumes(vm.id)[0].storageid)
+            pools = (
+                self._migration_pool(protocol, 0),
+                self._migration_pool(protocol, 1),
+            )
+            pool = pools[1] if source.id == pools[0].id else pools[0]
+        else:
+            pool = self._c1a(protocol)
         vm, pool = self._live_migrate(vm, pool, protocol)
         self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
-        if second_pool:
-            pool = self._c1b(protocol)
-            vm, pool = self._live_migrate(vm, pool, protocol)
-            self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
     def test_23_nfs3_qos_default_primary_to_cluster(self):

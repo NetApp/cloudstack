@@ -157,6 +157,7 @@ class OntapMigrationTestBase(OntapTestBase):
         cls.created_vms = []
         cls.service_offerings = {}
         cls.disk_offerings = {}
+        cls.qos_disk_offerings = {}
         try:
             cls.default_pool = cls._find_default_primary_pool()
             cls.ontap_pools = cls._ensure_migration_pools()
@@ -174,6 +175,7 @@ class OntapMigrationTestBase(OntapTestBase):
             )
             cls.template_id = cls._find_template()
             cls.network_id = cls._find_or_create_network()
+            cls._ensure_disk_offerings()
         except Exception:
             cls.tearDownClass()
             raise
@@ -1210,6 +1212,40 @@ class OntapMigrationTestBase(OntapTestBase):
         return getattr(cls.default_pool, "tags", None)
 
     @classmethod
+    def _ensure_disk_offerings(cls):
+        """Create the plain and QoS disk offerings used by this suite."""
+        cls._service_offering()
+        cls._small_data_offering()
+        default_tag = cls._default_storage_tag()
+        cls._root_disk_offering(default_tag)
+        cls._qos_disk_offering(8, 100, 500, default_tag)
+        cls._qos_disk_offering(1, 100, 500)
+        cls._qos_disk_offering(1, 100, 800)
+        protocols = cls.config_data.get("storagePool", {}).get(
+            "protocols", {}
+        )
+        for key in ("nfs3", "iscsi"):
+            config = protocols.get(key, {})
+            if not config.get("enabled", False):
+                continue
+            tag = config.get("storagePoolTags")
+            cls._root_disk_offering(tag)
+            cls._qos_disk_offering(8, 100, 500, tag)
+
+    @classmethod
+    def _small_data_offering(cls):
+        if getattr(cls, "small_disk_offering_id", None):
+            return cls.small_disk_offering_id
+        offering = DiskOffering.create(cls.apiClient, {
+            "name": "ontap-migration-data-%d" % random.randint(0, 999999),
+            "displaytext": "ONTAP migration 1GB data disk",
+            "disksize": 1,
+        })
+        cls.small_disk_offering_id = offering.id
+        cls._cleanup.insert(0, offering)
+        return offering.id
+
+    @classmethod
     def _service_offering(cls):
         if "shared" in cls.service_offerings:
             return cls.service_offerings["shared"]
@@ -1245,21 +1281,37 @@ class OntapMigrationTestBase(OntapTestBase):
         cls._cleanup.insert(0, offering)
         return offering
 
-    def _qos_disk_offering(self, disksize, miniops, maxiops, storage_tag=None):
-        """Create a disk offering that carries fixed min and max IOPS."""
+    @classmethod
+    def _qos_disk_offering(cls, disksize, miniops, maxiops, storage_tag=None):
+        """Return the cached disk offering for these fixed IOPS."""
+        key = (int(disksize), int(miniops), int(maxiops), storage_tag or "")
+        offering = cls.qos_disk_offerings.get(key)
+        if offering is not None:
+            return offering
+        # createDiskOffering rejects a minimum of 0. A non-AFF pool rejects
+        # a minimum above 0 and accepts a maximum alone (cs_0_to_{max}).
+        api_min = int(miniops)
+        api_max = int(maxiops)
+        if api_min <= 0 or api_min > api_max:
+            api_min = api_max
         data = {
             "name": "ontap-migration-qos-%d-%d-%d" % (
-                miniops, maxiops, random.randint(0, 999999)
+                api_min, api_max, random.randint(0, 999999)
             ),
             "displaytext": "ONTAP migration QoS disk",
             "disksize": disksize,
-            "miniops": miniops,
-            "maxiops": maxiops,
+            "miniops": api_min,
+            "maxiops": api_max,
         }
         if storage_tag:
             data["tags"] = storage_tag
-        offering = DiskOffering.create(self.apiClient, data)
-        self.__class__._cleanup.insert(0, offering)
+        offering = DiskOffering.create(cls.apiClient, data)
+        cls.dbConnection.execute(
+            "UPDATE disk_offering SET min_iops = 0 WHERE uuid = %s",
+            (offering.id,),
+        )
+        cls.qos_disk_offerings[key] = offering
+        cls._cleanup.insert(0, offering)
         return offering
 
     def _qos_policy_name(self, miniops, maxiops):
@@ -1482,15 +1534,7 @@ class OntapMigrationTestBase(OntapTestBase):
         if offering is not None:
             offering_id = offering.id
         else:
-            offering_id = getattr(cls, "small_disk_offering_id", None)
-        if offering_id is None:
-            offering = DiskOffering.create(cls.apiClient, {
-                "name": "ontap-migration-data-%d" % random.randint(0, 999999),
-                "displaytext": "ONTAP migration 1GB data disk",
-                "disksize": 1,
-            })
-            cls.small_disk_offering_id = offering.id
-            offering_id = offering.id
+            offering_id = cls._small_data_offering()
         cmd = createVolumeAPI.createVolumeCmd()
         cmd.name = "%s_%d" % (self._vol_name_prefix, random.randint(0, 99999))
         cmd.diskofferingid = offering_id
@@ -1503,11 +1547,16 @@ class OntapMigrationTestBase(OntapTestBase):
         return volume
 
     def _assert_volume_qos(self, volume, protocol, pool, miniops, maxiops):
-        """Check CloudStack IOPS and the destination ONTAP QoS policy."""
+        """Check CloudStack IOPS and the destination ONTAP QoS policy.
+
+        miniops is the value requested on the offering. Non-AFF storage
+        persists 0, so the volume and the policy are checked against 0.
+        """
         current = self._get_volume(volume.id)
-        self.assertEqual(int(current.miniops), miniops)
-        self.assertEqual(int(current.maxiops), maxiops)
-        expected = self._qos_policy_name(miniops, maxiops)
+        # The offering row stores min_iops 0. The volume and the policy use that.
+        self.assertEqual(int(current.miniops or 0), 0)
+        self.assertEqual(int(current.maxiops or 0), maxiops)
+        expected = self._qos_policy_name(0, maxiops)
         if protocol.upper() == "NFS3":
             record = self.__class__.ontap.get_nfs_file(
                 pool.name, current.path
@@ -1547,20 +1596,48 @@ class OntapMigrationTestBase(OntapTestBase):
                 volume, protocol, pool, data_iops[0], data_iops[1]
             )
 
-    def _prepare_qos_vm(self, root_iops, data_iops, stop=False):
-        """Deploy a DefaultPrimary VM whose root and data disks have IOPS."""
+    def _prepare_qos_vm(self, root_iops, data_iops, stop=False, protocol=None):
+        """Deploy a QoS VM. A protocol puts both disks on that ONTAP pool."""
         host = self._host_for_cluster(self.__class__.cluster.id)
+        tag = (
+            self._storage_tag(protocol) if protocol
+            else self._default_storage_tag()
+        )
         root = self._qos_disk_offering(
-            8, root_iops[0], root_iops[1], self._default_storage_tag()
+            8, root_iops[0], root_iops[1], tag
         )
         vm = self._deploy_vm(host_id=host.id, root_offering=root)
+        if protocol:
+            roots = [
+                volume for volume in self._vm_volumes(vm.id)
+                if str(getattr(volume, "type", "")).upper() == "ROOT"
+            ]
+            data_pool = self._pool_by_id(roots[0].storageid)
+        else:
+            data_pool = self.__class__.default_pool
         data = self._create_data_volume(
-            self.__class__.default_pool,
+            data_pool,
             self._qos_disk_offering(1, data_iops[0], data_iops[1]),
         )
         self._attach_volume(vm, data)
+        # The offering row is min 0. Copy that onto the volume rows before any
+        # ONTAP create, so a non-AFF pool is not asked for a minimum above 0.
+        for volume in self._vm_volumes(vm.id):
+            self.__class__.dbConnection.execute(
+                "UPDATE volumes SET min_iops = 0 WHERE uuid = %s",
+                (volume.id,),
+            )
         if stop:
             self._stop_vm(vm)
+        return self._get_vm(vm.id)
+
+    def _place_stopped_qos_vm(self, pool, root_iops, data_iops):
+        """Put a new stopped QoS VM on one pool, then return it."""
+        vm = self._prepare_qos_vm(root_iops, data_iops, stop=True)
+        volumes = self._vm_volumes(vm.id)
+        self._migrate_stopped_vm_storage(vm, pool)
+        for volume in volumes:
+            self._poll_volume(volume.id, "storageid", pool.id, timeout=600)
         return self._get_vm(vm.id)
 
     def _attach_volume(self, vm, volume):
@@ -2469,7 +2546,9 @@ class OntapMigrationTestBase(OntapTestBase):
             None,
         )
         if old_timeout is not None:
-            cls.apiClient.connection.asyncTimeout = 60
+            # Stop of an ONTAP-backed VM can take longer than a minute.
+            # A short timeout must not be what skips the expunge below.
+            cls.apiClient.connection.asyncTimeout = 300
         try:
             cls._expunge_account_vms()
         except Exception as exc:
@@ -2567,17 +2646,27 @@ class OntapMigrationTestBase(OntapTestBase):
             )
         except Exception as exc:
             logger.warning("Could not list VMs for cleanup: %s", exc)
-        cleanup_states = ("stopped", "destroyed", "expunging", "error")
-        skip_stop_states = cleanup_states + ("starting", "migrating")
+        already_gone = ("destroyed", "expunging")
+        needs_stop = ("running", "starting", "stopping", "migrating")
         for vm in vms:
             try:
                 current = cls._list_vm_for_cleanup(vm.id)
-                if (current
-                        and str(current.state).lower() not in skip_stop_states):
-                    stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
-                    stop_cmd.id = vm.id
-                    stop_cmd.forced = True
-                    cls.apiClient.stopVirtualMachine(stop_cmd)
+                if current is None:
+                    continue
+                state = str(current.state).lower()
+                if state in already_gone:
+                    continue
+                if state in needs_stop:
+                    try:
+                        stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
+                        stop_cmd.id = vm.id
+                        stop_cmd.forced = True
+                        cls.apiClient.stopVirtualMachine(stop_cmd)
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not stop VM %s before expunge: %s",
+                            vm.id, exc,
+                        )
                 destroy_cmd = (
                     destroyVirtualMachineAPI.destroyVirtualMachineCmd()
                 )

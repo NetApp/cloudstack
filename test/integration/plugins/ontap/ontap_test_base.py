@@ -680,22 +680,58 @@ class OntapRestClient:
                 if r.get("name") not in (".", "..")]
 
     def get_nfs_file(self, vol_name, file_name):
-        """Return one file record, including its QoS policy, or None."""
+        """Return one file record, including its QoS policy, or None.
+
+        Listing the FlexVol root returns no children on this ONTAP, so a
+        name match there looks like a missing policy. Reading the file
+        path returns one record whose path is the file name.
+        """
         vol = self.get_volume(vol_name)
         if not vol or not vol.get("uuid"):
             return None
-        from urllib.parse import quote
-        encoded_path = quote("/" + str(file_name), safe="")
+        encoded = quote(str(file_name), safe="")
         try:
             resp = self._get(
-                "/storage/volumes/%s/files/%s" % (vol["uuid"], encoded_path),
-                params={"fields": "name,qos_policy"},
+                "/storage/volumes/%s/files/%s" % (vol["uuid"], encoded),
+                params={
+                    "fields": "name,path,qos_policy",
+                    "return_metadata": "true",
+                },
+            )
+        except Exception:
+            resp = None
+        record = self._nfs_file_record(resp, file_name)
+        if record is not None:
+            return record
+        try:
+            resp = self._get(
+                "/storage/volumes/%s/files" % vol["uuid"],
+                params={
+                    "path": "/",
+                    "name": str(file_name),
+                    "fields": "name,path,qos_policy",
+                    "max_records": "20",
+                },
             )
         except Exception:
             return None
-        if isinstance(resp, dict) and resp.get("records"):
-            return resp["records"][0]
-        return resp or None
+        return self._nfs_file_record(resp, file_name)
+
+    def _nfs_file_record(self, resp, file_name):
+        if not isinstance(resp, dict):
+            return None
+        records = resp.get("records")
+        if records is None and (
+            resp.get("path") or resp.get("name") or resp.get("qos_policy")
+        ):
+            records = [resp]
+        wanted = str(file_name)
+        for record in records or []:
+            if record.get("name") == wanted or record.get("path") == wanted:
+                return record
+        if records and len(records) == 1:
+            return records[0]
+        return None
 
     def _unmap_lun(self, svm_name, lun_uuid):
         """Best-effort removal of all lun-maps for a LUN UUID."""

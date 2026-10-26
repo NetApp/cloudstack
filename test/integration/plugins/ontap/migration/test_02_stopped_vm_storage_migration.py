@@ -318,26 +318,25 @@ class TestOntapStoppedVmStorageMigration(OntapMigrationTestBase):
         self.assertEqual(self._get_vm(vm.id).state, "Running")
 
     def _stopped_qos(self, protocol, root_iops, data_iops, second_pool=False):
-        vm = self._prepare_qos_vm(root_iops, data_iops, stop=True)
+        vm = self._prepare_qos_vm(
+            root_iops, data_iops, stop=True,
+            protocol=protocol if second_pool else None,
+        )
         volumes = self._vm_volumes(vm.id)
         source = self._pool_by_id(volumes[0].storageid)
-        pool = self._migration_pool(protocol)
+        if second_pool:
+            pools = (
+                self._migration_pool(protocol, 0),
+                self._migration_pool(protocol, 1),
+            )
+            pool = pools[1] if source.id == pools[0].id else pools[0]
+        else:
+            pool = self._migration_pool(protocol)
         self._migrate_stopped_vm_storage(vm, pool)
         self._assert_migration_success(
             volumes, pool, protocol, vm=vm,
             expected_vm_state="Stopped", expected_vm_id=vm.id,
             source_pool=source,
-        )
-        self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
-        if not second_pool:
-            return
-        moved = self._vm_volumes(vm.id)
-        pool = self._migration_pool(protocol, 1)
-        self._migrate_stopped_vm_storage(vm, pool)
-        self._assert_migration_success(
-            moved, pool, protocol, vm=vm,
-            expected_vm_state="Stopped", expected_vm_id=vm.id,
-            source_pool=self._migration_pool(protocol),
         )
         self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
 

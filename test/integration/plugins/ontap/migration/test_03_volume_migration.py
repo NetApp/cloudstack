@@ -506,10 +506,11 @@ class TestOntapVolumeMigration(OntapMigrationTestBase):
         )
 
     def _attached_qos_leaves_root(self, protocol):
-        vm = self._prepare_qos_vm((100, 500), (200, 800), stop=True)
-        source = self._migration_pool(protocol)
-        self._migrate_stopped_vm_storage(vm, source)
+        vm = self._prepare_qos_vm(
+            (100, 500), (200, 800), stop=True, protocol=protocol
+        )
         root = self._root_volume(vm)
+        source = self._pool_by_id(root.storageid)
         data = [
             volume for volume in self._vm_volumes(vm.id)
             if volume.id != root.id
