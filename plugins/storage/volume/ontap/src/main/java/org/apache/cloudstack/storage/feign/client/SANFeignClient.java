@@ -79,9 +79,9 @@ public interface SANFeignClient {
     @Headers({"Authorization: {authHeader}"})
     void deleteIgroup(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
-    // LUN Maps Operation APIs
-    @RequestLine("POST /api/protocols/san/lun-maps")
-    @Headers({"Authorization: {authHeader}", "return_records: {returnRecords}"})
+    // LUN Maps Operation APIs. Callers pass return_records false; the host path uses the LUN serial number.
+    @RequestLine("POST /api/protocols/san/lun-maps?return_records={returnRecords}")
+    @Headers({"Authorization: {authHeader}"})
     OntapResponse<LunMap> createLunMap(@Param("authHeader") String authHeader, @Param("returnRecords") boolean returnRecords, LunMap lunMap);
 
 
