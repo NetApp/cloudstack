@@ -377,6 +377,90 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     }
 
     /**
+     * Creates (or reuses) the SVM-scoped QoS policy for the volume's min/max IOPS and attaches it
+     * to the ONTAP file or LUN. Called after same-SVM iSCSI LUN copy (no policy on create) and
+     * after NFS content rewrite (qemu-img / live migrate clears file QoS).
+     */
+    public void applyQosPolicyToVolume(VolumeInfo volumeInfo) {
+        if (volumeInfo == null) {
+            return;
+        }
+        StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getPoolId());
+        if (storagePool == null
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePool.getStorageProviderName())) {
+            return;
+        }
+        Volume.Type volumeType = volumeInfo.getVolumeType();
+        if (volumeType != Volume.Type.DATADISK && volumeType != Volume.Type.ROOT) {
+            return;
+        }
+        Map<String, String> details = storagePoolDetailsDao.listDetailsKeyPairs(storagePool.getId());
+        StorageStrategy storageStrategy = OntapStorageUtils.getStrategyByStoragePoolDetails(details);
+        Long minIops = volumeInfo.getMinIops();
+        Long maxIops = volumeInfo.getMaxIops();
+        if (!hasQosIops(minIops, maxIops)) {
+            // findById(id) can return the same cached object the volume already holds, with empty IOPS.
+            VolumeVO storedVolume = volumeDao.findById(volumeInfo.getId(), true);
+            if (storedVolume != null) {
+                minIops = storedVolume.getMinIops();
+                maxIops = storedVolume.getMaxIops();
+                if (hasQosIops(minIops, maxIops)) {
+                    logger.info("applyQosPolicyToVolume: volume [{}] reported no IOPS; using stored min [{}] max [{}]",
+                            volumeInfo.getId(), minIops, maxIops);
+                }
+            }
+        }
+        VolumeQosPolicy qosPolicy = createQosPolicyIfNeeded(storageStrategy, details,
+                minIops, maxIops, storagePool.getId());
+        if (qosPolicy == null) {
+            logger.warn("applyQosPolicyToVolume: volume [{}] has no IOPS (min [{}], max [{}]); ONTAP object keeps its current QoS",
+                    volumeInfo.getId(), minIops, maxIops);
+            return;
+        }
+        CloudStackVolume request = createCloudStackVolumeRequestByProtocol(
+                storagePool, details, volumeInfo, qosPolicy);
+        request.setVolumeInfo(volumeInfo);
+        if (isIscsi(details) && request.getLun() != null && request.getLun().getUuid() == null) {
+            VolumeDetailVO lunUuidDetail = volumeDetailsDao.findDetail(volumeInfo.getId(),
+                    OntapStorageConstants.LUN_DOT_UUID);
+            if (lunUuidDetail != null && StringUtils.isNotBlank(lunUuidDetail.getValue())) {
+                request.getLun().setUuid(lunUuidDetail.getValue());
+            }
+        }
+        storageStrategy.updateCloudStackVolume(request);
+        persistQosPolicyDetails(volumeInfo.getId(), qosPolicy);
+    }
+
+    /**
+     * The destination row is duplicated before the LUN copy. If that object has no IOPS, use the
+     * source volume's IOPS so the policy attached after {@code copy.source} matches the disk.
+     */
+    private void copyQosIopsFromSourceWhenDestinationHasNone(VolumeInfo srcVolumeInfo, VolumeInfo destVolumeInfo) {
+        if (srcVolumeInfo == null || destVolumeInfo == null
+                || hasQosIops(destVolumeInfo.getMinIops(), destVolumeInfo.getMaxIops())) {
+            return;
+        }
+        VolumeVO destVolume = volumeDao.findById(destVolumeInfo.getId());
+        if (destVolume != null && hasQosIops(destVolume.getMinIops(), destVolume.getMaxIops())) {
+            return;
+        }
+        if (!hasQosIops(srcVolumeInfo.getMinIops(), srcVolumeInfo.getMaxIops()) || destVolume == null) {
+            return;
+        }
+        destVolume.setMinIops(srcVolumeInfo.getMinIops());
+        destVolume.setMaxIops(srcVolumeInfo.getMaxIops());
+        volumeDao.update(destVolume.getId(), destVolume);
+        logger.info("copyAsync: destination volume [{}] had no IOPS; using source volume [{}] min [{}] max [{}] for QoS",
+                destVolumeInfo.getId(), srcVolumeInfo.getId(), srcVolumeInfo.getMinIops(), srcVolumeInfo.getMaxIops());
+    }
+
+    private boolean hasQosIops(Long minIops, Long maxIops) {
+        long min = minIops == null ? 0 : minIops;
+        long max = maxIops == null ? 0 : maxIops;
+        return min > 0 || max > 0;
+    }
+
+    /**
      * Creates the backend object that caches a template on this pool's FlexVolume.
      *
      * <p>Protocol-specific work is delegated to {@link StorageStrategy#createTemplateCache}.
@@ -945,6 +1029,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                     destDetails, StorageManager.KvmStorageOfflineMigrationWait.value());
 
             String copiedPath = persistCopiedVolume(destVolumeInfo, destStoragePool, copiedVolume);
+            // Same-SVM iSCSI copy.source creates the LUN without a QoS policy. The destination
+            // volume object can report no IOPS even when the row (or the source volume) has them.
+            copyQosIopsFromSourceWhenDestinationHasNone(srcVolumeInfo, destVolumeInfo);
+            applyQosPolicyToVolume(destVolumeInfo);
             copiedVolumeTO = (VolumeObjectTO)destVolumeInfo.getTO();
             copiedVolumeTO.setPath(copiedPath);
             copiedVolumeTO.setFormat(getImageFormat(destStoragePool));
@@ -2307,6 +2395,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 Svm svm = new Svm();
                 svm.setName(details.get(OntapStorageConstants.SVM_NAME));
                 CloudStackVolume iscsiRequest = new CloudStackVolume();
+                iscsiRequest.setVolumeInfo(volumeObject);
                 Lun lunRequest = new Lun();
                 lunRequest.setSvm(svm);
 

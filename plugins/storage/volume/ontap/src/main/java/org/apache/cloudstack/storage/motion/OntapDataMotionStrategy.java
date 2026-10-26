@@ -44,6 +44,7 @@ import org.apache.cloudstack.storage.command.CopyCmdAnswer;
 import org.apache.cloudstack.storage.command.CopyCommand;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -176,6 +177,8 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                 volumeVO.setFormat(ImageFormat.QCOW2);
             }
             _volumeDao.update(volumeVO.getId(), volumeVO);
+            // Host-side rewrite clears NFS file QoS; re-attach from the destination volume's IOPS.
+            reapplyOntapQosAfterContentRewrite(destVolumeInfo);
         } catch (Exception ex) {
             errMsg = "Primary storage migration failed due to an unexpected error: " + ex.getMessage();
             if (ex instanceof CloudRuntimeException) {
@@ -544,6 +547,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             volumeVO.setLastId(srcVolumeInfo.getId());
             _volumeDao.update(volumeVO.getId(), volumeVO);
 
+            // Live migrate rewrites the NFS qcow2 and clears file QoS; re-attach before source cleanup.
+            reapplyOntapQosAfterContentRewrite(destVolumeInfo);
+
             if (srcPoolVO != null && srcPoolVO.getPoolType() == StoragePoolType.OntapiSCSI) {
                 try {
                     disconnectHostFromVolume(srcHost, srcVolumeInfo.getPoolId(), srcVolumeInfo.get_iScsiName());
@@ -554,6 +560,27 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
 
             _volumeService.copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Event.OperationSucceeded, null, srcVolumeInfo, destVolumeInfo, false);
         }
+    }
+
+    /**
+     * NFS createAsync attaches QoS, then qemu-img / libvirt live migrate overwrites the file and
+     * drops the policy. Re-apply from the destination volume's stored IOPS. iSCSI LUN QoS survives
+     * block copy; same-SVM offline LUN copy attaches in the driver instead.
+     */
+    private void reapplyOntapQosAfterContentRewrite(VolumeInfo destVolumeInfo) {
+        if (destVolumeInfo == null || destVolumeInfo.getDataStore() == null) {
+            return;
+        }
+        StoragePoolVO destPool = _storagePoolDao.findById(destVolumeInfo.getPoolId());
+        if (destPool == null || destPool.getPoolType() != StoragePoolType.NetworkFilesystem
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(destPool.getStorageProviderName())) {
+            return;
+        }
+        if (!(destVolumeInfo.getDataStore().getDriver() instanceof OntapPrimaryDatastoreDriver)) {
+            return;
+        }
+        VolumeInfo refreshed = _volumeDataFactory.getVolume(destVolumeInfo.getId(), destVolumeInfo.getDataStore());
+        ((OntapPrimaryDatastoreDriver)destVolumeInfo.getDataStore().getDriver()).applyQosPolicyToVolume(refreshed);
     }
 
     private void handleFailedMigration(Map<VolumeInfo, VolumeInfo> srcVolumeInfoToDestVolumeInfo, VirtualMachineTO vmTO, Host destHost,
