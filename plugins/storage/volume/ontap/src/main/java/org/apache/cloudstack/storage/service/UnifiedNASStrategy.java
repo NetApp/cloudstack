@@ -153,6 +153,8 @@ public class UnifiedNASStrategy extends NASStrategy {
             nasFeignClient.updateFile(getAuthHeader(), cloudstackVolume.getFlexVolumeUuid(), filePath, fileInfo);
         } catch (FeignException e) {
             throw new CloudRuntimeException("Failed to update NFS volume file: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new CloudRuntimeException("Failed to update NFS volume file: " + e.getMessage(), e);
         }
         logger.info("Updated NFS volume file [{}] with QoS policy [{}]", filePath, qosPolicy.getName());
         return cloudstackVolume;

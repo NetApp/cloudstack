@@ -329,6 +329,30 @@ public class UnifiedNASStrategyTest {
     }
 
     @Test
+    public void testUpdateCloudStackVolume_UnexpectedException_IsWrapped() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");
+
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_100_to_200_iops_svm1");
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(qosPolicy);
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+        request.setFlexVolumeUuid("flex-uuid");
+        request.setFile(fileInfo);
+
+        doThrow(new IllegalStateException("decoder failed")).when(nasFeignClient)
+                .updateFile(anyString(), eq("flex-uuid"), eq("volume-uuid-123"), any(FileInfo.class));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.updateCloudStackVolume(request));
+        assertTrue(ex.getMessage().contains("Failed to update NFS volume file"));
+        assertTrue(ex.getCause() instanceof IllegalStateException);
+    }
+
+    @Test
     public void testUpdateCloudStackVolume_NoQosPolicy_SkipsPatch() {
         VolumeInfo volumeInfo = mock(VolumeInfo.class);
         when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");

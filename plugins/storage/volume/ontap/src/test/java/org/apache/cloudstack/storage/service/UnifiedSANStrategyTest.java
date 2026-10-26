@@ -1371,6 +1371,29 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
+    void testUpdateCloudStackVolume_UnexpectedException_IsWrapped() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("cs_0_to_5000_iops_svm1");
+        lun.setQosPolicy(qosPolicy);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
+                    .thenReturn(authHeader);
+            when(sanFeignClient.updateLun(eq(authHeader), eq("lun-uuid-123"), any(Lun.class)))
+                    .thenThrow(new IllegalStateException("decoder failed"));
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.updateCloudStackVolume(request));
+            assertTrue(ex.getMessage().contains("Failed to update LUN"));
+            assertTrue(ex.getCause() instanceof IllegalStateException);
+        }
+    }
+
+    @Test
     void testUpdateCloudStackVolume_NoQosPolicy_SkipsPatch() {
         Lun lun = new Lun();
         lun.setUuid("lun-uuid-123");

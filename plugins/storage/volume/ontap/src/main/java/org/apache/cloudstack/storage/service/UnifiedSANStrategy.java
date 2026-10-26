@@ -212,6 +212,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             pollJobIfPresent(response, "update LUN [" + cloudstackVolume.getLun().getUuid() + "]");
         } catch (FeignException e) {
             throw new CloudRuntimeException("Failed to update LUN: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new CloudRuntimeException("Failed to update LUN: " + e.getMessage(), e);
         }
         logger.info("Updated LUN [{}] with QoS policy [{}]",
                 cloudstackVolume.getLun().getUuid(), qosPolicy.getName());
