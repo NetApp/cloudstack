@@ -366,6 +366,8 @@ public class UnifiedSANStrategy extends SANStrategy {
         lun.setSvm(svm);
         lun.setName(OntapStorageUtils.getLunName(destStoragePool.getName(), destLunName));
         lun.setCopy(copy);
+        // ONTAP rejects qos_policy.name on a copy.source create. The driver patches the
+        // policy onto the new LUN after this copy returns.
 
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
@@ -671,7 +673,19 @@ public class UnifiedSANStrategy extends SANStrategy {
             } catch (FeignException feignEx) {
                 if (feignEx.status() == 409) {
                     logger.warn("createAccessGroup: Igroup with name {} already exists (status 409). Fetching existing Igroup.", igroupName);
-                    // TODO: Currently we aren't doing anything with the returned AccessGroup object, so, haven't added code here to fetch the existing Igroup and set it in AccessGroup.
+                    String lookupAuth = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
+                    Map<String, Object> igroupParams = Map.of(
+                            OntapStorageConstants.SVM_DOT_NAME, svmName,
+                            OntapStorageConstants.NAME, igroupName);
+                    OntapResponse<Igroup> existing = sanFeignClient.getIgroupResponse(lookupAuth, igroupParams);
+                    if (existing == null || existing.getRecords() == null || existing.getRecords().isEmpty()) {
+                        String ontapError = feignEx.contentUTF8();
+                        if (StringUtils.isBlank(ontapError)) {
+                            ontapError = feignEx.getMessage();
+                        }
+                        throw new CloudRuntimeException("Igroup [" + igroupName + "] already exists but was not returned: " + ontapError);
+                    }
+                    createdAccessGroup.setIgroup(existing.getRecords().get(0));
                     return createdAccessGroup;
                 }
                 logger.error("createAccessGroup: FeignException during Igroup creation: Status: {}, Exception: {}", feignEx.status(), feignEx.getMessage(), feignEx);
@@ -851,7 +865,8 @@ public class UnifiedSANStrategy extends SANStrategy {
             igroup.setName(igroupName);
             lunMapRequest.setIgroup(igroup);
             try {
-                sanFeignClient.createLunMap(authHeader, true, lunMapRequest);
+                // return_records is false. The host path comes from the LUN serial number, not this response.
+                sanFeignClient.createLunMap(authHeader, false, lunMapRequest);
             } catch (Exception feignEx) {
                 String errMsg = feignEx.getMessage();
                 if (errMsg != null && errMsg.contains(("LUN already mapped to this group"))) {
@@ -861,29 +876,8 @@ public class UnifiedSANStrategy extends SANStrategy {
                     throw feignEx;
                 }
             }
-            // Get the LunMap poolDetails
-            OntapResponse<LunMap> lunMapResponse = null;
-            try {
-                lunMapResponse = sanFeignClient.getLunMapResponse(authHeader,
-                        Map.of(
-                                OntapStorageConstants.SVM_DOT_NAME, svmName,
-                                OntapStorageConstants.LUN_DOT_NAME, lunName,
-                                OntapStorageConstants.IGROUP_DOT_NAME, igroupName,
-                                OntapStorageConstants.FIELDS, OntapStorageConstants.LOGICAL_UNIT_NUMBER
-                        ));
-                if(lunMapResponse != null && lunMapResponse.getRecords() != null && !lunMapResponse.getRecords().isEmpty()
-                         && lunMapResponse.getRecords().get(0).getLogicalUnitNumber() != null) {
-                    lunNumber =  lunMapResponse.getRecords().get(0).getLogicalUnitNumber().toString();
-
-                } else {
-                    logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}. LunMap response is null or empty.", lunName, igroupName);
-                    throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
-                }
-            } catch (Exception e) {
-                logger.error("enableLogicalAccess: Failed to fetch LunMap poolDetails for Lun: {} and igroup: {}, Exception: {}", lunName, igroupName, e);
-                throw new CloudRuntimeException("Failed to fetch LunMap poolDetails for Lun: " + lunName + " and igroup: " + igroupName);
-            }
-            logger.trace("enableLogicalAccess: LunMap created successfully, LunMap: {}", lunMapResponse.getRecords().get(0));
+            logger.trace("enableLogicalAccess: LunMap created for Lun: {} and igroup: {}", lunName, igroupName);
+            lunNumber = "";
         } catch (Exception e) {
             logger.error("Exception occurred while creating LunMap", e);
             throw new CloudRuntimeException("Failed to create LunMap: " + e.getMessage());
