@@ -26,8 +26,8 @@ import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.ResizeVolumePayload;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Storage;
-import com.cloud.storage.StorageManager;
 import com.cloud.storage.SnapshotVO;
+import com.cloud.storage.StorageManager;
 import com.cloud.storage.VMTemplateStoragePoolVO;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
@@ -52,7 +52,6 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
 import org.apache.cloudstack.storage.command.CopyCmdAnswer;
-import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -68,6 +67,7 @@ import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -179,10 +179,10 @@ class OntapPrimaryDatastoreDriverTest {
     private AsyncCompletionCallback<CreateCmdResult> createCallback;
 
     @Mock
-    private AsyncCompletionCallback<CopyCommandResult> copyCallback;
+    private AsyncCompletionCallback<CommandResult> commandCallback;
 
     @Mock
-    private AsyncCompletionCallback<CommandResult> commandCallback;
+    private AsyncCompletionCallback<CopyCommandResult> copyCallback;
 
     @InjectMocks
     private OntapPrimaryDatastoreDriver driver;
@@ -221,6 +221,8 @@ class OntapPrimaryDatastoreDriverTest {
     void canCopyOnlyCompatibleOfflineIscsiVolumes() {
         VolumeInfo srcVolume = mock(VolumeInfo.class);
         VolumeInfo destVolume = mock(VolumeInfo.class);
+        DataStore srcStore = mock(DataStore.class);
+        DataStore destStore = mock(DataStore.class);
         StoragePoolVO srcPool = mock(StoragePoolVO.class);
         StoragePoolVO destPool = mock(StoragePoolVO.class);
         Map<String, String> srcDetails = new HashMap<>(Map.of(
@@ -229,6 +231,8 @@ class OntapPrimaryDatastoreDriverTest {
                 OntapStorageConstants.SVM_UUID, "svm-uuid"));
         Map<String, String> destDetails = new HashMap<>(srcDetails);
 
+        when(srcVolume.getDataStore()).thenReturn(srcStore);
+        when(destVolume.getDataStore()).thenReturn(destStore);
         when(srcVolume.getState()).thenReturn(Volume.State.Migrating);
         when(srcVolume.getHypervisorType()).thenReturn(Hypervisor.HypervisorType.KVM);
         when(srcVolume.getPoolId()).thenReturn(1L);
@@ -728,10 +732,9 @@ class OntapPrimaryDatastoreDriverTest {
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
             verify(sanStrategy).getAccessGroup(any());
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
-            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/7");
-            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/7");
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
+            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
             verify(sanStrategy, never()).validateInitiatorInAccessGroup(anyString(), anyString(), any(Igroup.class));
-            verify(volumeInfo, never()).getVolume();
         }
     }
 
@@ -770,13 +773,14 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("1");
+            when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             boolean result = driver.grantAccess(volumeInfo, host, dataStore);
 
             assertTrue(result);
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
-            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/1");
-            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/1");
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
+            verify(volumeVO).set_iScsiName("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
         }
     }
 
@@ -829,7 +833,7 @@ class OntapPrimaryDatastoreDriverTest {
             verify(sanStrategy).getAccessGroup(any());
             verify(sanStrategy).createAccessGroup(any());
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
-            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/0");
+            verify(volumeVO).setPath("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID);
             verify(volumeDao).update(eq(100L), any(VolumeVO.class));
         }
     }
@@ -866,6 +870,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
             verify(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
@@ -909,10 +914,11 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
             when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("2");
+            when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
-            assertEquals("/iqn.1992-08.com.netapp:sn.123456/2", callerVolumeVO.getPath());
-            assertEquals("/iqn.1992-08.com.netapp:sn.123456/2", callerVolumeVO.get_iScsiName());
+            assertEquals("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID, callerVolumeVO.getPath());
+            assertEquals("/iqn.1992-08.com.netapp:sn.123456/" + LUN_WWID, callerVolumeVO.get_iScsiName());
         }
     }
 

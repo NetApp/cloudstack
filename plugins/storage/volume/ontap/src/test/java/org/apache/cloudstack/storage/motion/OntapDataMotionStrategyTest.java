@@ -50,6 +50,8 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import com.cloud.agent.AgentManager;
+import com.cloud.agent.api.CheckVirtualMachineAnswer;
+import com.cloud.agent.api.CheckVirtualMachineCommand;
 import com.cloud.agent.api.MigrateAnswer;
 import com.cloud.agent.api.MigrateCommand;
 import com.cloud.agent.api.MigrateCommand.MigrateDiskInfo;
@@ -61,10 +63,13 @@ import com.cloud.agent.api.storage.MigrateVolumeAnswer;
 import com.cloud.agent.api.storage.MigrateVolumeCommand;
 import com.cloud.agent.api.to.DiskTO;
 import com.cloud.agent.api.to.VirtualMachineTO;
+import com.cloud.exception.OperationTimedoutException;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.host.dao.HostDao;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.resource.ResourceManager;
+import com.cloud.resource.ResourceState;
 import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.GuestOSCategoryVO;
 import com.cloud.storage.GuestOSVO;
@@ -112,6 +117,8 @@ public class OntapDataMotionStrategyTest {
     private AgentManager agentManager;
     @Mock
     private HostDao hostDao;
+    @Mock
+    private ResourceManager resourceManager;
     @Mock
     private VMInstanceDao vmDao;
     @Mock
@@ -340,6 +347,70 @@ public class OntapDataMotionStrategyTest {
                 strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback));
         Mockito.verify(volumeDao, Mockito.never()).persist(Mockito.any(VolumeVO.class));
         Mockito.verify(context.callback).complete(Mockito.argThat(CopyCommandResult::isFailed));
+    }
+
+    @Test
+    public void liveMigrationExpungesDestinationWhenGrantAccessFails() {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+        Mockito.doThrow(new CloudRuntimeException("grant failed")).when(volumeService)
+                .grantAccess(Mockito.eq(context.destVolume), Mockito.eq(context.destHost), Mockito.any());
+
+        assertThrows(CloudRuntimeException.class, () ->
+                strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback));
+
+        Mockito.verify(volumeService).expungeVolumeAsync(context.destVolume);
+        Mockito.verify(context.callback).complete(Mockito.argThat(CopyCommandResult::isFailed));
+    }
+
+    @Test
+    public void liveMigrationTimeoutKeepsDestinationWhenVmIsRunningThere() throws Exception {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+        VMInstanceVO vm = vmDao.findById(5L);
+        Mockito.doReturn("i-5-VM").when(vm).getInstanceName();
+        Mockito.doThrow(new OperationTimedoutException(null, SRC_HOST_ID, 0, 0, false)).when(agentManager)
+                .send(Mockito.eq(SRC_HOST_ID), Mockito.any(MigrateCommand.class));
+        CheckVirtualMachineCommand checkCommand = new CheckVirtualMachineCommand("i-5-VM");
+        Mockito.doReturn(new CheckVirtualMachineAnswer(checkCommand, VirtualMachine.PowerState.PowerOn, null)).when(agentManager)
+                .send(Mockito.eq(DEST_HOST_ID), Mockito.any(CheckVirtualMachineCommand.class));
+
+        strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback);
+
+        Mockito.verify(volumeService, Mockito.never()).expungeVolumeAsync(Mockito.any());
+        Mockito.verify(volumeService).copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Mockito.any(), Mockito.isNull(),
+                Mockito.eq(context.srcVolume), Mockito.eq(context.destVolume), Mockito.eq(false));
+        Mockito.verify(context.callback).complete(Mockito.argThat(result -> result != null && !result.isFailed()));
+    }
+
+    @Test
+    public void offlineMigrationUsesSourceClusterHost() throws Exception {
+        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm1", null);
+        Scope srcScope = context.srcVolume.getDataStore().getScope();
+        Mockito.doReturn(ScopeType.CLUSTER).when(srcScope).getScopeType();
+        DataStore destStore = context.destVolume.getDataStore();
+        Scope destScope = Mockito.mock(Scope.class);
+        Mockito.doReturn(destScope).when(destStore).getScope();
+        Mockito.doReturn(ScopeType.CLUSTER).when(destScope).getScopeType();
+
+        StoragePoolVO srcPool = primaryDataStoreDao.findById(1L);
+        StoragePoolVO destPool = primaryDataStoreDao.findById(2L);
+        Mockito.doReturn(11L).when(srcPool).getClusterId();
+        Mockito.doReturn(22L).when(destPool).getClusterId();
+        PrimaryDataStore srcStoreInfo = Mockito.mock(PrimaryDataStore.class);
+        Mockito.doReturn(srcStoreInfo).when(dataStoreManager).getPrimaryDataStore(1L);
+
+        HostVO sourceHost = Mockito.mock(HostVO.class);
+        Mockito.doReturn(8L).when(sourceHost).getId();
+        Mockito.doReturn(ResourceState.Enabled).when(sourceHost).getResourceState();
+        Mockito.doReturn(List.of(sourceHost)).when(resourceManager)
+                .getEligibleUpAndEnabledHostsInClusterForStorageConnection(srcStoreInfo);
+        VolumeObjectTO copiedVolume = new VolumeObjectTO();
+        copiedVolume.setPath("copied-volume-path");
+        Mockito.when(agentManager.send(Mockito.eq(8L), Mockito.any(CopyCommand.class))).thenReturn(new CopyCmdAnswer(copiedVolume));
+
+        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
+
+        Mockito.verify(agentManager).send(Mockito.eq(8L), Mockito.any(CopyCommand.class));
+        Mockito.verify(dataStoreManager, Mockito.never()).getPrimaryDataStore(2L);
     }
 
     private MigrateCommand captureMigrateCommand() throws Exception {
