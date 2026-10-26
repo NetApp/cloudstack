@@ -18,11 +18,6 @@
  */
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.host.HostVO;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.dao.VolumeDetailsDao;
-import com.cloud.utils.exception.CloudRuntimeException;
-import feign.FeignException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;

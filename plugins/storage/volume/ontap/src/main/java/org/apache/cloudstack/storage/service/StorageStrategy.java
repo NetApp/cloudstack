@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
+import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.FeignClientFactory;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
@@ -68,9 +69,6 @@ import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 import feign.FeignException;
-
-import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
-import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 
 /**
  * Storage Strategy represents the communication path for all the ONTAP storage options

@@ -176,9 +176,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (dataStore == null) {
             throw new InvalidParameterValueException("dataStore should not be null");
         }
-        if (callback == null) {
-            throw new InvalidParameterValueException("callback should not be null");
-        }
 
         try {
             logger.info("Started for data store name [{}] and data object name [{}] of type [{}]",
@@ -251,7 +248,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             if (createCmdResult != null && createCmdResult.isSuccess()) {
                 logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
             }
-            callback.complete(createCmdResult);
+            // Offline migration creates the destination volume with a null callback.
+            if (callback != null) {
+                callback.complete(createCmdResult);
+            }
         }
     }
 
@@ -278,39 +278,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             volumeDetailsDao.addDetail(volInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, lunName, false);
             volumeVO.setFolder(createdLun.getUuid());
 
-                        logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
-                                lunName, volumeVO.getId());
-                        createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
-                    } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                        createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
-                        logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
-                                volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
-                    }
-                    volumeDao.update(volumeVO.getId(), volumeVO);
-                }
-            } else if (dataObject.getType() == DataObjectType.TEMPLATE) {
-                createCmdResult = createTemplateOnPrimary(storagePool, (TemplateInfo) dataObject, details);
-            } else {
-                errMsg = "Invalid DataObjectType (" + dataObject.getType() + ") passed to createAsync";
-                logger.error(errMsg);
-                throw new CloudRuntimeException(errMsg);
-            }
-        } catch (Exception e) {
-            errMsg = e.getMessage();
-            logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
-            createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
-            createCmdResult.setResult(e.toString());
-            if (callback == null) {
-                throw new CloudRuntimeException("Failed to create ONTAP volume: " + errMsg, e);
-            }
-        } finally {
-            if (createCmdResult != null && createCmdResult.isSuccess()) {
-                logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
-            }
-            if (callback != null) {
-                callback.complete(createCmdResult);
-            }
+            logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
+                    lunName, volumeVO.getId());
+            createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
+        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+            createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
+            logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
+                    volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
         }
+        volumeDao.update(volumeVO.getId(), volumeVO);
+        return createCmdResult;
     }
 
     /**
@@ -939,15 +916,26 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      */
     @Override
     public void copyAsync(DataObject srcData, DataObject destData, Host destHost, AsyncCompletionCallback<CopyCommandResult> callback) {
+        if (isSnapshotToTemporaryVolumeCopy(srcData, destData)) {
+            CopyCommandResult result = copySnapshotToTemporaryVolume(srcData, (VolumeInfo) destData);
+            if (callback != null) {
+                callback.complete(result);
+            } else if (!result.isSuccess()) {
+                throw new CloudRuntimeException("Failed to copy " + srcData.getType() + " [" + srcData.getId() + "] to "
+                        + destData.getType() + " [" + destData.getId() + "]: " + result.getResult());
+            }
+            return;
+        }
+        if (!isCompatibleIscsiOfflineCopy(srcData, destData)) {
+            throw new UnsupportedOperationException("Copy from " + describeForCopy(srcData) + " to "
+                    + describeForCopy(destData) + " is not supported for ONTAP primary storage.");
+        }
+
         String errMsg = null;
         VolumeObjectTO copiedVolumeTO = null;
         StorageStrategy storageStrategy = null;
         CloudStackVolume copiedVolume = null;
         try {
-            if (!canCopy(srcData, destData)) {
-                throw new CloudRuntimeException("ONTAP datastore driver cannot copy the requested data objects");
-            }
-
             VolumeInfo srcVolumeInfo = (VolumeInfo)srcData;
             VolumeInfo destVolumeInfo = (VolumeInfo)destData;
             StoragePoolVO destStoragePool = storagePoolDao.findById(destVolumeInfo.getPoolId());
@@ -981,21 +969,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             callback.complete(result);
         }
     }
-        CopyCommandResult result;
-        if (isSnapshotToTemporaryVolumeCopy(srcData, destData)) {
-            result = copySnapshotToTemporaryVolume(srcData, (VolumeInfo) destData);
-        } else {
-            throw new UnsupportedOperationException("Copy from " + describeForCopy(srcData) + " to "
-                    + describeForCopy(destData) + " is not supported for ONTAP primary storage.");
-        }
-
-        if (callback != null) {
-            callback.complete(result);
-        } else if (!result.isSuccess()) {
-            throw new CloudRuntimeException("Failed to copy " + srcData.getType() + " [" + srcData.getId() + "] to "
-                    + destData.getType() + " [" + destData.getId() + "]: " + result.getResult());
-        }
-    }
 
     /**
      * Returns true only for the (source type, destination type) pairs the driver copies itself.
@@ -1010,7 +983,77 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (srcData == null || destData == null || srcData.getDataStore() == null || destData.getDataStore() == null) {
             return false;
         }
-        return isSnapshotToTemporaryVolumeCopy(srcData, destData);
+        return isSnapshotToTemporaryVolumeCopy(srcData, destData) || isCompatibleIscsiOfflineCopy(srcData, destData);
+    }
+
+    private boolean isCompatibleIscsiOfflineCopy(DataObject srcData, DataObject destData) {
+        if (!(srcData instanceof VolumeInfo) || !(destData instanceof VolumeInfo)) {
+            return false;
+        }
+
+        VolumeInfo srcVolumeInfo = (VolumeInfo)srcData;
+        VolumeInfo destVolumeInfo = (VolumeInfo)destData;
+        if (srcVolumeInfo.getState() != Volume.State.Migrating
+                || srcVolumeInfo.getHypervisorType() != HypervisorType.KVM) {
+            return false;
+        }
+
+        StoragePoolVO srcStoragePool = storagePoolDao.findById(srcVolumeInfo.getPoolId());
+        StoragePoolVO destStoragePool = storagePoolDao.findById(destVolumeInfo.getPoolId());
+        if (srcStoragePool == null || destStoragePool == null
+                || srcStoragePool.getId() == destStoragePool.getId()
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(srcStoragePool.getStorageProviderName())
+                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(destStoragePool.getStorageProviderName())
+                || srcStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI
+                || destStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI) {
+            return false;
+        }
+
+        Map<String, String> srcDetails = storagePoolDetailsDao.listDetailsKeyPairs(srcStoragePool.getId());
+        Map<String, String> destDetails = storagePoolDetailsDao.listDetailsKeyPairs(destStoragePool.getId());
+        return areCompatibleIscsiCopyPools(srcDetails, destDetails);
+    }
+
+    private boolean areCompatibleIscsiCopyPools(Map<String, String> srcDetails, Map<String, String> destDetails) {
+        if (srcDetails == null || destDetails == null
+                || !isIscsi(srcDetails) || !isIscsi(destDetails)
+                || !StringUtils.equals(srcDetails.get(OntapStorageConstants.STORAGE_IP),
+                        destDetails.get(OntapStorageConstants.STORAGE_IP))) {
+            return false;
+        }
+
+        String srcSvmUuid = srcDetails.get(OntapStorageConstants.SVM_UUID);
+        String destSvmUuid = destDetails.get(OntapStorageConstants.SVM_UUID);
+        if (StringUtils.isNotBlank(srcSvmUuid) || StringUtils.isNotBlank(destSvmUuid)) {
+            return StringUtils.isNotBlank(srcSvmUuid) && srcSvmUuid.equals(destSvmUuid);
+        }
+        return StringUtils.isNotBlank(srcDetails.get(OntapStorageConstants.SVM_NAME))
+                && srcDetails.get(OntapStorageConstants.SVM_NAME).equals(destDetails.get(OntapStorageConstants.SVM_NAME));
+    }
+
+    private String persistCopiedVolume(VolumeInfo destVolumeInfo, StoragePoolVO destStoragePool, CloudStackVolume copiedVolume) {
+        VolumeVO destVolumeVO = volumeDao.findById(destVolumeInfo.getId());
+        if (destVolumeVO == null) {
+            throw new CloudRuntimeException("Destination volume [" + destVolumeInfo.getId() + "] was not found");
+        }
+
+        destVolumeVO.setPoolId(destStoragePool.getId());
+        destVolumeVO.setPoolType(destStoragePool.getPoolType());
+        destVolumeVO.setFormat(getImageFormat(destStoragePool));
+        String copiedPath = destVolumeVO.getPath();
+        if (copiedVolume.getLun() != null) {
+            Lun copiedLun = copiedVolume.getLun();
+            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID, copiedLun.getUuid(), false);
+            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, copiedLun.getName(), false);
+            destVolumeVO.setFolder(copiedLun.getUuid());
+            destVolumeVO.set_iScsiName(null);
+            copiedPath = copiedLun.getName();
+        } else if (copiedVolume.getFile() != null && copiedVolume.getFile().getPath() != null) {
+            copiedPath = copiedVolume.getFile().getPath();
+        }
+        destVolumeVO.setPath(copiedPath);
+        volumeDao.update(destVolumeVO.getId(), destVolumeVO);
+        return copiedPath;
     }
 
     private String describeForCopy(DataObject data) {
@@ -1091,74 +1134,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         if (volInfo.getVolume() instanceof VolumeVO) {
             ((VolumeVO) volInfo.getVolume()).setName(name);
         }
-    }
-        if (!(srcData instanceof VolumeInfo) || !(destData instanceof VolumeInfo)) {
-            return false;
-        }
-
-        VolumeInfo srcVolumeInfo = (VolumeInfo)srcData;
-        VolumeInfo destVolumeInfo = (VolumeInfo)destData;
-        if (srcVolumeInfo.getState() != Volume.State.Migrating
-                || srcVolumeInfo.getHypervisorType() != HypervisorType.KVM) {
-            return false;
-        }
-
-        StoragePoolVO srcStoragePool = storagePoolDao.findById(srcVolumeInfo.getPoolId());
-        StoragePoolVO destStoragePool = storagePoolDao.findById(destVolumeInfo.getPoolId());
-        if (srcStoragePool == null || destStoragePool == null
-                || srcStoragePool.getId() == destStoragePool.getId()
-                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(srcStoragePool.getStorageProviderName())
-                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(destStoragePool.getStorageProviderName())
-                || srcStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI
-                || destStoragePool.getPoolType() != Storage.StoragePoolType.OntapiSCSI) {
-            return false;
-        }
-
-        Map<String, String> srcDetails = storagePoolDetailsDao.listDetailsKeyPairs(srcStoragePool.getId());
-        Map<String, String> destDetails = storagePoolDetailsDao.listDetailsKeyPairs(destStoragePool.getId());
-        return areCompatibleIscsiCopyPools(srcDetails, destDetails);
-    }
-
-    private boolean areCompatibleIscsiCopyPools(Map<String, String> srcDetails, Map<String, String> destDetails) {
-        if (srcDetails == null || destDetails == null
-                || !isIscsi(srcDetails) || !isIscsi(destDetails)
-                || !StringUtils.equals(srcDetails.get(OntapStorageConstants.STORAGE_IP),
-                        destDetails.get(OntapStorageConstants.STORAGE_IP))) {
-            return false;
-        }
-
-        String srcSvmUuid = srcDetails.get(OntapStorageConstants.SVM_UUID);
-        String destSvmUuid = destDetails.get(OntapStorageConstants.SVM_UUID);
-        if (StringUtils.isNotBlank(srcSvmUuid) || StringUtils.isNotBlank(destSvmUuid)) {
-            return StringUtils.isNotBlank(srcSvmUuid) && srcSvmUuid.equals(destSvmUuid);
-        }
-        return StringUtils.isNotBlank(srcDetails.get(OntapStorageConstants.SVM_NAME))
-                && srcDetails.get(OntapStorageConstants.SVM_NAME).equals(destDetails.get(OntapStorageConstants.SVM_NAME));
-    }
-
-    private String persistCopiedVolume(VolumeInfo destVolumeInfo, StoragePoolVO destStoragePool, CloudStackVolume copiedVolume) {
-        VolumeVO destVolumeVO = volumeDao.findById(destVolumeInfo.getId());
-        if (destVolumeVO == null) {
-            throw new CloudRuntimeException("Destination volume [" + destVolumeInfo.getId() + "] was not found");
-        }
-
-        destVolumeVO.setPoolId(destStoragePool.getId());
-        destVolumeVO.setPoolType(destStoragePool.getPoolType());
-        destVolumeVO.setFormat(getImageFormat(destStoragePool));
-        String copiedPath = destVolumeVO.getPath();
-        if (copiedVolume.getLun() != null) {
-            Lun copiedLun = copiedVolume.getLun();
-            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_UUID, copiedLun.getUuid(), false);
-            volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.LUN_DOT_NAME, copiedLun.getName(), false);
-            destVolumeVO.setFolder(copiedLun.getUuid());
-            destVolumeVO.set_iScsiName(null);
-            copiedPath = copiedLun.getName();
-        } else if (copiedVolume.getFile() != null && copiedVolume.getFile().getPath() != null) {
-            copiedPath = copiedVolume.getFile().getPath();
-        }
-        destVolumeVO.setPath(copiedPath);
-        volumeDao.update(destVolumeVO.getId(), destVolumeVO);
-        return copiedPath;
     }
 
     /**

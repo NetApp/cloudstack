@@ -19,14 +19,13 @@
 
 package org.apache.cloudstack.storage.service;
 
-import com.cloud.exception.InvalidParameterValueException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import com.cloud.storage.VolumeDetailVO;
-import com.cloud.storage.dao.VolumeDetailsDao;
 import java.util.Map;
 
 import javax.inject.Inject;
+
 import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
@@ -51,12 +50,8 @@ import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import javax.inject.Inject;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.HostVO;
 import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.dao.VolumeDetailsDao;
@@ -391,9 +386,10 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     private OntapResponse<Lun> findLunByName(String authHeader, Lun lunRequest) {
         String svmName = lunRequest.getSvm() != null ? lunRequest.getSvm().getName() : storage.getSvmName();
-        OntapResponse<Lun> response = sanFeignClient.getLunResponse(authHeader, Map.of(
+        Map<String, Object> queryParams = Map.of(
                 OntapStorageConstants.SVM_DOT_NAME, svmName,
-                OntapStorageConstants.NAME, lunRequest.getName()));
+                OntapStorageConstants.NAME, lunRequest.getName());
+        OntapResponse<Lun> response = sanFeignClient.getLunResponse(authHeader, queryParams);
         return response != null && !CollectionUtils.isEmpty(response.getRecords()) ? response : null;
     }
 
