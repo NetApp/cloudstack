@@ -299,7 +299,7 @@ public class UnifiedNASStrategyTest {
 
         CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                 () -> strategy.createCloudStackVolume(cloudStackVolume));
-        assertTrue(ex.getMessage().contains("Failed to apply QoS policy to NFS volume file"));
+        assertTrue(ex.getMessage().contains("Failed to update NFS volume file"));
         verify(endPoint).sendMessage(any(DeleteCommand.class));
     }
 
@@ -326,6 +326,22 @@ public class UnifiedNASStrategyTest {
                 argThat(file -> file.getQosPolicy() != null
                         && "cs_100_to_200_iops_svm1".equals(file.getQosPolicy().getName())
                         && "qos-uuid".equals(file.getQosPolicy().getUuid())));
+    }
+
+    @Test
+    public void testUpdateCloudStackVolume_NoQosPolicy_SkipsPatch() {
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getUuid()).thenReturn("volume-uuid-123");
+
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+        request.setFlexVolumeUuid("flex-uuid");
+        request.setFile(new FileInfo());
+
+        CloudStackVolume result = strategy.updateCloudStackVolume(request);
+
+        assertSame(request, result);
+        verify(nasFeignClient, never()).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
     }
 
     @Test

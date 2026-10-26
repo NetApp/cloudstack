@@ -1371,6 +1371,19 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
+    void testUpdateCloudStackVolume_NoQosPolicy_SkipsPatch() {
+        Lun lun = new Lun();
+        lun.setUuid("lun-uuid-123");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setLun(lun);
+
+        CloudStackVolume result = unifiedSANStrategy.updateCloudStackVolume(request);
+
+        assertSame(request, result);
+        verify(sanFeignClient, never()).updateLun(any(), any(), any());
+    }
+
+    @Test
     void testUpdateCloudStackVolume_InvalidRequest_ThrowsException() {
         CloudStackVolume lunWithoutUuid = new CloudStackVolume();
         lunWithoutUuid.setLun(new Lun());

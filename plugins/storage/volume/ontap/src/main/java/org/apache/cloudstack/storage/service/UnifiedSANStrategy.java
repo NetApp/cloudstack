@@ -200,19 +200,21 @@ public class UnifiedSANStrategy extends SANStrategy {
                 || cloudstackVolume.getLun().getUuid() == null) {
             throw new CloudRuntimeException("Invalid iSCSI volume request");
         }
+        VolumeQosPolicy qosPolicy = cloudstackVolume.getLun().getQosPolicy();
+        if (qosPolicy == null) {
+            return cloudstackVolume;
+        }
         Lun lunUpdate = new Lun();
-        lunUpdate.setQosPolicy(cloudstackVolume.getLun().getQosPolicy());
+        lunUpdate.setQosPolicy(qosPolicy);
         try {
             JobResponse response = sanFeignClient.updateLun(
                     getAuthHeader(), cloudstackVolume.getLun().getUuid(), lunUpdate);
-            pollJobIfPresent(response, "update QoS policy on LUN [" + cloudstackVolume.getLun().getUuid() + "]");
+            pollJobIfPresent(response, "update LUN [" + cloudstackVolume.getLun().getUuid() + "]");
         } catch (FeignException e) {
-            throw new CloudRuntimeException("Failed to apply QoS policy to LUN: " + e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to update LUN: " + e.getMessage(), e);
         }
-        logger.info("Applied QoS policy [{}] to LUN [{}]",
-                cloudstackVolume.getLun().getQosPolicy() != null
-                        ? cloudstackVolume.getLun().getQosPolicy().getName() : null,
-                cloudstackVolume.getLun().getUuid());
+        logger.info("Updated LUN [{}] with QoS policy [{}]",
+                cloudstackVolume.getLun().getUuid(), qosPolicy.getName());
         return cloudstackVolume;
     }
 
@@ -343,7 +345,9 @@ public class UnifiedSANStrategy extends SANStrategy {
             lunSpace.setSize(sizeInBytes);
             Lun lunPatch = new Lun();
             lunPatch.setSpace(lunSpace);
-            lunPatch.setQosPolicy(qosPolicy);
+            if (qosPolicy != null) {
+                lunPatch.setQosPolicy(qosPolicy);
+            }
             JobResponse response = sanFeignClient.updateLun(authHeader, lunUuid, lunPatch);
             pollJobIfPresent(response, "resize Lun [" + lunUuid + "]");
             logger.debug("resizeCloudStackVolume: Lun {} resized to {} bytes", lunUuid, sizeInBytes);
