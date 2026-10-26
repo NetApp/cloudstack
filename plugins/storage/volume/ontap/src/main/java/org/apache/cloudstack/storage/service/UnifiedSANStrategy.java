@@ -463,11 +463,12 @@ public class UnifiedSANStrategy extends SANStrategy {
             }
             Lun.Source source = lun.getCopy() != null ? lun.getCopy().getSource() : null;
             Lun.Progress progress = source != null ? source.getProgress() : null;
-            if (progress == null || Integer.valueOf(100).equals(progress.getPercentComplete())) {
+            // A missing progress object means ONTAP has not reported the copy yet. Keep waiting.
+            if (progress != null && Integer.valueOf(100).equals(progress.getPercentComplete())) {
                 return;
             }
-            if ("failed".equalsIgnoreCase(progress.getState()) || "failure".equalsIgnoreCase(progress.getState())
-                    || "error".equalsIgnoreCase(progress.getState())) {
+            if (progress != null && ("failed".equalsIgnoreCase(progress.getState()) || "failure".equalsIgnoreCase(progress.getState())
+                    || "error".equalsIgnoreCase(progress.getState()))) {
                 throw new CloudRuntimeException("ONTAP LUN copy failed for Lun [" + lunUuid + "]");
             }
             if (System.currentTimeMillis() >= deadline) {
