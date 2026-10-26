@@ -50,6 +50,16 @@ public class OntapStorageConstants {
     public static final String EXPORT = "export";
     public static final String NFS3_MOUNT_OPTIONS_VER_3 = "vers=3";
 
+    /**
+     * Optional URL detail: when set to "true" at pool creation time, the lifecycle registers the
+     * NFS primary as {@link com.cloud.storage.Storage.StoragePoolType#OntapNFS} instead of
+     * {@link com.cloud.storage.Storage.StoragePoolType#NetworkFilesystem}. OntapNFS pools create,
+     * resize, and delete files via ONTAP REST (truly managed) and store volumes as RAW. Lab-only
+     * for now: template cache, cross-pool migration, and in-place upgrade of existing
+     * NetworkFilesystem pools are not covered yet.
+     */
+    public static final String USE_ONTAP_NFS_POOL_TYPE = "useOntapNFSPoolType";
+
     public static final int ONTAP_PORT = 443;
 
     public static final String JOB_RUNNING = "running";

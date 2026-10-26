@@ -180,12 +180,17 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         int port;
         switch (protocol) {
             case NFS3:
-                parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
+                boolean useOntapNfs = Boolean.parseBoolean(details.get(OntapStorageConstants.USE_ONTAP_NFS_POOL_TYPE));
+                Storage.StoragePoolType nfsPoolType = useOntapNfs
+                        ? Storage.StoragePoolType.OntapNFS
+                        : Storage.StoragePoolType.NetworkFilesystem;
+                parameters.setType(nfsPoolType);
                 path = OntapStorageConstants.SLASH + storagePoolName;
                 port = OntapStorageConstants.NFS3_PORT;
                 // Force NFSv3 for ONTAP managed storage to avoid NFSv4 ID mapping issues
                 details.put(ApiConstants.NFS_MOUNT_OPTIONS, OntapStorageConstants.NFS3_MOUNT_OPTIONS_VER_3);
-                logger.info("Setting NFS path for storage pool: " + path + ", port: " + port + " with mount option: vers=3");
+                logger.info("Setting NFS path for storage pool: {}, port: {}, mount option: vers=3, pool type: {}",
+                        path, port, nfsPoolType);
                 break;
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.OntapiSCSI);
@@ -267,12 +272,17 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 OntapStorageConstants.PROTOCOL,
                 OntapStorageConstants.STORAGE_IP
         );
+        // Optional ONTAP detail keys (accepted but not required). Flags and tuning that are off by
+        // default live here; adding one does not change existing pool creation.
+        Set<String> optionalKeys = Set.of(
+                OntapStorageConstants.USE_ONTAP_NFS_POOL_TYPE
+        );
 
         // Validate existing entries (reject unexpected keys, empty values)
         for (Map.Entry<String, String> e : details.entrySet()) {
             String key = e.getKey();
             String val = e.getValue();
-            if (!requiredKeys.contains(key)) {
+            if (!requiredKeys.contains(key) && !optionalKeys.contains(key)) {
                 throw new CloudRuntimeException("Unexpected ONTAP detail key in URL: " + key);
             }
             if (StringUtils.isBlank(val)) {

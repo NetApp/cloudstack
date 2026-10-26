@@ -2434,6 +2434,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         Storage.StoragePoolType spType = storagePool.getPoolType();
         switch (spType) {
             case OntapiSCSI:
+            case OntapNFS:
                 return Storage.ImageFormat.RAW;
             case NetworkFilesystem:
                 return Storage.ImageFormat.QCOW2;

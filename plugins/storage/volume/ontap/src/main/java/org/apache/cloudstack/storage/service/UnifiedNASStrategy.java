@@ -88,14 +88,20 @@ public class UnifiedNASStrategy extends NASStrategy {
     public CloudStackVolume createCloudStackVolume(CloudStackVolume cloudstackVolume) {
         logger.info("createCloudStackVolume: Create cloudstack volume " + cloudstackVolume);
         try {
-            // Step 1: set cloudstack volume metadata
+            // Step 1: set cloudstack volume metadata (records the actual pool type on the volume row)
             updateCloudStackVolumeMetadata(cloudstackVolume.getDatastoreId(), cloudstackVolume.getVolumeInfo());
-            // Step 2: Send command to KVM host to create qcow2 file using qemu-img
-            Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
-            if (answer == null || !answer.getResult()) {
-                String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
-                logger.error("createCloudStackVolume: " + errMsg);
-                throw new CloudRuntimeException(errMsg);
+            boolean managed = isOntapNfsManagedPool(cloudstackVolume.getDatastoreId());
+            // Step 2: create the backing file. OntapNFS pools go directly to ONTAP; stock NFS pools
+            // still dispatch qemu-img to the KVM host for backward compatibility.
+            if (managed) {
+                createFileOnOntap(cloudstackVolume);
+            } else {
+                Answer answer = createVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
+                if (answer == null || !answer.getResult()) {
+                    String errMsg = answer != null ? answer.getDetails() : "Failed to create qcow2 on KVM host";
+                    logger.error("createCloudStackVolume: " + errMsg);
+                    throw new CloudRuntimeException(errMsg);
+                }
             }
             if (cloudstackVolume.getFile() != null && cloudstackVolume.getFile().getQosPolicy() != null) {
                 try {
@@ -103,10 +109,14 @@ public class UnifiedNASStrategy extends NASStrategy {
                 } catch (RuntimeException qosError) {
                     logger.error("createCloudStackVolume: QoS attach failed; deleting leftover NFS volume file", qosError);
                     try {
-                        Answer cleanup = deleteVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
-                        if (cleanup == null || !cleanup.getResult()) {
-                            logger.error("createCloudStackVolume: leftover NFS file may remain after QoS attach failure: {}",
-                                    cleanup != null ? cleanup.getDetails() : "null answer");
+                        if (managed) {
+                            deleteFileOnOntap(cloudstackVolume);
+                        } else {
+                            Answer cleanup = deleteVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
+                            if (cleanup == null || !cleanup.getResult()) {
+                                logger.error("createCloudStackVolume: leftover NFS file may remain after QoS attach failure: {}",
+                                        cleanup != null ? cleanup.getDetails() : "null answer");
+                            }
                         }
                     } catch (Exception cleanupError) {
                         logger.error("createCloudStackVolume: failed to delete leftover NFS volume file after QoS attach failure",
@@ -121,6 +131,101 @@ public class UnifiedNASStrategy extends NASStrategy {
         } catch (Exception e) {
             logger.error("createCloudStackVolume: error occured " + e);
             throw new CloudRuntimeException(e);
+        }
+    }
+
+    /**
+     * Returns true when the backing pool is {@link Storage.StoragePoolType#OntapNFS} — the truly
+     * managed NFS pool type that creates/resizes/deletes files via ONTAP REST instead of
+     * dispatching qemu-img to the KVM host.
+     */
+    private boolean isOntapNfsManagedPool(String datastoreId) {
+        if (datastoreId == null) {
+            return false;
+        }
+        StoragePoolVO pool = primaryDataStoreDao.findById(Long.parseLong(datastoreId));
+        return pool != null && Storage.StoragePoolType.OntapNFS.equals(pool.getPoolType());
+    }
+
+    /**
+     * Creates an empty RAW file on the FlexVolume via ONTAP REST. The volume's filename and size
+     * are driven by the VolumeInfo passed in; the pool details hold the FlexVolume UUID.
+     */
+    private void createFileOnOntap(CloudStackVolume cloudstackVolume) {
+        VolumeObject volumeObject = (VolumeObject) cloudstackVolume.getVolumeInfo();
+        VolumeVO volume = volumeDao.findById(volumeObject.getId());
+        if (volume == null) {
+            throw new CloudRuntimeException("Volume not found with id: " + volumeObject.getId());
+        }
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(volume.getPoolId());
+        String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume uuid missing from pool details for pool " + volume.getPoolId());
+        }
+        String filePath = volumeObject.getUuid();
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setType(FileInfo.TypeEnum.FILE);
+        fileInfo.setSize(volume.getSize());
+        try {
+            nasFeignClient.createFile(getAuthHeader(), flexVolUuid, filePath, fileInfo);
+            logger.info("createFileOnOntap: created RAW file [{}] on FlexVol [{}] ({} bytes)",
+                    filePath, flexVolUuid, volume.getSize());
+        } catch (FeignException e) {
+            logger.error("createFileOnOntap: failed to create file [{}] on FlexVol [{}]: status {}, {}",
+                    filePath, flexVolUuid, e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to create ONTAP NFS file: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Deletes the backing file on the FlexVolume via ONTAP REST. A 404 (file already gone) is
+     * treated as success — same policy as {@link #deleteFileByPath}.
+     */
+    private void deleteFileOnOntap(CloudStackVolume cloudstackVolume) {
+        VolumeObject volumeObject = (VolumeObject) cloudstackVolume.getVolumeInfo();
+        VolumeVO volume = volumeDao.findById(volumeObject.getId());
+        if (volume == null) {
+            throw new CloudRuntimeException("Volume not found with id: " + volumeObject.getId());
+        }
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(volume.getPoolId());
+        String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume uuid missing from pool details for pool " + volume.getPoolId());
+        }
+        String filePath = volume.getPath() != null ? volume.getPath() : volumeObject.getUuid();
+        deleteFileByPath(flexVolUuid, filePath);
+    }
+
+    /**
+     * Resizes the backing file on the FlexVolume via ONTAP REST (PATCH with new {@code size}).
+     * ONTAP extends or truncates the sparse file in place; subsequent host I/O sees the new size.
+     */
+    private void resizeFileOnOntap(CloudStackVolume cloudstackVolume, long sizeInBytes) {
+        VolumeObject volumeObject = (VolumeObject) cloudstackVolume.getVolumeInfo();
+        VolumeVO volume = volumeDao.findById(volumeObject.getId());
+        if (volume == null) {
+            throw new CloudRuntimeException("Volume not found with id: " + volumeObject.getId());
+        }
+        Map<String, String> poolDetails = storagePoolDetailsDao.listDetailsKeyPairs(volume.getPoolId());
+        String flexVolUuid = poolDetails.get(OntapStorageConstants.VOLUME_UUID);
+        if (flexVolUuid == null || flexVolUuid.isEmpty()) {
+            throw new CloudRuntimeException("FlexVolume uuid missing from pool details for pool " + volume.getPoolId());
+        }
+        String filePath = volume.getPath() != null ? volume.getPath() : volumeObject.getUuid();
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setSize(sizeInBytes);
+        // Preserve any QoS policy the caller passed through — this way size + QoS go in one PATCH.
+        if (cloudstackVolume.getFile() != null && cloudstackVolume.getFile().getQosPolicy() != null) {
+            fileInfo.setQosPolicy(cloudstackVolume.getFile().getQosPolicy());
+        }
+        try {
+            nasFeignClient.updateFile(getAuthHeader(), flexVolUuid, filePath, fileInfo);
+            logger.info("resizeFileOnOntap: resized file [{}] on FlexVol [{}] to {} bytes",
+                    filePath, flexVolUuid, sizeInBytes);
+        } catch (FeignException e) {
+            logger.error("resizeFileOnOntap: failed to resize file [{}] on FlexVol [{}]: status {}, {}",
+                    filePath, flexVolUuid, e.status(), e.getMessage());
+            throw new CloudRuntimeException("Failed to resize ONTAP NFS file: " + e.getMessage(), e);
         }
     }
 
@@ -164,13 +269,19 @@ public class UnifiedNASStrategy extends NASStrategy {
     public void deleteCloudStackVolume(CloudStackVolume cloudstackVolume) {
         logger.info("deleteCloudStackVolume: Delete cloudstack volume " + cloudstackVolume);
         try {
-            // Step 1: Send command to KVM host to delete qcow2 file using qemu-img
+            if (isOntapNfsManagedPool(cloudstackVolume.getDatastoreId())) {
+                deleteFileOnOntap(cloudstackVolume);
+                return;
+            }
+            // Legacy unmanaged NFS path: still dispatch qemu-img to the KVM host.
             Answer answer = deleteVolumeOnKVMHost(cloudstackVolume.getVolumeInfo());
             if (answer == null || !answer.getResult()) {
                 String errMsg = answer != null ? answer.getDetails() : "Failed to delete qcow2 on KVM host";
                 logger.error("deleteCloudStackVolume: " + errMsg);
                 throw new CloudRuntimeException(errMsg);
             }
+        } catch (CloudRuntimeException e) {
+            throw e;
         } catch (Exception e) {
             logger.error("deleteCloudStackVolume: error occured " + e);
             throw new CloudRuntimeException(e);
@@ -234,7 +345,13 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     /**
-     * Grows the cloned qcow2 to the requested size via a host-side {@code qemu-img resize}.
+     * Grows the backing file to the requested size.
+     *
+     * <p>For an {@link Storage.StoragePoolType#OntapNFS} pool this is a PATCH to ONTAP's file
+     * endpoint; for the legacy {@link Storage.StoragePoolType#NetworkFilesystem} path it is still
+     * a host-side {@code qemu-img resize}. QoS, if present, piggy-backs on the same ONTAP PATCH
+     * (so size and QoS land in one call) or goes out as a separate {@code updateFile} on the
+     * legacy path (the existing behavior).</p>
      */
     @Override
     public void resizeCloudStackVolume(CloudStackVolume cloudstackVolume, long sizeInBytes) {
@@ -247,6 +364,13 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
 
         DataObject volumeInfo = cloudstackVolume.getVolumeInfo();
+        if (isOntapNfsManagedPool(cloudstackVolume.getDatastoreId())) {
+            resizeFileOnOntap(cloudstackVolume, sizeInBytes);
+            logger.info("resizeCloudStackVolume: Resized volume [{}] to {} bytes (OntapNFS, ONTAP API)",
+                    volumeInfo.getUuid(), sizeInBytes);
+            return;
+        }
+
         Answer answer = resizeVolumeOnKVMHost(volumeInfo, sizeInBytes);
         if (answer == null || !answer.getResult()) {
             String errMsg = answer != null ? answer.getDetails() : "Failed to resize qcow2 on KVM host";
@@ -646,11 +770,17 @@ public class UnifiedNASStrategy extends NASStrategy {
                 throw new CloudRuntimeException("Volume not found with id: " + volumeId);
             }
             String volumeUuid = volumeInfo.getUuid();
-            volume.setPoolType(Storage.StoragePoolType.NetworkFilesystem);
+            // Record the pool's actual type on the volume row so downstream orchestration (format,
+            // migration, snapshot strategy routing) sees OntapNFS when that is what the pool is.
+            StoragePoolVO storagePool = primaryDataStoreDao.findById(Long.parseLong(dataStoreId));
+            Storage.StoragePoolType poolType = storagePool != null
+                    ? storagePool.getPoolType()
+                    : Storage.StoragePoolType.NetworkFilesystem;
+            volume.setPoolType(poolType);
             volume.setPoolId(Long.parseLong(dataStoreId));
-            volume.setPath(volumeUuid);  // Filename for qcow2 file
+            volume.setPath(volumeUuid);  // Filename on the mounted share (RAW for OntapNFS, qcow2 for NetworkFilesystem)
             volumeDao.update(volume.getId(), volume);
-            logger.info("Updated volume path to {} for volume ID {}", volumeUuid, volumeId);
+            logger.info("Updated volume path to {} for volume ID {} (pool type {})", volumeUuid, volumeId, poolType);
             return volumeUuid;
         } catch (Exception e){
             logger.error("updateCloudStackVolumeMetadata: Exception while updating volumeInfo: {} in volume: {}", dataStoreId, volumeInfo.getUuid(), e);
