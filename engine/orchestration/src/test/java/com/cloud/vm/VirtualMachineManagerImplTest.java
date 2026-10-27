@@ -590,8 +590,10 @@ public class VirtualMachineManagerImplTest {
         Mockito.doReturn(Map.of("storageIP", "10.0.0.1", "svmName", "svm1", "protocol", "NFS3"))
                 .when(storagePoolDaoMock).getDetails(12L);
 
-        assertThrows(CloudRuntimeException.class,
+        CloudRuntimeException exception = assertThrows(CloudRuntimeException.class,
                 () -> virtualMachineManagerImpl.executeManagedStorageChecksWhenTargetStoragePoolProvided(storagePoolVoMock, volumeVoMock, targetPool));
+        assertTrue(exception.getMessage().contains("protocol=ISCSI"));
+        assertTrue(exception.getMessage().contains("protocol=NFS3"));
     }
 
     @Test

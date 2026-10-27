@@ -502,6 +502,19 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             }
             if (srcStoragePoolVO.isManaged() && srcStoragePoolVO.getId() != destStoragePoolVO.getId()
                     && !isSupportedOntapMigrationPoolPair(srcStoragePoolVO, destStoragePoolVO)) {
+                if (isOntapPool(srcStoragePoolVO) && isOntapPool(destStoragePoolVO)) {
+                    Map<String, String> srcDetails = _storagePoolDao.getDetails(srcStoragePoolVO.getId());
+                    Map<String, String> destDetails = _storagePoolDao.getDetails(destStoragePoolVO.getId());
+                    throw new CloudRuntimeException(String.format("ONTAP migration requires matching storageIP, SVM, protocol, and pool type "
+                                    + "[source: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s; destination: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s].",
+                            srcDetails != null ? srcDetails.get(ONTAP_STORAGE_IP_DETAIL) : null,
+                            srcDetails != null ? srcDetails.get(ONTAP_SVM_UUID_DETAIL) : null,
+                            srcDetails != null ? srcDetails.get(ONTAP_SVM_NAME_DETAIL) : null, srcDetails != null ? srcDetails.get(ONTAP_PROTOCOL_DETAIL) : null,
+                            srcStoragePoolVO.getPoolType(), destDetails != null ? destDetails.get(ONTAP_STORAGE_IP_DETAIL) : null,
+                            destDetails != null ? destDetails.get(ONTAP_SVM_UUID_DETAIL) : null,
+                            destDetails != null ? destDetails.get(ONTAP_SVM_NAME_DETAIL) : null,
+                            destDetails != null ? destDetails.get(ONTAP_PROTOCOL_DETAIL) : null, destStoragePoolVO.getPoolType()));
+                }
                 throw new CloudRuntimeException("Migrating a volume online with KVM from managed storage is not currently supported.");
             }
             if (storageTypeConsistency == null) {
