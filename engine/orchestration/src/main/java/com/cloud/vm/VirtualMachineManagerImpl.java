@@ -3541,6 +3541,19 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
         if (details != null && Boolean.parseBoolean(details.get(Storage.Capability.ALLOW_MIGRATE_OTHER_POOLS.toString()))) {
             return;
         }
+        if (DataStoreProvider.ONTAP_PLUGIN_NAME.equals(currentPool.getStorageProviderName())
+                && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(targetPool.getStorageProviderName())) {
+            Map<String, String> targetDetails = _storagePoolDao.getDetails(targetPool.getId());
+            throw new CloudRuntimeException(String.format("ONTAP migration requires matching storageIP, SVM, protocol, and pool type "
+                            + "[source: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s; destination: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s].",
+                    details != null ? details.get(ONTAP_STORAGE_IP_DETAIL) : null,
+                    details != null ? details.get(ONTAP_SVM_UUID_DETAIL) : null,
+                    details != null ? details.get(ONTAP_SVM_NAME_DETAIL) : null, details != null ? details.get(ONTAP_PROTOCOL_DETAIL) : null,
+                    currentPool.getPoolType(), targetDetails != null ? targetDetails.get(ONTAP_STORAGE_IP_DETAIL) : null,
+                    targetDetails != null ? targetDetails.get(ONTAP_SVM_UUID_DETAIL) : null,
+                    targetDetails != null ? targetDetails.get(ONTAP_SVM_NAME_DETAIL) : null,
+                    targetDetails != null ? targetDetails.get(ONTAP_PROTOCOL_DETAIL) : null, targetPool.getPoolType()));
+        }
         throw new CloudRuntimeException(String.format("Currently, a volume on managed storage can only be 'migrated' to itself " + "[volumeId=%s, currentStoragePoolId=%s, targetStoragePoolId=%s].",
                 volume.getUuid(), currentPool.getUuid(), targetPool.getUuid()));
     }
