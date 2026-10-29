@@ -43,7 +43,10 @@ for the deployment, health-gate, and artifact contracts.
 test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
-├── TEST_CASES.md                 # Full test case reference table (119 tests)
+├── guest_ssh.py                  # Guest SSH (paramiko) for the VM workflow suites
+├── setup_env.sh                  # venv: Marvin plus requirements.txt
+├── requirements.txt              # setuptools, pyvmomi, paramiko pins
+├── TEST_CASES.md                 # Full test case reference table (151 tests)
 ├── README.md                     # This file
 │
 ├── nfs3/
@@ -54,7 +57,7 @@ test/integration/plugins/ontap/
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
 │   ├── instance/
-│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + attach/resize/detach + template cache
+│   │   └── test_vm_volume_attach.py      # Pool + volume + VM + resize, snapshots, attach/detach + template cache
 │   └── template/
 │       └── test_template_cache_negative.py  # Template-cache boundary cases
 │
@@ -66,7 +69,7 @@ test/integration/plugins/ontap/
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
     ├── instance/
-    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + attach/resize/LUN-map lifecycle + template cache
+    │   └── test_vm_volume_attach.py      # Pool + LUN + VM + resize, snapshots, LUN-map lifecycle + template cache
     └── template/
         └── test_template_cache_negative.py  # Template-cache boundary cases
 ```
@@ -120,6 +123,38 @@ python3 -m pip install --user \
 
 # Verify
 python3 -c "import marvin; print('Marvin OK')"
+```
+
+The VM workflow suites also need a venv with pinned dependencies. From the repo root:
+
+```bash
+bash test/integration/plugins/ontap/setup_env.sh
+```
+
+The script is safe to re-run. It creates `test/integration/plugins/ontap/.venv` when that directory is missing, then installs into it:
+
+- Marvin (from `MARVIN_ARCHIVE` when set, otherwise from `tools/marvin` after generating `commands.xml`)
+- the pins in `requirements.txt`: `setuptools>=40.3.0,<81`, `pyvmomi==8.0.2.0.1`, and `paramiko>=3.4,<4`
+
+`run_tests.sh` uses that venv automatically.
+
+#### Paramiko (guest SSH)
+
+`nfs3/instance/test_vm_volume_attach.py` and `iscsi/instance/test_vm_volume_attach.py` log into the guest through `guest_ssh.py`. The lab template is CentOS 5.5, and its sshd only offers SHA-1 key exchange (`diffie-hellman-group14-sha1`) and `ssh-rsa` host keys. Paramiko 4.x removed SHA-1, so those logins fail unless the venv has Paramiko 3.x.
+
+`setup_env.sh` installs the pin from `requirements.txt`:
+
+```bash
+test/integration/plugins/ontap/.venv/bin/pip install -r test/integration/plugins/ontap/requirements.txt
+```
+
+`guest_ssh.check_paramiko()` checks for `diffie-hellman-group14-sha1` before the first guest connection and tells you to re-run `setup_env.sh` when the active interpreter has Paramiko 4. Guest login itself comes from `ontap.cfg` (`cloudstack.templateUsername` / `cloudstack.templatePassword`).
+
+Confirm the venv before a VM workflow run:
+
+```bash
+test/integration/plugins/ontap/.venv/bin/python -c \
+  "import paramiko; print(paramiko.__version__); assert 'diffie-hellman-group14-sha1' in paramiko.Transport._kex_info"
 ```
 
 ---
@@ -347,13 +382,13 @@ another ONTAP pool is present.
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Lifecycle with a live volume, deletion with a pre-deleted FlexVol or export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
 | NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP/KVM verification, disable, enable, and delete |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
-| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle with stopped-VM qcow2 grow; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
+| NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 29 | Full VM lifecycle with stopped-VM qcow2 grow, guest SSH, volume and VM snapshots; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Lifecycle with a live LUN, deletion with a pre-deleted FlexVol or igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
 | iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP verification, disable, enable, and delete |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
-| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 13 | Full VM lifecycle; stopped-VM LUN grow and LUN-map checks; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
+| iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 29 | Full VM lifecycle; stopped-VM LUN grow, LUN-map checks, guest SSH, volume and VM snapshots; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
@@ -364,12 +399,13 @@ For the goal, dependencies, and exact success criteria of every individual test,
 
 | Symptom | Likely cause | Fix |
 | --------- | ------------- | ----- |
+| `paramiko … has no SHA-1 key exchange` / guest SSH fails on CentOS 5.5 | Paramiko 4.x is installed; the guest sshd only offers SHA-1 | Re-run `bash test/integration/plugins/ontap/setup_env.sh` and run tests with `test/integration/plugins/ontap/.venv` (`paramiko>=3.4,<4`) |
 | `ModuleNotFoundError: No module named 'ontap_test_base'` | Missing `PYTHONPATH` prefix | Prefix every run with `PYTHONPATH=test/integration/plugins/ontap` |
 | `Marvin Init Failed` | CloudStack API unreachable | Check `mgtSvrIp:8096` is reachable; restart `cloudstack-management` |
 | `Lost connection to MySQL` | MySQL not accepting remote connections | Enable remote MySQL access (see Prerequisites §3) |
 | `sh: python: command not found` (repeated) | Marvin internal call — harmless on macOS | Ignore; Marvin Init still succeeds |
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
-| iSCSI `test_09` error 530 | KVM guest does not ACK SCSI hot-unplug | Known environment limitation — see TEST_CASES.md Suite 10 note |
+| iSCSI `test_24` error 530 | KVM guest does not ACK SCSI hot-unplug | Detach of the data LUN from a running VM; see TEST_CASES.md Suite 10 `test_24_detach_volume_from_vm` |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
 | `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |

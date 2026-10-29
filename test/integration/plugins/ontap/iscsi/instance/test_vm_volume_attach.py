@@ -34,20 +34,20 @@ Key iSCSI behaviour verified at each step via ONTAP REST API:
   - startVirtualMachine → LUN-map is re-created
   - detachVolume → LUN-map is removed
 
-Tests are numbered test_01 ... test_11, plus test_03a and test_03b, and must
+Tests are numbered test_01 ... test_27, plus test_03a and test_03b, and must
 run in that order.  Each step builds on the shared state established by the
 previous step.
 
 The VM is deployed with a compute offering whose storage tags match the pool,
 so its ROOT volume lands on the ONTAP pool and exercises the primary
 template cache (``cs_tmpl_<templateId>`` LUN: seed / reuse / survive VM delete)
-alongside the data-volume resize workflow.  LUN-map assertions are filtered to
-the data volume's LUN, so the ROOT and cache LUNs in the same FlexVol do not
-affect them.
+alongside the data-volume resize and snapshot workflow.  LUN-map assertions are
+filtered to the data volume's LUN, so the ROOT and cache LUNs in the same
+FlexVol do not affect them.
 
 Workflow:
   01  Create iSCSI primary storage pool on ONTAP (tagged <storagePoolTags>-tmpl-cache)
-  02  Create a CloudStack data volume on the iSCSI pool (LUN on ONTAP)
+  02  Create and grow a detached CloudStack data volume (LUN on ONTAP)
   03  Deploy a VM — ROOT on ONTAP; seeds the cs_tmpl_* cache LUN
   03a Deploy a second VM — reuses the cache LUN (one more ROOT clone LUN only)
   03b Expunge the second VM — its ROOT LUN is removed; cache LUN survives
@@ -56,9 +56,37 @@ Workflow:
   06  Grow the attached volume and ONTAP LUN while the VM is stopped
   07  Verify shrinking the ONTAP LUN is rejected without changing its size
   08  Start VM — LUN-map is re-created on ONTAP
-  09  Detach data volume from running VM — LUN-map removed
-  10  Grow the detached data volume
-  11  Destroy VM (cache LUN still survives), delete data volume, delete pool
+  09  Open an SSH port forward to the VM; write ROOT and DATA files
+  10  Snapshot the ROOT volume of the running VM
+  11  Snapshot the DATA volume of the running VM (kept for step 14)
+  12  Revert a volume snapshot while the VM is Running — rejected
+  13  ROOT volume revert: write before-snapshot, snapshot, write
+      after-snapshot, revert, file is back to before-snapshot
+  14  DATA: snapshot again, revert to the step-11 snapshot then to this
+      one, then delete both while the VM is still running
+  15  Write before-s1; VM snapshot of the running VM (kept for step 17)
+  16  Write before-s2, stop, VM snapshot (kept for step 17)
+  17  Revert to the step-15 snapshot, then to the step-16 snapshot, then
+      delete both while the VM is still running
+  18  Two VM snapshot requests for the same VM at once — both succeed
+  19  Deploy a second VM whose ROOT LUN is on the same pool
+  20  Revert VM-A's ROOT; VM-B's file is unchanged
+  21  VM snapshots of both VMs at the same time
+  22  Volume snapshot of VM-A while VM-B's ROOT reverts
+  23  VM snapshot of VM-A while VM-B reverts to its VM snapshot
+  24  Detach data volume from running VM — LUN-map removed
+  25  Grow the detached data volume
+  26  Expunge the second VM while it still has a VM snapshot
+  27  Destroy VM (cache LUN still survives), delete data volume, delete pool
+
+Snapshot steps only create and verify; tearDown deletes every snapshot the
+step created and waits for its FlexVol snapshot to go.  Step 11 keeps its
+DATA snapshot so step 14 can revert to it and then delete both DATA
+snapshots while the VM is running.  Steps 15 and 16 keep their VM snapshots
+so step 17 can revert to them and then delete both while the VM is running.
+
+Guest login for the CentOS 5.5 template comes from ontap.cfg
+(cloudstack.templateUsername / templatePassword); see guest_ssh.py.
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -77,6 +105,7 @@ import base64
 import logging
 import random
 import re
+import threading
 import time
 import unittest
 
@@ -99,9 +128,10 @@ from marvin.cloudstackAPI import (
     startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
 )
-from marvin.lib.base import ServiceOffering, StoragePool
+from marvin.lib.base import ServiceOffering, Snapshot, StoragePool, VmSnapshot, Volume
 from marvin.lib.common import list_storage_pools
 
+from guest_ssh import GuestSsh, guest_credentials, new_token, open_ssh_port
 from ontap_test_base import OntapRestClient, OntapTestBase, get_datacenter_config
 from helpers import template_cache_util as tcu
 from helpers.template_cache_base import (
@@ -112,6 +142,8 @@ from helpers.template_cache_base import (
 )
 
 logger = logging.getLogger("TestOntapVMVolumeAttachISCSI")
+
+TAG = "iscsi_vm_workflow"
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +169,83 @@ def _wait_for_vm_state(api_client, vm_id, target_state, timeout=300,
     return None
 
 
+def _run_concurrent(*callables):
+    """Start all callables at the same moment; return [(result, exception)]."""
+    results = [(None, None)] * len(callables)
+    barrier = threading.Barrier(len(callables))
+
+    def worker(index, fn):
+        try:
+            barrier.wait(timeout=60)
+            results[index] = (fn(), None)
+        except Exception as exc:
+            results[index] = (None, exc)
+
+    threads = [threading.Thread(target=worker, args=(i, fn))
+               for i, fn in enumerate(callables)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
+
+
+def _is_rejected(exc):
+    """True when CloudStack or ONTAP refused the call because another one was in progress."""
+    text = str(exc).lower()
+    return any(token in text for token in (
+        "internal error",
+        "failed to create snapshot",
+        "failed to create instance snapshot",
+        "failed to revert",
+        "another operation",
+        "other active",
+        "try again later",
+        "in progress",
+        "busy",
+    ))
+
+
+def _snapshot_and_revert_with_retry(snapshot_fn, revert_fn, attempts=3, pause=15):
+    """Run a snapshot and a revert together.
+
+    A call that is rejected is retried on its own. A call that already
+    succeeded is not repeated. Returns the snapshot from snapshot_fn.
+    """
+    snap = None
+    reverted = False
+    last_errors = []
+    for attempt in range(1, attempts + 1):
+        jobs = []
+        if snap is None:
+            jobs.append(("snapshot", snapshot_fn))
+        if not reverted:
+            jobs.append(("revert", revert_fn))
+        results = _run_concurrent(*(fn for _, fn in jobs))
+        last_errors = []
+        retryable = True
+        for (kind, _), (result, exc) in zip(jobs, results):
+            if exc is None:
+                if kind == "snapshot":
+                    snap = result
+                else:
+                    reverted = True
+                continue
+            last_errors.append("%s: %s" % (kind, exc))
+            if not _is_rejected(exc):
+                retryable = False
+        if snap is not None and reverted:
+            return snap
+        if not retryable or attempt == attempts:
+            break
+        logger.warning("snapshot/revert rejected, retry %d/%d: %s",
+                       attempt, attempts, last_errors)
+        time.sleep(pause)
+    raise AssertionError(
+        "Snapshot-while-revert failed after %d attempt(s): %s"
+        % (attempt, last_errors))
+
+
 # ---------------------------------------------------------------------------
 # Test data
 # ---------------------------------------------------------------------------
@@ -156,12 +265,14 @@ class TestData:
     DETAIL_STORAGE_IP = "storageIP"
 
     ONTAP_MIN_VOLUME_SIZE = 1677721600
+    # Used when ontap.cfg has neither templateCacheCapacitybytes nor capacitybytes.
+    DEFAULT_POOL_SIZE = 50 * 1024 ** 3
 
     def __init__(self, storage_ip, svm_name, username, password,
                  scope="CLUSTER", provider="NetApp ONTAP",
                  tags="ontap-iscsi", capacitybytes=None):
-        if capacitybytes is None:
-            capacitybytes = TestData.ONTAP_MIN_VOLUME_SIZE * 2
+        if not capacitybytes:
+            capacitybytes = TestData.DEFAULT_POOL_SIZE
         encoded_password = base64.b64encode(password.encode()).decode()
         self.testdata = {
             TestData.ontap: {
@@ -220,6 +331,18 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     _created_network_id = None  # network created by this suite for Advanced zones
     initial_volume_size = None
     target_volume_size = None
+    vm_ssh = None               # (public_ip, public_port) forwarded to vm:22
+    vm2_ssh = None
+    vm_snap_running = None      # step 15 snapshot, reused by step 17
+    vm_snap_stopped = None      # step 16 snapshot, reused by step 17
+    token_s1 = None
+    token_s2 = None
+    kept_ontap_snaps = None
+    data_snap_older = None      # step 11 DATA snapshot, reused by step 14
+    data_token_older = None
+    kept_data_ontap_snaps = None
+    guest_user = "root"
+    guest_password = "password"
 
     _vol_name_prefix = "OntapISCSIVM"
 
@@ -265,6 +388,8 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
         cls._setup_cloudstack_resources(config, cls.testdata[TestData.account])
 
+        cls.guest_user, cls.guest_password = guest_credentials(config)
+
         # Discover a ready user KVM template (exclude SYSTEM type)
         template = find_ready_kvm_template(cls.apiClient, cls.zone.id)
         cls.template_id = template.id if template is not None else None
@@ -282,7 +407,6 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
         cls._cleanup.append(service_offering)
         cls.service_offering_id = service_offering.id
-
         # Network ID for VM deployment
         cls.network_id = None
         zone_type = getattr(cls.zone, "networktype", "Basic")
@@ -325,9 +449,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     def tearDownClass(cls):
         """
         Safety-net cleanup: destroy VMs if still alive, delete the guest
-        network created for Advanced zones (if not already deleted by test_11),
+        network created for Advanced zones (if not already deleted by test_27),
         then delegate pool/volume/account cleanup to the base class.
         """
+        cls._delete_kept_data_snapshot()
+        cls._delete_kept_vm_snapshots()
         for vm in (cls.vm2, cls.vm):
             if vm is None:
                 continue
@@ -348,7 +474,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         cls.vm = None
 
         # Delete the guest network created for this account in Advanced zones.
-        # test_11 deletes it on the happy path; this is the fallback for
+        # test_27 deletes it on the happy path; this is the fallback for
         # mid-suite failures.
         if cls._created_network_id is not None:
             try:
@@ -461,6 +587,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                     self.svm_name, self.__class__.pool.name)
                 if lun.get("name") == lun_name]
 
+
     def _data_lun_size(self):
         """Return the ONTAP data LUN size in bytes."""
         lun_name = self._data_lun_name()
@@ -471,6 +598,339 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.assertGreater(
             size, 0, "ONTAP LUN '%s' did not report space.size" % lun_name)
         return size
+
+    # ---- snapshot step helpers (steps 09-23) ---------------------------
+
+    def setUp(self):
+        super(TestOntapVMVolumeAttachISCSI, self).setUp()
+        self._volume_snapshot_ids = []
+        self._vm_snapshot_ids = []
+        self._extra_volume_ids = []
+        self._created_ontap_snaps = set()
+
+    def tearDown(self):
+        """
+        Delete the snapshots and extra volumes a step created, then check
+        their FlexVol snapshots are gone from ONTAP.
+        """
+        for snap_id in self._vm_snapshot_ids:
+            try:
+                VmSnapshot.deleteVMSnapshot(self.apiClient, snap_id)
+            except Exception as exc:
+                logger.warning("tearDown: VM snapshot %s: %s" % (snap_id, exc))
+        for snap_id in self._volume_snapshot_ids:
+            try:
+                Snapshot({"id": snap_id}).delete(self.apiClient)
+            except Exception as exc:
+                logger.warning("tearDown: volume snapshot %s: %s" % (snap_id, exc))
+        for vol_id in self._extra_volume_ids:
+            try:
+                cmd = deleteVolumeAPI.deleteVolumeCmd()
+                cmd.id = vol_id
+                self.apiClient.deleteVolume(cmd)
+            except Exception as exc:
+                logger.warning("tearDown: volume %s: %s" % (vol_id, exc))
+        if self._created_ontap_snaps and not self._wait_ontap_snaps_gone(
+                self._created_ontap_snaps, fail=False):
+            logger.warning("tearDown: FlexVol snapshots still present: %s"
+                           % sorted(self._created_ontap_snaps))
+        super(TestOntapVMVolumeAttachISCSI, self).tearDown()
+
+    @classmethod
+    def _destroy_second_vm(cls):
+        if cls.vm2 is None:
+            return
+        try:
+            cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
+            cmd.id = cls.vm2.id
+            cmd.expunge = True
+            cls.apiClient.destroyVirtualMachine(cmd)
+        except Exception as exc:
+            logger.warning("Could not destroy second VM %s: %s" % (cls.vm2.id, exc))
+        cls.vm2 = None
+        cls.vm2_ssh = None
+
+    @classmethod
+    def _delete_kept_vm_snapshots(cls):
+        """Delete the step 15/16 snapshots when step 17 did not take them over."""
+        for snap in (cls.vm_snap_running, cls.vm_snap_stopped):
+            if snap is None:
+                continue
+            try:
+                VmSnapshot.deleteVMSnapshot(cls.apiClient, snap.id)
+            except Exception as exc:
+                logger.warning("tearDownClass: VM snapshot %s: %s" % (snap.id, exc))
+        cls.vm_snap_running = None
+        cls.vm_snap_stopped = None
+        cls.token_s1 = None
+        cls.token_s2 = None
+        cls.kept_ontap_snaps = set()
+
+    @classmethod
+    def _delete_kept_data_snapshot(cls):
+        """Delete the step 11 DATA snapshot when step 14 did not take it over."""
+        snap = cls.data_snap_older
+        if snap is None:
+            return
+        try:
+            Snapshot({"id": snap.id}).delete(cls.apiClient)
+        except Exception as exc:
+            logger.warning("tearDownClass: volume snapshot %s: %s" % (snap.id, exc))
+        cls.data_snap_older = None
+        cls.data_token_older = None
+        cls.kept_data_ontap_snaps = set()
+
+    def _keep_data_snapshot(self, snap, ontap_names, token):
+        """Leave the step 11 DATA snapshot in place for step 14."""
+        if snap.id in self._volume_snapshot_ids:
+            self._volume_snapshot_ids.remove(snap.id)
+        names = set(ontap_names)
+        self._created_ontap_snaps -= names
+        self.__class__.data_snap_older = snap
+        self.__class__.data_token_older = token
+        self.__class__.kept_data_ontap_snaps = names
+
+    def _adopt_kept_data_snapshot(self):
+        """Hand the step 11 DATA snapshot to step 14."""
+        snap = self.__class__.data_snap_older
+        token = self.__class__.data_token_older
+        if snap is None or not token:
+            self.skipTest("DATA snapshot from test_11 is required")
+        ontap_names = set(self.__class__.kept_data_ontap_snaps or [])
+        self._volume_snapshot_ids.append(snap.id)
+        self._created_ontap_snaps |= ontap_names
+        self.__class__.data_snap_older = None
+        self.__class__.data_token_older = None
+        self.__class__.kept_data_ontap_snaps = set()
+        return snap, token, ontap_names
+
+    def _delete_volume_snapshot_while_running(self, vm, snap, ontap_names, token):
+        """Delete a volume snapshot while its VM is still running."""
+        Snapshot({"id": snap.id}).delete(self.apiClient)
+        if snap.id in self._volume_snapshot_ids:
+            self._volume_snapshot_ids.remove(snap.id)
+        names = set(ontap_names)
+        self._created_ontap_snaps -= names
+        self._wait_until_gone(
+            lambda: self._volume_snapshot_listed(snap.id),
+            "Volume snapshot %s still listed after delete" % snap.id)
+        self._wait_ontap_snaps_gone(names)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        self._assert_marker(token, disk="DATA", msg="after volume snapshot delete")
+
+    def _delete_vm_snapshot_while_running(self, vm, snap, ontap_names, token):
+        """Delete a VM snapshot while that VM is still running."""
+        VmSnapshot.deleteVMSnapshot(self.apiClient, snap.id)
+        if snap.id in self._vm_snapshot_ids:
+            self._vm_snapshot_ids.remove(snap.id)
+        names = set(ontap_names)
+        self._created_ontap_snaps -= names
+        self._wait_until_gone(
+            lambda: any(item.id == snap.id for item in self._vm_snapshots_of(vm.id)),
+            "VM snapshot %s still listed after delete" % snap.id)
+        self._wait_ontap_snaps_gone(names)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        self._assert_marker(token, msg="after VM snapshot delete")
+
+    def _ontap_names_for_snap(self, names, snap, kind):
+        prefix = "cs" if kind == "volume" else "vm"
+        table = "snapshots" if kind == "volume" else "vm_snapshots"
+        db_id = tcu.get_db_id(self.dbConnection, table, snap.id)
+        suffix = "_%s%s" % (prefix, db_id)
+        return {name for name in names if str(name).endswith(suffix)}
+
+    def _keep_vm_snapshot(self, snap, ontap_names, which):
+        """Leave this VM snapshot in place for step 17."""
+        if snap.id in self._vm_snapshot_ids:
+            self._vm_snapshot_ids.remove(snap.id)
+        names = set(ontap_names)
+        self._created_ontap_snaps -= names
+        kept = self.__class__.kept_ontap_snaps
+        if kept is None:
+            kept = set()
+            self.__class__.kept_ontap_snaps = kept
+        kept.update(names)
+        setattr(self.__class__, which, snap)
+
+    def _adopt_kept_vm_snapshots(self):
+        """Hand the step 15 and 16 snapshots to this step's tearDown."""
+        s1 = self.__class__.vm_snap_running
+        s2 = self.__class__.vm_snap_stopped
+        token_a = self.__class__.token_s1
+        token_b = self.__class__.token_s2
+        if s1 is None or s2 is None or not token_a or not token_b:
+            self.skipTest("VM snapshots from test_15 and test_16 are required")
+        ontap_names = set(self.__class__.kept_ontap_snaps or [])
+        self._vm_snapshot_ids.extend([s1.id, s2.id])
+        self._created_ontap_snaps |= ontap_names
+        self.__class__.vm_snap_running = None
+        self.__class__.vm_snap_stopped = None
+        self.__class__.token_s1 = None
+        self.__class__.token_s2 = None
+        self.__class__.kept_ontap_snaps = set()
+        return s1, s2, token_a, token_b, ontap_names
+
+    def _require_snapshot_vm(self, ssh=True):
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped (no ready template)")
+        if ssh and self.__class__.vm_ssh is None:
+            self.skipTest("Guest SSH not set up — test_09 must pass first")
+        self._start_vm(self.__class__.vm.id)
+        return self.__class__.vm
+
+    def _require_second_vm(self):
+        self._require_snapshot_vm()
+        if self.__class__.vm2 is None or self.__class__.vm2_ssh is None:
+            self.skipTest("Second VM not deployed — test_19 must pass first")
+        self._start_vm(self.__class__.vm2.id)
+        return self.__class__.vm2
+
+    def _vm_state(self, vm_id):
+        vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id))
+        return vms[0].state if vms else None
+
+    def _stop_vm(self, vm_id):
+        if (self._vm_state(vm_id) or "").lower() == "stopped":
+            return
+        cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
+        cmd.id = vm_id
+        cmd.forced = True
+        self.apiClient.stopVirtualMachine(cmd)
+        self._poll_vm_state(vm_id, "Stopped", timeout=600)
+
+    def _start_vm(self, vm_id):
+        if (self._vm_state(vm_id) or "").lower() == "running":
+            return
+        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
+        cmd.id = vm_id
+        self.apiClient.startVirtualMachine(cmd)
+        self._poll_vm_state(vm_id, "Running", timeout=900)
+
+    def _root_volume(self, vm_id):
+        cmd = listVolumesAPI.listVolumesCmd()
+        cmd.virtualmachineid = vm_id
+        cmd.type = "ROOT"
+        cmd.listall = True
+        vols = self.apiClient.listVolumes(cmd) or []
+        self.assertTrue(vols, "No ROOT volume found for VM %s" % vm_id)
+        return vols[0]
+
+    def _guest(self, which="vm"):
+        host, port = getattr(self.__class__, "%s_ssh" % which)
+        return GuestSsh(host, port, self.guest_user, self.guest_password)
+
+    def _write_marker(self, token, which="vm", disks=("ROOT",)):
+        with self._guest(which) as guest:
+            if "ROOT" in disks:
+                guest.write_root_marker(token)
+            if "DATA" in disks:
+                guest.write_data_marker(token)
+
+    def _assert_marker(self, token, which="vm", disk="ROOT", msg=""):
+        with self._guest(which) as guest:
+            found = guest.read_data_marker() if disk == "DATA" else guest.read_root_marker()
+        self.assertEqual(found, token, "%s: %s marker on %s is %r, expected %r"
+                         % (msg, disk, which, found, token))
+
+    def _ontap_snap_names(self):
+        return {s.get("name") for s in self.ontap.list_snapshots(self.__class__.pool.name)}
+
+    def _assert_new_ontap_snaps(self, before, snaps, kind, msg):
+        """Return the FlexVol snapshot created for each CloudStack snapshot.
+
+        A volume snapshot is stored as ``..._cs<dbId>`` and a VM snapshot as
+        ``..._vm<dbId>``. ONTAP snapshots from its own schedule, such as
+        ``hourly.*`` or ``Anti_ransomware_*``, are ignored.
+        """
+        new = self._ontap_snap_names() - before
+        prefix = "cs" if kind == "volume" else "vm"
+        table = "snapshots" if kind == "volume" else "vm_snapshots"
+        matched = set()
+        missing = []
+        for snap in snaps:
+            db_id = tcu.get_db_id(self.dbConnection, table, snap.id)
+            suffix = "_%s%s" % (prefix, db_id)
+            hits = sorted(name for name in new if name.endswith(suffix))
+            if len(hits) != 1:
+                missing.append("%s (suffix %s, matches %s)" % (snap.id, suffix, hits))
+            else:
+                matched.add(hits[0])
+        self.assertFalse(
+            missing,
+            "%s: FlexVol snapshot missing for %s; new FlexVol snapshots: %s"
+            % (msg, missing, sorted(new)))
+        ignored = new - matched
+        if ignored:
+            logger.info("%s: ignoring FlexVol snapshots not created by this step: %s",
+                        msg, sorted(ignored))
+        self._created_ontap_snaps |= matched
+        return matched
+
+    def _assert_ontap_snaps_present(self, names, msg):
+        missing = set(names) - self._ontap_snap_names()
+        self.assertFalse(missing, "%s: FlexVol snapshots missing: %s" % (msg, sorted(missing)))
+
+    def _wait_ontap_snaps_gone(self, names, timeout=180, fail=True):
+        names = set(names)
+        deadline = time.time() + timeout
+        left = names
+        while time.time() < deadline:
+            left = names & self._ontap_snap_names()
+            if not left:
+                return True
+            time.sleep(5)
+        if fail:
+            self.fail("FlexVol snapshots %s still present after %ds" % (sorted(left), timeout))
+        return False
+
+    def _take_volume_snapshot(self, volume_id):
+        snap = Snapshot.create(self.apiClient, volume_id,
+                               account=self.account.name, domainid=self.domain.id)
+        self._volume_snapshot_ids.append(snap.id)
+        self.assertEqual(snap.state, "BackedUp",
+                         "Volume snapshot %s is %s, expected BackedUp" % (snap.id, snap.state))
+        return snap
+
+    def _take_vm_snapshot(self, vm_id):
+        snap = VmSnapshot.create(self.apiClient, vm_id, snapshotmemory="false",
+                                 name="ontap_%d" % random.randint(0, 999999))
+        self._vm_snapshot_ids.append(snap.id)
+        self.assertEqual(snap.state, "Ready",
+                         "VM snapshot %s is %s, expected Ready" % (snap.id, snap.state))
+        return snap
+
+    def _vm_snapshots_of(self, vm_id):
+        return VmSnapshot.list(self.apiClient, virtualmachineid=vm_id, listall=True) or []
+
+    def _volume_snapshot_listed(self, snap_id):
+        listed = Snapshot.list(self.apiClient, id=snap_id, listall=True) or []
+        return any(getattr(item, "id", None) == snap_id for item in listed)
+
+    def _wait_until_gone(self, still_there, msg, timeout=180):
+        deadline = time.time() + timeout
+        while time.time() < deadline and still_there():
+            time.sleep(5)
+        self.assertFalse(still_there(), msg)
+
+    def _volume_revert_flow(self, disk):
+        """Write A, snapshot, write B, stop, revert, start; expect A."""
+        vm = self._require_snapshot_vm()
+        volume_id = (self.__class__.volume.id if disk == "DATA"
+                     else self._root_volume(vm.id).id)
+        token_a = new_token("before-volume-snapshot")
+        token_b = new_token("after-volume-snapshot")
+        self._write_marker(token_a, disks=(disk,))
+        before = self._ontap_snap_names()
+        snap = self._take_volume_snapshot(volume_id)
+        new = self._assert_new_ontap_snaps(before, [snap], "volume", "%s volume snapshot" % disk)
+        self._write_marker(token_b, disks=(disk,))
+
+        self._stop_vm(vm.id)
+        Volume.revertToSnapshot(self.apiClient, snap.id)
+        self._assert_ontap_snaps_present(new, "after revert")
+        self._start_vm(vm.id)
+        self._assert_marker(token_a, disk=disk,
+                            msg="after revert (write after snapshot was %s)" % token_b)
 
     # ==================================================================
     # Test steps
@@ -548,6 +1008,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.assertEqual(
             self._data_lun_size(), detached_target,
             "ONTAP LUN size does not match detached grow target")
+
 
     # ------------------------------------------------------------------
     # Step 03 — Deploy a VM
@@ -725,6 +1186,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             self._data_lun_size(), initial_size,
             "Initial ONTAP LUN size should match the CloudStack volume size")
 
+
     # ------------------------------------------------------------------
     # Step 05 — Stop VM — LUN-maps should be removed
     # ------------------------------------------------------------------
@@ -767,6 +1229,8 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             len(luns) > 0,
             "Data volume LUN should still exist in ONTAP FlexVol after VM stop"
         )
+
+    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Step 06 — Grow attached volume while VM is stopped
@@ -856,7 +1320,6 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             self._data_lun_size(), self.__class__.target_volume_size,
             "ONTAP LUN size changed after rejected shrink")
 
-    # ------------------------------------------------------------------
     # Step 08 — Start VM — LUN-maps should be re-created
     # ------------------------------------------------------------------
 
@@ -892,11 +1355,421 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 09 — Detach volume from running VM
+    # Step 09 — Guest SSH access for snapshot checks
+    # ------------------------------------------------------------------
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_09_open_ssh_and_write_root_data_files(self):
+        """
+        Prepare the running VM for snapshot checks.
+        Verifies:
+          - ROOT and DATA LUNs are both on the ONTAP test pool
+          - SSH login (ontap.cfg templateUsername/templatePassword) works
+            through a port forward on the network's source-NAT IP
+          - The DATA disk can be formatted, mounted and written
+        """
+        vm = self._require_snapshot_vm(ssh=False)
+        if not self.__class__.network_id:
+            self.skipTest("Snapshot steps need an Advanced zone guest network for SSH")
+        pool_id = self.__class__.pool.id
+        root = self._root_volume(vm.id)
+        self.assertEqual(getattr(root, "storageid", None), pool_id,
+                         "ROOT volume is on '%s', not the ONTAP test pool"
+                         % getattr(root, "storage", None))
+        vol_cmd = listVolumesAPI.listVolumesCmd()
+        vol_cmd.id = self.__class__.volume.id
+        vols = self.apiClient.listVolumes(vol_cmd) or []
+        self.assertTrue(vols and getattr(vols[0], "virtualmachineid", None) == vm.id,
+                        "DATA volume must be attached before the snapshot steps")
+
+        host, port, _ = open_ssh_port(self.apiClient, vm.id, self.__class__.network_id)
+        self.__class__.vm_ssh = (host, port)
+        token = new_token("ssh-access-test")
+        self._write_marker(token, disks=("ROOT", "DATA"))
+        self._assert_marker(token, disk="ROOT", msg="guest access")
+        self._assert_marker(token, disk="DATA", msg="guest access")
+
+    # ------------------------------------------------------------------
+    # Steps 08-12 — Volume snapshots
+    # ------------------------------------------------------------------
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_10_root_volume_snapshot_create(self):
+        """
+        VS-01: snapshot the ROOT volume of the running VM.
+        Verifies: state BackedUp; VM stays Running; one new FlexVol snapshot.
+        """
+        vm = self._require_snapshot_vm()
+        before = self._ontap_snap_names()
+        snap = self._take_volume_snapshot(self._root_volume(vm.id).id)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        self._assert_new_ontap_snaps(before, [snap], "volume", "ROOT volume snapshot")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_11_data_volume_snapshot_create(self):
+        """
+        VS-03: snapshot the attached DATA volume.
+        The snapshot is kept for step 14.
+        Verifies: state BackedUp; VM stays Running; one new FlexVol snapshot.
+        """
+        vm = self._require_snapshot_vm()
+        token = new_token("data-s1")
+        self._write_marker(token, disks=("DATA",))
+        before = self._ontap_snap_names()
+        snap = self._take_volume_snapshot(self.__class__.volume.id)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        new = self._assert_new_ontap_snaps(before, [snap], "volume", "DATA volume snapshot")
+        self._keep_data_snapshot(snap, new, token)
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_12_volume_revert_running_vm_rejected(self):
+        """
+        VS-20: reverting a volume snapshot while the VM is Running fails.
+        Verifies: error says the Instance is not shut down; VM stays Running;
+        the FlexVol snapshot remains.
+        """
+        vm = self._require_snapshot_vm()
+        before = self._ontap_snap_names()
+        snap = self._take_volume_snapshot(self._root_volume(vm.id).id)
+        new = self._assert_new_ontap_snaps(before, [snap], "volume", "ROOT volume snapshot")
+        with self.assertRaises(Exception) as ctx:
+            Volume.revertToSnapshot(self.apiClient, snap.id)
+        self.assertIn("shutdown", str(ctx.exception).lower(),
+                      "Unexpected error: %s" % ctx.exception)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        self._assert_ontap_snaps_present(new, "after rejected revert")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_13_root_volume_revert(self):
+        """
+        VS-12: write A, snapshot ROOT, write B, stop, revert, start.
+        Verifies: ROOT marker is A; the FlexVol snapshot survives the revert.
+        """
+        self._volume_revert_flow("ROOT")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_14_data_volume_revert(self):
+        """
+        Take a second DATA snapshot, revert to the step 11 snapshot, then to
+        this later one, and delete both while the VM is still running.
+        Verifies:
+          - After revert to the older snapshot, the DATA marker is the step 11
+            token and the later snapshot is still listed
+          - After revert to the later snapshot, the DATA marker is that token
+          - Both snapshots and their FlexVol snapshots are gone; the VM stays
+            Running and the later marker is unchanged
+        """
+        vm = self._require_snapshot_vm()
+        older, token_older, ontap_older = self._adopt_kept_data_snapshot()
+        token_latest = new_token("data-s2")
+        self._write_marker(token_latest, disks=("DATA",))
+        before = self._ontap_snap_names()
+        latest = self._take_volume_snapshot(self.__class__.volume.id)
+        ontap_latest = self._assert_new_ontap_snaps(
+            before, [latest], "volume", "latest DATA snapshot")
+        self._write_marker(new_token("data-after-both"), disks=("DATA",))
+
+        self._stop_vm(vm.id)
+        Volume.revertToSnapshot(self.apiClient, older.id)
+        self._start_vm(vm.id)
+        self._assert_marker(token_older, disk="DATA",
+                            msg="after revert to the older snapshot")
+        self.assertTrue(
+            self._volume_snapshot_listed(latest.id),
+            "The later volume snapshot should still exist")
+        self._assert_ontap_snaps_present(
+            ontap_older | ontap_latest, "after revert to the older snapshot")
+
+        self._stop_vm(vm.id)
+        Volume.revertToSnapshot(self.apiClient, latest.id)
+        self._start_vm(vm.id)
+        self._assert_marker(token_latest, disk="DATA",
+                            msg="after revert to the latest snapshot")
+
+        self._delete_volume_snapshot_while_running(
+            vm, latest, ontap_latest, token_latest)
+        self._delete_volume_snapshot_while_running(
+            vm, older, ontap_older, token_latest)
+
+    # ------------------------------------------------------------------
+    # Steps 13-16 — VM snapshots
+    # ------------------------------------------------------------------
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_15_vm_snapshot_create_running(self):
+        """
+        VM snapshot of the running VM (ROOT + DATA LUNs on one FlexVol).
+        Writes before-s1, then snapshots. The snapshot is kept for step 17.
+        Verifies: state Ready; VM stays Running; one new FlexVol snapshot.
+        """
+        vm = self._require_snapshot_vm()
+        self.__class__.token_s1 = new_token("before-s1")
+        self._write_marker(self.__class__.token_s1, disks=("ROOT", "DATA"))
+        before = self._ontap_snap_names()
+        snap = self._take_vm_snapshot(vm.id)
+        self.assertEqual(self._vm_state(vm.id), "Running")
+        new = self._assert_new_ontap_snaps(before, [snap], "vm", "VM snapshot")
+        self._keep_vm_snapshot(snap, new, "vm_snap_running")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_16_vm_snapshot_create_stopped(self):
+        """
+        VM snapshot of the stopped VM.
+        Writes before-s2 while Running, then stops and snapshots.
+        The snapshot is kept for step 17.
+        Verifies: state Ready; VM stays Stopped; one new FlexVol snapshot.
+        """
+        vm = self._require_snapshot_vm()
+        self.__class__.token_s2 = new_token("before-s2")
+        self._write_marker(self.__class__.token_s2, disks=("ROOT", "DATA"))
+        self._stop_vm(vm.id)
+        before = self._ontap_snap_names()
+        snap = self._take_vm_snapshot(vm.id)
+        self.assertEqual(self._vm_state(vm.id), "Stopped")
+        new = self._assert_new_ontap_snaps(before, [snap], "vm", "VM snapshot (Stopped)")
+        self._keep_vm_snapshot(snap, new, "vm_snap_stopped")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_17_vm_snapshot_s1_running_s2_stopped_revert(self):
+        """
+        VMS-09 (iSCSI ROOT + iSCSI DATA on the same pool): revert to the
+        running snapshot from step 15, then to the stopped snapshot from
+        step 16.
+        Verifies:
+          - After revert to S1: ROOT and DATA hold before-s1
+          - After revert to S2: ROOT and DATA hold before-s2
+          - Both FlexVol snapshots survive the reverts
+          - Both VM snapshots are then deleted while the VM is still running
+        """
+        if self.__class__.vm is None:
+            self.skipTest("VM not deployed — test_03 was skipped (no ready template)")
+        if self.__class__.vm_ssh is None:
+            self.skipTest("Guest SSH not set up — test_09 must pass first")
+        s1, s2, token_a, token_b, ontap_names = self._adopt_kept_vm_snapshots()
+        vm = self.__class__.vm
+
+        self._stop_vm(vm.id)
+        VmSnapshot.revertToSnapshot(self.apiClient, s1.id)
+        self._start_vm(vm.id)
+        self._assert_marker(token_a, disk="ROOT", msg="after revert to S1")
+        self._assert_marker(token_a, disk="DATA", msg="after revert to S1")
+        self.assertEqual(len(self._vm_snapshots_of(vm.id)), 2, "S2 should still be listed")
+
+        self._stop_vm(vm.id)
+        VmSnapshot.revertToSnapshot(self.apiClient, s2.id)
+        self._start_vm(vm.id)
+        self._assert_marker(token_b, disk="ROOT", msg="after revert to S2")
+        self._assert_marker(token_b, disk="DATA", msg="after revert to S2")
+        self._assert_ontap_snaps_present(ontap_names, "after both reverts")
+
+        self._delete_vm_snapshot_while_running(
+            vm, s1, self._ontap_names_for_snap(ontap_names, s1, "vm"), token_b)
+        self._delete_vm_snapshot_while_running(
+            vm, s2, self._ontap_names_for_snap(ontap_names, s2, "vm"), token_b)
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_18_vm_snapshot_duplicate_requests(self):
+        """
+        VMS-53: two VM snapshot requests for the same VM at the same time.
+        A rejected request is retried on its own; one that already succeeded
+        is not repeated.
+        Verifies: both succeed and are Ready; two new FlexVol snapshots.
+        """
+        vm = self._require_snapshot_vm()
+        before = self._ontap_snap_names()
+        pending = [
+            lambda: VmSnapshot.create(self.apiClient, vm.id, snapshotmemory="false",
+                                      name="ontap_dup_a_%d" % random.randint(0, 99999)),
+            lambda: VmSnapshot.create(self.apiClient, vm.id, snapshotmemory="false",
+                                      name="ontap_dup_b_%d" % random.randint(0, 99999)),
+        ]
+        ok = []
+        last_errors = []
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            results = _run_concurrent(*pending)
+            last_errors = []
+            still_pending = []
+            retryable = True
+            for fn, (result, exc) in zip(pending, results):
+                if exc is None and result is not None:
+                    ok.append(result)
+                    self._vm_snapshot_ids.append(result.id)
+                    continue
+                last_errors.append(exc)
+                if exc is None or not _is_rejected(exc):
+                    retryable = False
+                still_pending.append(fn)
+            pending = still_pending
+            if not pending:
+                break
+            if not retryable or attempt == attempts:
+                break
+            logger.warning("duplicate VM snapshot rejected, retry %d/%d: %s",
+                           attempt, attempts, last_errors)
+            time.sleep(15)
+        self.assertFalse(pending,
+                         "Duplicate VM snapshot requests failed: %s" % last_errors)
+        self.assertEqual(len(ok), 2, "Expected both VM snapshots to succeed; "
+                         "got %d" % len(ok))
+        for snap in ok:
+            self.assertEqual(snap.state, "Ready")
+            self.assertEqual(snap.virtualmachineid, vm.id)
+        self._assert_new_ontap_snaps(before, ok, "vm", "duplicate VM snapshot requests")
+
+    # ------------------------------------------------------------------
+    # Steps 17-21 — Second VM on the same pool: isolation and concurrency
+    # ------------------------------------------------------------------
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_19_deploy_second_vm(self):
+        """
+        Deploy a second VM whose ROOT LUN is on the same ONTAP pool.
+        Verifies: VM Running; ROOT on the test pool; SSH works.
+        """
+        self._require_snapshot_vm()
+        cmd = deployVirtualMachineAPI.deployVirtualMachineCmd()
+        cmd.zoneid = self.zone.id
+        cmd.templateid = self.__class__.template_id
+        cmd.serviceofferingid = self.__class__.service_offering_id
+        cmd.account = self.account.name
+        cmd.domainid = self.domain.id
+        cmd.networkids = self.__class__.network_id
+        vm2 = self.apiClient.deployVirtualMachine(cmd)
+        self.__class__.vm2 = vm2
+        self._poll_vm_state(vm2.id, "Running", timeout=900)
+        root = self._root_volume(vm2.id)
+        self.assertEqual(getattr(root, "storageid", None), self.__class__.pool.id,
+                         "Second VM ROOT is not on the ONTAP test pool")
+        host, port, _ = open_ssh_port(self.apiClient, vm2.id, self.__class__.network_id)
+        self.__class__.vm2_ssh = (host, port)
+        token = new_token("second-vm-ssh-access-test")
+        self._write_marker(token, which="vm2")
+        self._assert_marker(token, which="vm2", msg="second VM access")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_20_volume_revert_leaves_other_vm_untouched(self):
+        """
+        VS-28: two VMs on one FlexVol; revert VM-A's ROOT to its snapshot.
+        Verifies: VM-A is back at its snapshot; VM-B keeps data written after it.
+        """
+        vm = self._require_snapshot_vm()
+        self._require_second_vm()
+        a1 = new_token("vm-a-before-snapshot")
+        a2 = new_token("vm-a-after-snapshot")
+        b1 = new_token("vm-b-before-snapshot")
+        b2 = new_token("vm-b-after-snapshot")
+        self._write_marker(a1)
+        self._write_marker(b1, which="vm2")
+        snap = self._take_volume_snapshot(self._root_volume(vm.id).id)
+        self._write_marker(a2)
+        self._write_marker(b2, which="vm2")
+
+        self._stop_vm(vm.id)
+        Volume.revertToSnapshot(self.apiClient, snap.id)
+        self._start_vm(vm.id)
+        self._assert_marker(a1, msg="VM-A after revert")
+        self._assert_marker(b2, which="vm2", msg="VM-B after VM-A's revert")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_21_concurrent_vm_snapshots_two_vms(self):
+        """
+        VMS-55: VM snapshots on two VMs of the same iSCSI pool at the same time.
+        Verifies: both Ready and owned by their VMs; two distinct new FlexVol
+        snapshots.
+        """
+        vm = self._require_snapshot_vm()
+        vm2 = self._require_second_vm()
+        before = self._ontap_snap_names()
+        results = _run_concurrent(
+            lambda: VmSnapshot.create(self.apiClient, vm.id, snapshotmemory="false",
+                                      name="ontap_cc_a_%d" % random.randint(0, 99999)),
+            lambda: VmSnapshot.create(self.apiClient, vm2.id, snapshotmemory="false",
+                                      name="ontap_cc_b_%d" % random.randint(0, 99999)),
+        )
+        self._vm_snapshot_ids.extend(s.id for s, _ in results if s is not None)
+        errors = [e for _, e in results if e is not None]
+        self.assertFalse(errors, "Concurrent VM snapshots failed: %s" % errors)
+        snap_a, snap_b = results[0][0], results[1][0]
+        self.assertEqual(snap_a.state, "Ready")
+        self.assertEqual(snap_b.state, "Ready")
+        self.assertEqual(snap_a.virtualmachineid, vm.id)
+        self.assertEqual(snap_b.virtualmachineid, vm2.id)
+        self._assert_new_ontap_snaps(before, [snap_a, snap_b], "vm", "concurrent VM snapshots")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_22_concurrent_volume_snapshot_and_revert(self):
+        """
+        Volume snapshot of VM-A's ROOT while VM-B's ROOT reverts, at the same time.
+        A rejected snapshot or revert is retried on its own.
+        Verifies: VM-A snapshot BackedUp with its own FlexVol snapshot; VM-B is
+        back at its snapshot; VM-A data unchanged.
+        """
+        vm = self._require_snapshot_vm()
+        vm2 = self._require_second_vm()
+        a1 = new_token("vm-a-current-data")
+        b1 = new_token("vm-b-before-snapshot")
+        b2 = new_token("vm-b-after-snapshot")
+        self._write_marker(a1)
+        self._write_marker(b1, which="vm2")
+        snap_b = self._take_volume_snapshot(self._root_volume(vm2.id).id)
+        self._write_marker(b2, which="vm2")
+        self._stop_vm(vm2.id)
+        before = self._ontap_snap_names()
+        root_a = self._root_volume(vm.id).id
+
+        snap_a = _snapshot_and_revert_with_retry(
+            lambda: Snapshot.create(self.apiClient, root_a,
+                                    account=self.account.name, domainid=self.domain.id),
+            lambda: Volume.revertToSnapshot(self.apiClient, snap_b.id),
+        )
+        self._volume_snapshot_ids.append(snap_a.id)
+        self.assertEqual(snap_a.state, "BackedUp")
+        self._assert_new_ontap_snaps(before, [snap_a], "volume", "VM-A snapshot during VM-B revert")
+
+        self._start_vm(vm2.id)
+        self._assert_marker(b1, which="vm2", msg="VM-B after revert")
+        self._assert_marker(a1, msg="VM-A during VM-B revert")
+
+    @attr(tags=[TAG], required_hardware=True)
+    def test_23_concurrent_vm_snapshot_and_revert(self):
+        """
+        VM snapshot of VM-A while VM-B reverts to its VM snapshot, at the same time.
+        A rejected snapshot or revert is retried on its own.
+        Verifies: VM-A snapshot Ready with its own FlexVol snapshot; VM-B is
+        back at its snapshot; VM-A data unchanged.
+        """
+        vm = self._require_snapshot_vm()
+        vm2 = self._require_second_vm()
+        a1 = new_token("vm-a-current-data")
+        b1 = new_token("vm-b-before-snapshot")
+        b2 = new_token("vm-b-after-snapshot")
+        self._write_marker(a1)
+        self._write_marker(b1, which="vm2")
+        snap_b = self._take_vm_snapshot(vm2.id)
+        self._write_marker(b2, which="vm2")
+        self._stop_vm(vm2.id)
+        before = self._ontap_snap_names()
+
+        snap_a = _snapshot_and_revert_with_retry(
+            lambda: VmSnapshot.create(self.apiClient, vm.id, snapshotmemory="false",
+                                      name="ontap_ccr_%d" % random.randint(0, 99999)),
+            lambda: VmSnapshot.revertToSnapshot(self.apiClient, snap_b.id),
+        )
+        self._vm_snapshot_ids.append(snap_a.id)
+        self.assertEqual(snap_a.state, "Ready")
+        self._assert_new_ontap_snaps(before, [snap_a], "vm", "VM-A snapshot during VM-B revert")
+
+        self._start_vm(vm2.id)
+        self._assert_marker(b1, which="vm2", msg="VM-B after revert")
+        self._assert_marker(a1, msg="VM-A during VM-B revert")
+
+    # ------------------------------------------------------------------
+    # Step 24 — Detach volume from running VM
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_09_detach_volume_from_vm(self):
+    def test_24_detach_volume_from_vm(self):
         """
         Detach the iSCSI data volume from the running VM.
         Verifies:
@@ -955,11 +1828,13 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         )
 
     # ------------------------------------------------------------------
-    # Step 10 — Grow detached data volume
+
+    # ------------------------------------------------------------------
+    # Step 25 — Grow detached data volume
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_10_grow_detached_volume(self):
+    def test_25_grow_detached_volume(self):
         """Grow the materialized LUN after it has been detached."""
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_02 must pass first")
@@ -978,11 +1853,43 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.__class__.target_volume_size = detached_target
 
     # ------------------------------------------------------------------
-    # Step 11 — Destroy VM and clean up pool
+    # Step 26 — Destroy the second VM while it still has a VM snapshot
     # ------------------------------------------------------------------
 
     @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
-    def test_11_destroy_vm_and_cleanup(self):
+    def test_26_destroy_vm_with_vm_snapshot(self):
+        """
+        Destroy (expunge) the second VM while it still has a VM snapshot.
+        Verifies: destroy succeeds; the VM snapshot is no longer listed; its
+        FlexVol snapshot is removed from ONTAP.
+        """
+        self._require_snapshot_vm()
+        vm2 = self._require_second_vm()
+        before = self._ontap_snap_names()
+        snap = self._take_vm_snapshot(vm2.id)
+        new = self._assert_new_ontap_snaps(before, [snap], "vm", "second VM snapshot")
+
+        cmd = destroyVirtualMachineAPI.destroyVirtualMachineCmd()
+        cmd.id = vm2.id
+        cmd.expunge = True
+        self.apiClient.destroyVirtualMachine(cmd)
+        self.__class__.vm2 = None
+        self.__class__.vm2_ssh = None
+        self._vm_snapshot_ids.remove(snap.id)
+
+        deadline = time.time() + 300
+        while time.time() < deadline and self._vm_snapshots_of(vm2.id):
+            time.sleep(10)
+        self.assertFalse(self._vm_snapshots_of(vm2.id),
+                         "VM snapshot still listed after destroying its VM")
+        self._wait_ontap_snaps_gone(new)
+
+    # ------------------------------------------------------------------
+    # Step 27 — Destroy VM and clean up pool
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_vm_workflow"], required_hardware=True)
+    def test_27_destroy_vm_and_cleanup(self):
         """
         Destroy the VM (with expunge), delete the data volume, force-delete
         the ONTAP pool, and delete the guest network created for this suite.
@@ -997,6 +1904,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
           - ONTAP: all per-host igroups deleted
           - CloudStack: guest network deleted (Advanced zones only)
         """
+        self._destroy_second_vm()
         pool = self.__class__.pool
         vol = self.__class__.volume
 
