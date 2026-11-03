@@ -204,7 +204,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                      *    - DATA or ROOT snapshot → new attachable data volume (ROOT is never bootable
                      *      via this path; bootable recovery is createTemplate(snapshotid) → deploy).
                      *    - Backend: iSCSI → POST /api/storage/luns (clone.source in .snapshot/);
-                     *      NFS → POST /api/storage/file/clone with snapshot.name.
+                     *      NFS → POST /api/storage/file/clone with source_path
+                     *      ./.snapshot/<snapshot-name>/<source-file>.
                      *    - IOPS: the new volume's min/max (snapshot values, or the root offering when one
                      *      is supplied). Applied here; the temporary template clone does not get a policy.
                      *
@@ -517,7 +518,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      *       {@code createTemplate(snapshotid)} then deploy.</li>
      *   <li><b>iSCSI</b> — {@code POST /api/storage/luns} with
      *       {@code clone.source.name=/vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
-     *   <li><b>NFS3</b> — {@code POST /api/storage/file/clone} with {@code snapshot.name}</li>
+     *   <li><b>NFS3</b> — {@code POST /api/storage/file/clone} with
+     *       {@code source_path=./.snapshot/&lt;snapshot-name&gt;/&lt;source-file&gt;}</li>
      *   <li><b>Not this path</b> — in-place revert ({@code revertSnapshot}); VM/instance snapshots;
      *       secondary-storage archive restore.</li>
      * </ul>
@@ -2390,7 +2392,9 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         String flexVolName = details.get(OntapStorageConstants.VOLUME_NAME);
 
         FileInfo file = new FileInfo();
+        // FlexVol-relative source path, for example "<source-file-uuid>".
         String relativeSourcePath = OntapStorageUtils.toFlexVolRelativePath(sourceVolumePath, flexVolName);
+        // Path assigned to file.setPath(), for example "./.snapshot/<snapshot-name>/<source-file-uuid>".
         file.setPath(OntapStorageConstants.DOT + OntapStorageConstants.SNAPSHOT_PATH_SEGMENT + snapshotName
                 + OntapStorageConstants.SLASH + relativeSourcePath);
 
@@ -2399,7 +2403,6 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         request.setVolumeInfo(volumeInfo);
         request.setFile(file);
         request.setDestinationPath(OntapStorageUtils.toFlexVolRelativePath(volumeInfo.getUuid(), flexVolName));
-        request.setSnapshotName(snapshotName);
         return request;
     }
 

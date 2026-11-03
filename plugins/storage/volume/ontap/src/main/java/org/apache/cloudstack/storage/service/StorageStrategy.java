@@ -934,8 +934,9 @@ public abstract class StorageStrategy {
      * <ul>
      *   <li><b>SAN</b> — {@code lun.clone.source.name} set to
      *       {@code /vol/&lt;fv&gt;/.snapshot/&lt;snap&gt;/&lt;lun&gt;}</li>
-     *   <li><b>NAS</b> — {@link CloudStackVolume#getSnapshotName()} set; it is sent as
-     *       {@code snapshot.name} on {@code POST /api/storage/file/clone}</li>
+     *   <li><b>NAS</b> — {@code file.path} set to
+     *       {@code ./.snapshot/&lt;snapshot-name&gt;/&lt;source-file&gt;} and sent as
+     *       {@code source_path} on {@code POST /api/storage/file/clone}</li>
      * </ul>
      *
      * @param cloudstackVolume describes the clone to create; the source is carried in the

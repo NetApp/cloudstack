@@ -202,10 +202,9 @@ public class UnifiedNASStrategy extends NASStrategy {
         }
         String sourcePath = cloudstackVolume.getFile().getPath();
         String destinationPath = cloudstackVolume.getDestinationPath();
-        String snapshotName = cloudstackVolume.getSnapshotName();
 
-        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}] from snapshot [{}]",
-                sourcePath, destinationPath, flexVolName, snapshotName);
+        logger.info("cloneCloudStackVolume: Cloning file [{}] to [{}] in FlexVol [{}]",
+                sourcePath, destinationPath, flexVolName);
         try {
             FileCloneRequest request = new FileCloneRequest(flexVolUuid, flexVolName, sourcePath, destinationPath);
             JobResponse jobResponse = nasFeignClient.cloneFile(getAuthHeader(), request);
@@ -220,7 +219,6 @@ public class UnifiedNASStrategy extends NASStrategy {
             clonedCloudStackVolume.setFile(clonedFile);
             clonedCloudStackVolume.setDatastoreId(cloudstackVolume.getDatastoreId());
             clonedCloudStackVolume.setVolumeInfo(cloudstackVolume.getVolumeInfo());
-            clonedCloudStackVolume.setSnapshotName(snapshotName);
             return clonedCloudStackVolume;
         } catch (FeignException e) {
             logger.error("FeignException occurred while cloning file [{}], Status: {}, Exception: {}",
