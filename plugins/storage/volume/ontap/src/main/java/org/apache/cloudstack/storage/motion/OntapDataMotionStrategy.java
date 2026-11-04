@@ -506,7 +506,8 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                     Map<String, String> srcDetails = _storagePoolDao.getDetails(srcStoragePoolVO.getId());
                     Map<String, String> destDetails = _storagePoolDao.getDetails(destStoragePoolVO.getId());
                     throw new CloudRuntimeException(String.format("ONTAP migration requires matching storageIP, SVM, protocol, and pool type "
-                                    + "[source: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s; destination: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s].",
+                                    + "[source: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s; "
+                                    + "destination: storageIP=%s, svmUUID=%s, svmName=%s, protocol=%s, type=%s].",
                             srcDetails != null ? srcDetails.get(ONTAP_STORAGE_IP_DETAIL) : null,
                             srcDetails != null ? srcDetails.get(ONTAP_SVM_UUID_DETAIL) : null,
                             srcDetails != null ? srcDetails.get(ONTAP_SVM_NAME_DETAIL) : null, srcDetails != null ? srcDetails.get(ONTAP_PROTOCOL_DETAIL) : null,

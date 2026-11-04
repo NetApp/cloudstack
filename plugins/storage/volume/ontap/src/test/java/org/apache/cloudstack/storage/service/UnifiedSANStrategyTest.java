@@ -56,8 +56,6 @@ import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -1610,9 +1608,6 @@ class UnifiedSANStrategyTest {
         lun.setQosPolicy(qosPolicy);
         CloudStackVolume request = new CloudStackVolume();
         request.setLun(lun);
-        request.setVolumeInfo(volumeInfo);
-
-        when(sanFeignClient.updateLun(anyString(), eq("lun-uuid-123"), any(Lun.class))).thenReturn(null);
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
