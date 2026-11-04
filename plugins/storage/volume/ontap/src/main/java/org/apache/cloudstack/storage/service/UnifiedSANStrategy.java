@@ -321,7 +321,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                 }
             }
         }
-        throw new CloudRuntimeException("Cloned Lun uuid was not visible for: " + lunUuid);
+        throw new CloudRuntimeException("Failed to read cloned Lun " + lunName);
     }
 
     /**
