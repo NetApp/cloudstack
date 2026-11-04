@@ -997,7 +997,12 @@ void checkoutCiScripts() {
             doGenerateSubmoduleConfigurations: false,
             extensions: cloneOptions + [[
                 $class: 'SparseCheckoutPaths',
-                sparseCheckoutPaths: [[path: 'private-cicd']]
+                // run-phase2-remote.sh runs the trusted copy of the ONTAP
+                // prerequisite checker from this checkout, never the PR's copy.
+                sparseCheckoutPaths: [
+                    [path: 'private-cicd'],
+                    [path: 'test/integration/plugins/ontap/check_ontap_prereqs.py']
+                ]
             ]],
             userRemoteConfigs: [remote]
         ])
