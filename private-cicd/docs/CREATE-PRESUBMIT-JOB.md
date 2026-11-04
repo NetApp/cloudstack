@@ -22,15 +22,43 @@
 The current job is the multibranch folder `cloudstack-ontap-presubmit-mb`.
 It scans GitHub about once a minute and creates one child job for every open
 non-draft origin pull request into `main`. Remote Jenkinsfile Provider loads
-`private-cicd/Jenkinsfile` from `main`. Match branches stays off. Draft pull
-requests get no job. The folder include filter can be narrowed to one `PR-<number>`
-for the first run, then returned to `PR-*`. Do not add a webhook.
+`private-cicd/Jenkinsfile` from the trusted CI branch. Match branches stays off.
+Draft pull requests get no job. Do not add a webhook.
 
-The sections below describe the retired single Pipeline job and its five-minute
-`SOURCE_MODE=discover` timer. Do not create that second job. Keep
-`cloudstack-ontap-presubmit` disabled after the folder works. Do not delete the
-GitHub App, credentials, or the VM lock until a multibranch pull request has
+During the PR-119 pilot the trusted CI branch is `feature/CSTACKEX-340` and the
+folder include filter is `PR-119`. Both the Remote Jenkinsfile Provider branch
+and `trustedCiBranch()` in the Jenkinsfile must name that branch. Loading `main`
+before PR-119 is merged would run the old Jenkinsfile, which knows nothing about
+`CHANGE_ID` and defaults to `SOURCE_MODE=discover`. At cutover, change the
+provider branch and `trustedCiBranch()` to `main` and the filter to `PR-*`.
+
+The numbered sections below that create a single Pipeline job with a five-minute
+`SOURCE_MODE=discover` timer (11 to 16) are retired. Sections on plugins,
+credentials, the inventory, Lockable Resources, and the GitHub App still apply.
+Keep `cloudstack-ontap-presubmit` disabled after the folder works. Do not delete
+the GitHub App, credentials, or the VM lock until a multibranch pull request has
 passed.
+
+## Multibranch folder configuration
+
+Open `cloudstack-ontap-presubmit-mb` > **Configure**:
+
+| Setting | Value |
+| --- | --- |
+| Branch Source | GitHub, credential `cloudstack-presubmit-github-app`, repository `NetApp/cloudstack` |
+| Behaviours | Discover pull requests from origin only, strategy **The current pull request revision**; remove branch and fork discovery |
+| Filter by name | `PR-119` for the pilot, then `PR-*` |
+| Build Configuration | **by Remote Jenkinsfile Provider**, repository `https://github.com/NetApp/cloudstack.git`, branch `feature/CSTACKEX-340` (pilot) then `main`, file `private-cicd/Jenkinsfile`, **Match branches off** |
+| Scan Repository Triggers | Periodically, 1 to 5 minutes |
+| Orphaned items | Keep 14 days, 50 items |
+
+Run **Scan Repository Now** and expect one child, `PR-119`. The first build may
+stop on Script Security. Approve only signatures requested by this Jenkinsfile
+and rebuild.
+
+The single-branch Pipeline job is now only the manual job for
+`SOURCE_MODE=branch` and `diagnose`. Point it at the same trusted branch, add no
+triggers, and never run `SOURCE_MODE=discover`.
 
 Do not create a GitHub repository webhook. OpenLab Jenkins is not reachable
 from GitHub.com, so inbound `pull_request` deliveries fail with

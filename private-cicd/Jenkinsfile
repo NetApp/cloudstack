@@ -796,7 +796,26 @@ void discoverPullRequests() {
     }
 }
 
+// Branch mode leaves PR_ID and PR_HEAD_SHA empty, so scripts receive a
+// mode-independent identity. The branch is sanitised because it reaches
+// a filesystem path on the target VM. A multibranch pull request has already
+// set both values in prepareMultibranchPullRequest().
+void resolveSourceIdentity() {
+    if (isMultibranchPullRequest()) {
+        return
+    }
+    if (params.SOURCE_MODE == 'branch') {
+        env.RESOLVED_SOURCE_ID =
+            'branch-' + params.SOURCE_BRANCH.replaceAll('[^A-Za-z0-9._-]', '-')
+        env.RESOLVED_SOURCE_SHA = params.SOURCE_SHA
+    } else {
+        env.RESOLVED_SOURCE_ID = 'pr-' + params.PR_ID
+        env.RESOLVED_SOURCE_SHA = params.PR_HEAD_SHA
+    }
+}
+
 void validateSourceRequest() {
+    resolveSourceIdentity()
     sh 'rm -f "${WORKSPACE}@tmp/presubmit-stage-events.tsv"'
     env.PRESUBMIT_INTEGRATION_STARTED = 'false'
     env.PRESUBMIT_STARTED_AT = new Date().format(
@@ -938,10 +957,16 @@ void abortSupersededRun() {
     }
 }
 
+// Branch that supplies the trusted CI scripts. It must equal the branch that
+// Remote Jenkinsfile Provider loads this Jenkinsfile from. PR-119 pilot value;
+// change it to 'main' when the folder is cut over to every pull request.
+String trustedCiBranch() {
+    return 'feature/CSTACKEX-340'
+}
+
 void checkoutCiScripts() {
     recordStageEvent('Checkout CI scripts', 'STARTED')
-    // Pilot for PR-119. Change this back to main before the folder includes every PR.
-    def ciBranch = 'feature/CSTACKEX-340'
+    def ciBranch = trustedCiBranch()
     if (env.PRESUBMIT_CI_SHA?.trim() && fileExists('private-cicd/scripts/resolve-pull-request.py')) {
         echo "CI scripts already checked out from ${ciBranch} at ${env.PRESUBMIT_CI_SHA}."
         return
@@ -1510,11 +1535,10 @@ spec:
     environment {
         SOURCE_DIR = 'cloudstack-src'
         PRESUBMIT_RESULTS = 'presubmit-results'
-        // Branch mode leaves PR_ID and PR_HEAD_SHA empty, so scripts receive a
-        // mode-independent identity. The branch is sanitised because it reaches
-        // a filesystem path on the target VM.
-        RESOLVED_SOURCE_ID = "${params.SOURCE_MODE == 'branch' ? 'branch-' + params.SOURCE_BRANCH.replaceAll('[^A-Za-z0-9._-]', '-') : 'pr-' + params.PR_ID}"
-        RESOLVED_SOURCE_SHA = "${params.SOURCE_MODE == 'branch' ? params.SOURCE_SHA : params.PR_HEAD_SHA}"
+        // RESOLVED_SOURCE_ID and RESOLVED_SOURCE_SHA are deliberately not
+        // declared here. This block wraps every stage in withEnv, so a value
+        // declared here shadows the multibranch assignment made later and
+        // reads back empty. See resolveSourceIdentity().
     }
 
     stages {
