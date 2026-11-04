@@ -684,7 +684,7 @@ public class UnifiedSANStrategy extends SANStrategy {
                         if (StringUtils.isBlank(ontapError)) {
                             ontapError = feignEx.getMessage();
                         }
-                        throw new CloudRuntimeException("Igroup [" + igroupName + "] already exists but was not returned: " + ontapError);
+                        throw new CloudRuntimeException("Igroup [" + igroupName + "] already exists but was not returned: " + ontapError, feignEx);
                     }
                     createdAccessGroup.setIgroup(existing.getRecords().get(0));
                     return createdAccessGroup;
