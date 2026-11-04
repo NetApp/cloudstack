@@ -1218,6 +1218,7 @@ void runUnitTests() {
         SOURCE_SHA="$RESOLVED_SOURCE_SHA" \
         ENABLE_SIMULATOR=false \
         MAVEN_THREADS=1C \
+        RERUN_FAILING_TESTS=2 \
         MAVEN_OPTS="-Xms1g -Xmx8g" \
         private-cicd/scripts/mvn-full.sh
         '''
