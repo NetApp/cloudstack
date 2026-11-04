@@ -237,9 +237,7 @@ public class StorageSystemDataMotionStrategy implements DataMotionStrategy {
             VolumeInfo destVolumeInfo = (VolumeInfo)destData;
 
             // OntapDataMotionStrategy also returns HIGHEST for these and a tie keeps the first strategy.
-            if (srcVolumeInfo.getState() == Volume.State.Migrating
-                    && srcVolumeInfo.getDataStore().getRole() == DataStoreRole.Primary
-                    && destVolumeInfo.getDataStore().getRole() == DataStoreRole.Primary) {
+            if (srcVolumeInfo.getState() == Volume.State.Migrating) {
                 StoragePoolVO srcPool = _storagePoolDao.findById(srcVolumeInfo.getDataStore().getId());
                 StoragePoolVO destPool = _storagePoolDao.findById(destVolumeInfo.getDataStore().getId());
                 if ((srcPool != null && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(srcPool.getStorageProviderName()))

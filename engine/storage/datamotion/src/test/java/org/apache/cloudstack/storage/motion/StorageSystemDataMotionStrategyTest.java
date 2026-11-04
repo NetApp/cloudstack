@@ -143,8 +143,6 @@ public class StorageSystemDataMotionStrategyTest {
         doReturn(Volume.State.Migrating).when(srcVolume).getState();
         doReturn(srcStore).when(srcVolume).getDataStore();
         doReturn(destStore).when(destVolume).getDataStore();
-        doReturn(DataStoreRole.Primary).when(srcStore).getRole();
-        doReturn(DataStoreRole.Primary).when(destStore).getRole();
         doReturn(1L).when(srcStore).getId();
         doReturn(2L).when(destStore).getId();
         StoragePoolVO srcPool = Mockito.spy(new StoragePoolVO());
