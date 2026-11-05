@@ -1711,8 +1711,12 @@ class OntapTestBase(cloudstackTestCase):
         ("Unable to apply dhcp entry on router"); CloudStack then rolls the
         VM back to Stopped. That, and only that, is retried. A VM in any
         other state, or the last attempt failing, raises with every attempt's
-        error so the cause is not hidden.
+        error so the cause is not hidden. Returns once the VM is Running; a
+        VM that is already Running is left alone.
         """
+        vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id)) or []
+        if vms and (vms[0].state or "").lower() == "running":
+            return
         cmd = startVirtualMachineAPI.startVirtualMachineCmd()
         cmd.id = vm_id
         attempts = self.VM_START_ATTEMPTS
@@ -1720,7 +1724,9 @@ class OntapTestBase(cloudstackTestCase):
         for attempt in range(1, attempts + 1):
             self._wait_for_routers_healthy()
             try:
-                return self.apiClient.startVirtualMachine(cmd)
+                self.apiClient.startVirtualMachine(cmd)
+                self._poll_vm_state(vm_id, "Running", timeout=900)
+                return
             except Exception as error:
                 errors.append("attempt %d/%d: %s" % (attempt, attempts, error))
                 vms = self.apiClient.listVirtualMachines(

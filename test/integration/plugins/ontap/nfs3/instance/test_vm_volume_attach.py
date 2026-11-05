@@ -629,14 +629,6 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         self.apiClient.stopVirtualMachine(cmd)
         self._poll_vm_state(vm_id, "Stopped", timeout=600)
 
-    def _start_vm(self, vm_id):
-        if (self._vm_state(vm_id) or "").lower() == "running":
-            return
-        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
-        cmd.id = vm_id
-        self.apiClient.startVirtualMachine(cmd)
-        self._poll_vm_state(vm_id, "Running", timeout=900)
-
     def _root_volume(self, vm_id):
         cmd = listVolumesAPI.listVolumesCmd()
         cmd.virtualmachineid = vm_id
