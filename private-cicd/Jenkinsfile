@@ -633,7 +633,8 @@ String presubmitStartHtml() {
     }
     rows += presubmitInfoRow(
         'Commit', "<code>${htmlEscape(env.RESOLVED_SOURCE_SHA)}</code>")
-    rows += presubmitInfoRow('Started', htmlEscape(env.PRESUBMIT_STARTED_AT))
+    rows += presubmitInfoRow(
+        'Started', htmlEscape(env.PRESUBMIT_STARTED_AT_IST ?: env.PRESUBMIT_STARTED_AT))
     def consoleUrl = "${env.BUILD_URL}console"
     return """<div style="font-family:Arial,sans-serif;color:#101828">
 <h1 style="margin-bottom:4px">CloudStack ONTAP presubmit</h1>
@@ -818,9 +819,16 @@ void validateSourceRequest() {
     resolveSourceIdentity()
     sh 'rm -f "${WORKSPACE}@tmp/presubmit-stage-events.tsv"'
     env.PRESUBMIT_INTEGRATION_STARTED = 'false'
-    env.PRESUBMIT_STARTED_AT = new Date().format(
+    def startedAt = new Date()
+    // The UTC value feeds the report script and durations. The IST value is
+    // only what the start mail displays.
+    env.PRESUBMIT_STARTED_AT = startedAt.format(
         "yyyy-MM-dd'T'HH:mm:ssXXX",
         TimeZone.getTimeZone('UTC')
+    )
+    env.PRESUBMIT_STARTED_AT_IST = startedAt.format(
+        "yyyy-MM-dd HH:mm:ss 'IST'",
+        TimeZone.getTimeZone('Asia/Kolkata')
     )
     recordStageEvent('Validate source request', 'STARTED')
     if (!(sourceValue('SOURCE_MODE') in ['pull_request', 'branch'])) {

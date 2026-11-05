@@ -118,6 +118,24 @@ class ParseSuiteFailuresTest(unittest.TestCase):
         self.assertEqual(len(error), report.MAX_ERROR_CHARS + 1)
 
 
+class IstTimeTest(unittest.TestCase):
+    def test_utc_time_is_shown_in_ist(self):
+        value = report.parse_time("2026-11-05T01:54:07Z")
+        self.assertEqual(report.format_ist(value), "2026-11-05 07:24:07 IST")
+
+    def test_offset_time_and_date_rollover(self):
+        value = report.parse_time("2026-11-05T22:00:00+00:00")
+        self.assertEqual(report.format_ist(value), "2026-11-06 03:30:00 IST")
+
+    def test_missing_time_is_a_dash(self):
+        self.assertEqual(report.format_ist(None), "—")
+
+    def test_durations_are_unaffected(self):
+        start = report.parse_time("2026-11-05T01:00:00Z")
+        finish = report.parse_time("2026-11-05T02:30:00Z")
+        self.assertEqual(finish - start, report.timedelta(hours=1, minutes=30))
+
+
 class FailurePageTest(unittest.TestCase):
     def test_suite_page_shows_failure_before_the_log(self):
         with tempfile.TemporaryDirectory() as directory:

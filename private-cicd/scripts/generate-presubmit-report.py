@@ -24,7 +24,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
@@ -71,6 +71,16 @@ def parse_time(value):
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+def format_ist(value):
+    """Show a parsed time in IST. Stored timestamps and durations stay UTC."""
+    if value is None:
+        return "—"
+    return value.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 def format_duration(start, finish):
@@ -388,8 +398,7 @@ def stage_rows(events, results, build_url):
             log_link = (
                 f'<a href="{html.escape(console_url)}">'
                 "Console</a>")
-        started_text = (
-            started.strftime("%Y-%m-%d %H:%M:%S UTC") if started else "—")
+        started_text = format_ist(started)
         rows.append(
             "<tr>"
             f"<td>{html.escape(stage)}</td>"
@@ -554,9 +563,9 @@ def main():
 <tr><td><strong>VM</strong></td>
 <td>{html.escape(args.vm or 'not assigned')}</td></tr>
 <tr><td><strong>Started</strong></td>
-<td>{html.escape(args.started_at)}</td></tr>
+<td>{html.escape(format_ist(started))}</td></tr>
 <tr><td><strong>Finished</strong></td>
-<td>{html.escape(args.finished_at)}</td></tr>
+<td>{html.escape(format_ist(finished))}</td></tr>
 <tr><td><strong>Total duration</strong></td>
 <td>{html.escape(format_duration(started, finished))}</td></tr>
 </table>
