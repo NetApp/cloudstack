@@ -125,7 +125,6 @@ from marvin.cloudstackAPI import (
     listNetworks as listNetworksAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
-    startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
 )
 from marvin.lib.base import ServiceOffering, Snapshot, StoragePool, VmSnapshot, Volume
@@ -1043,7 +1042,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm = self.apiClient.deployVirtualMachine(cmd)
+        vm = self._deploy_vm(cmd)
         self.__class__.vm = vm
 
         result = self._poll_vm_state(vm.id, "Running")
@@ -1094,7 +1093,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm2 = self.apiClient.deployVirtualMachine(cmd)
+        vm2 = self._deploy_vm(cmd)
         self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
         self.__class__.vm2 = vm2
         self._poll_vm_state(vm2.id, "Running")
@@ -1336,9 +1335,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.vm is None:
             self.skipTest("VM not deployed — test_03 was skipped")
 
-        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
-        cmd.id = self.__class__.vm.id
-        self.apiClient.startVirtualMachine(cmd)
+        self._start_vm(self.__class__.vm.id)
 
         result = self._poll_vm_state(self.__class__.vm.id, "Running",
                                      timeout=300)
