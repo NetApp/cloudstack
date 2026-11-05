@@ -449,6 +449,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
                 VmSnapshot.deleteVMSnapshot(self.apiClient, snap_id)
             except Exception as exc:
                 logger.warning("tearDown: VM snapshot %s: %s" % (snap_id, exc))
+        self._delete_failed_vm_snapshots()
         for snap_id in self._volume_snapshot_ids:
             try:
                 Snapshot({"id": snap_id}).delete(self.apiClient)
@@ -724,6 +725,30 @@ class TestOntapVMVolumeAttach(OntapTestBase):
 
     def _vm_snapshots_of(self, vm_id):
         return VmSnapshot.list(self.apiClient, virtualmachineid=vm_id, listall=True) or []
+
+    def _delete_failed_vm_snapshots(self):
+        """Delete VM snapshots left in Error by a rejected create.
+
+        A rejected createVMSnapshot (ONTAP refusing while a revert's clones
+        exist) leaves its record behind with no id the test ever saw. Any
+        Instance Snapshot, even in Error, blocks detach, resize and destroy.
+        """
+        for vm in (self.__class__.vm, self.__class__.vm2):
+            if vm is None:
+                continue
+            try:
+                stale = [s for s in self._vm_snapshots_of(vm.id)
+                         if (getattr(s, "state", "") or "").lower() == "error"]
+            except Exception as exc:
+                logger.warning("tearDown: could not list VM snapshots of %s: %s"
+                               % (vm.id, exc))
+                continue
+            for snap in stale:
+                try:
+                    VmSnapshot.deleteVMSnapshot(self.apiClient, snap.id)
+                except Exception as exc:
+                    logger.warning("tearDown: failed VM snapshot %s: %s"
+                                   % (snap.id, exc))
 
     def _volume_snapshot_listed(self, snap_id):
         listed = Snapshot.list(self.apiClient, id=snap_id, listall=True) or []
