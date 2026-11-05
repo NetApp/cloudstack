@@ -1236,9 +1236,8 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
             verify(nasStrategy).cloneCloudStackVolume(requestCaptor.capture());
             CloudStackVolume request = requestCaptor.getValue();
-            assertEquals("source-file-uuid", request.getFile().getPath());
+            assertEquals("./.snapshot/snap_cs200/source-file-uuid", request.getFile().getPath());
             assertEquals("new-volume-uuid", request.getDestinationPath());
-            assertEquals("snap_cs200", request.getSnapshotName());
             assertEquals("1", request.getDatastoreId());
             verify(nasStrategy, never()).createCloudStackVolume(any());
         }
@@ -3461,9 +3460,9 @@ class OntapPrimaryDatastoreDriverTest {
 
             ArgumentCaptor<CloudStackVolume> requestCaptor = ArgumentCaptor.forClass(CloudStackVolume.class);
             verify(nasStrategy).cloneCloudStackVolume(requestCaptor.capture());
-            assertEquals("source-file-uuid", requestCaptor.getValue().getFile().getPath());
+            assertEquals("./.snapshot/snap_cs200/source-file-uuid",
+                    requestCaptor.getValue().getFile().getPath());
             assertEquals("tmp-volume-uuid", requestCaptor.getValue().getDestinationPath());
-            assertEquals("snap_cs200", requestCaptor.getValue().getSnapshotName());
 
             assertEquals("tmp-volume-uuid", dbVolume.getPath());
             assertEquals(Storage.ImageFormat.QCOW2, dbVolume.getFormat());

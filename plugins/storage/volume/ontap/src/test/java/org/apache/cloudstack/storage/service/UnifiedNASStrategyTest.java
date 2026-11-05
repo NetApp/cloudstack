@@ -1176,11 +1176,10 @@ public class UnifiedNASStrategyTest {
         assertEquals("volume-uuid", captor.getValue().getDestinationPath());
         assertEquals("flexvol1", captor.getValue().getVolume().getName());
         assertEquals("flexvol-uuid-1", captor.getValue().getVolume().getUuid());
-        assertNull(captor.getValue().getSnapshot());
     }
 
     @Test
-    public void testCloneCloudStackVolume_SnapshotSource_SendsSnapshotName() {
+    public void testCloneCloudStackVolume_SnapshotSource_UsesSnapshotSourcePath() {
         VolumeObject volumeObject = mock(VolumeObject.class);
         VolumeVO volumeVO = mock(VolumeVO.class);
         when(volumeObject.getId()).thenReturn(100L);
@@ -1193,26 +1192,22 @@ public class UnifiedNASStrategyTest {
         when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
 
         FileInfo source = new FileInfo();
-        source.setPath("source-file-uuid");
+        source.setPath("./.snapshot/snap_cs200/source-file-uuid");
         CloudStackVolume request = new CloudStackVolume();
         request.setDatastoreId("1");
         request.setVolumeInfo(volumeObject);
         request.setFile(source);
         request.setDestinationPath("new-volume-uuid");
-        request.setSnapshotName("snap_cs200");
 
         when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenReturn(new JobResponse());
 
         CloudStackVolume result = strategy.cloneCloudStackVolume(request);
 
         assertEquals("new-volume-uuid", result.getFile().getPath());
-        assertEquals("snap_cs200", result.getSnapshotName());
         ArgumentCaptor<FileCloneRequest> captor = ArgumentCaptor.forClass(FileCloneRequest.class);
         verify(nasFeignClient).cloneFile(anyString(), captor.capture());
-        assertEquals("source-file-uuid", captor.getValue().getSourcePath());
+        assertEquals("./.snapshot/snap_cs200/source-file-uuid", captor.getValue().getSourcePath());
         assertEquals("new-volume-uuid", captor.getValue().getDestinationPath());
-        assertNotNull(captor.getValue().getSnapshot());
-        assertEquals("snap_cs200", captor.getValue().getSnapshot().getName());
     }
 
     @Test

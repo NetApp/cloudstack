@@ -64,14 +64,6 @@ public class FileCloneRequest {
         this.destinationPath = destinationPath;
     }
 
-    public FileCloneRequest(String flexVolUuid, String flexVolName, String sourcePath, String destinationPath,
-                            String snapshotName) {
-        this(flexVolUuid, flexVolName, sourcePath, destinationPath);
-        if (snapshotName != null && !snapshotName.isEmpty()) {
-            this.snapshot = new SnapshotRef(snapshotName);
-        }
-    }
-
     public VolumeRef getVolume() {
         return volume;
     }
@@ -177,7 +169,6 @@ public class FileCloneRequest {
     public String toString() {
         return "FileCloneRequest{volume=" + (volume != null ? volume.getUuid() : null)
                 + ", sourcePath=" + sourcePath
-                + ", destinationPath=" + destinationPath
-                + ", snapshot=" + (snapshot != null ? snapshot.getName() : null) + "}";
+                + ", destinationPath=" + destinationPath + "}";
     }
 }
