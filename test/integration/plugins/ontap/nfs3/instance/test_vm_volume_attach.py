@@ -110,7 +110,6 @@ from marvin.cloudstackAPI import (
     listNetworks as listNetworksAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
-    startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
     updateStoragePool as updateStoragePoolAPI,
 )
@@ -872,7 +871,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm = self.apiClient.deployVirtualMachine(cmd)
+        vm = self._deploy_vm(cmd)
         self.assertIsNotNone(vm, "deployVirtualMachine returned None")
         self.__class__.vm = vm
 
@@ -912,7 +911,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm2 = self.apiClient.deployVirtualMachine(cmd)
+        vm2 = self._deploy_vm(cmd)
         self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
         self.__class__.vm2 = vm2
         self._poll_vm_state(vm2.id, "Running")
@@ -1213,9 +1212,7 @@ class TestOntapVMVolumeAttach(OntapTestBase):
         vm = self.__class__.vm
         vol = self.__class__.volume
 
-        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
-        cmd.id = vm.id
-        self.apiClient.startVirtualMachine(cmd)
+        self._start_vm(vm.id)
 
         result = self._poll_vm_state(vm.id, "Running", timeout=300)
         self.assertEqual(
