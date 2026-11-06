@@ -3421,9 +3421,9 @@ public class KVMStorageProcessor implements StorageProcessor {
                     destPrimaryStore.getName(), destPrimaryStore.getPoolType()));
 
             Map<String, String> srcDetails = ObjectUtils.defaultIfNull(
-                    ObjectUtils.firstNonNull(cmd.getOptions(), srcPrimaryStore.getDetails()), Collections.emptyMap());
+                    ObjectUtils.firstNonNull(srcPrimaryStore.getDetails(), cmd.getOptions()), Collections.emptyMap());
             Map<String, String> destDetails = ObjectUtils.defaultIfNull(
-                    ObjectUtils.firstNonNull(cmd.getOptions2(), destPrimaryStore.getDetails()), Collections.emptyMap());
+                    ObjectUtils.firstNonNull(destPrimaryStore.getDetails(), cmd.getOptions2()), Collections.emptyMap());
 
             if (srcPrimaryStore.isManaged()) {
                 if (!storagePoolMgr.connectPhysicalDisk(srcPrimaryStore.getPoolType(), srcPrimaryStore.getUuid(), srcVolumePath, srcDetails)) {
@@ -3445,12 +3445,13 @@ public class KVMStorageProcessor implements StorageProcessor {
             try {
                 destPool = storagePoolMgr.getStoragePool(destPrimaryStore.getPoolType(), destPrimaryStore.getUuid());
             } catch (CloudRuntimeException e) {
-                if (!destPrimaryStore.isManaged() || !e.getMessage().contains("not found")) {
+                if (destPrimaryStore.isManaged() && e.getMessage().contains("not found")) {
+                    destPool = storagePoolMgr.createStoragePool(destPrimaryStore.getUuid(), destPrimaryStore.getHost(),
+                            destPrimaryStore.getPort(), destPrimaryStore.getPath(), null, destPrimaryStore.getPoolType(),
+                            destDetails);
+                } else {
                     throw e;
                 }
-                destPool = storagePoolMgr.createStoragePool(destPrimaryStore.getUuid(), destPrimaryStore.getHost(),
-                        destPrimaryStore.getPort(), destPrimaryStore.getPath(), null, destPrimaryStore.getPoolType(),
-                        destDetails);
             }
             if (destPrimaryStore.isManaged()) {
                 if (!storagePoolMgr.connectPhysicalDisk(destPrimaryStore.getPoolType(), destPrimaryStore.getUuid(), destVolumePath, destDetails)) {

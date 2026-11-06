@@ -335,6 +335,10 @@ public class OntapDataMotionStrategyTest {
         Mockito.verify(context.destVolumeVO).setPath("/iqn/dest/1");
         Mockito.verify(context.destVolumeVO).setFormat(Storage.ImageFormat.RAW);
         Mockito.verify(volumeService).grantAccess(context.srcVolume, context.srcHost, context.srcVolume.getDataStore());
+        ArgumentCaptor<ModifyTargetsCommand> targetsCaptor = ArgumentCaptor.forClass(ModifyTargetsCommand.class);
+        Mockito.verify(agentManager, Mockito.atLeastOnce()).easySend(Mockito.eq(SRC_HOST_ID), targetsCaptor.capture());
+        assertTrue(targetsCaptor.getAllValues().stream().anyMatch(command -> !command.getAdd()
+                && command.getTargets().stream().anyMatch(target -> "/iqn/dest/1".equals(target.get(ModifyTargetsCommand.IQN)))));
         Mockito.verify(context.callback).complete(Mockito.argThat(result -> result != null && !result.isFailed()));
     }
 
