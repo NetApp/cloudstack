@@ -565,11 +565,10 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             reapplyOntapQosAfterContentRewrite(destVolumeInfo);
 
             if (srcPoolVO != null && srcPoolVO.getPoolType() == StoragePoolType.OntapiSCSI) {
-                try {
-                    disconnectHostFromVolume(srcHost, srcVolumeInfo.getPoolId(), srcVolumeInfo.get_iScsiName());
-                } catch (Exception e) {
-                    logger.warn("Failed to disconnect source volume [{}] from source host [{}] after migration", srcVolumeInfo.getId(), srcHost.getId(), e);
-                }
+                disconnectVolumeFromHost(srcHost, srcVolumeInfo);
+            }
+            if (destPoolVO != null && destPoolVO.getPoolType() == StoragePoolType.OntapiSCSI) {
+                disconnectVolumeFromHost(srcHost, destVolumeInfo);
             }
 
             _volumeService.copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Event.OperationSucceeded, null, srcVolumeInfo, destVolumeInfo, false);
@@ -613,12 +612,7 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
         }
 
         for (VolumeInfo destVolumeInfo : srcVolumeInfoToDestVolumeInfo.values()) {
-            try {
-                StoragePoolVO destPool = _storagePoolDao.findById(destVolumeInfo.getPoolId());
-                disconnectHostFromVolume(destHost, destVolumeInfo.getPoolId(), getVolumeIdentifier(destVolumeInfo, destPool));
-            } catch (Exception e) {
-                logger.debug("Failed to disconnect destination volume [{}]", destVolumeInfo.getId(), e);
-            }
+            disconnectVolumeFromHost(destHost, destVolumeInfo);
             try {
                 _volumeService.revokeAccess(destVolumeInfo, destHost, destVolumeInfo.getDataStore());
             } catch (Exception e) {
@@ -640,6 +634,15 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
 
     private String connectHostToVolume(Host host, long storagePoolId, String iqn) {
         return sendModifyTargetsCommand(getModifyTargetsCommand(storagePoolId, iqn, true), host).get(0);
+    }
+
+    private void disconnectVolumeFromHost(Host host, VolumeInfo volumeInfo) {
+        try {
+            StoragePoolVO pool = _storagePoolDao.findById(volumeInfo.getPoolId());
+            disconnectHostFromVolume(host, volumeInfo.getPoolId(), getVolumeIdentifier(volumeInfo, pool));
+        } catch (Exception e) {
+            logger.warn("Failed to disconnect volume [{}] from host [{}]", volumeInfo.getId(), host.getId(), e);
+        }
     }
 
     private void disconnectHostFromVolume(Host host, long storagePoolId, String iqn) {
