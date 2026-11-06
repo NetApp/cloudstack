@@ -966,10 +966,10 @@ void abortSupersededRun() {
 }
 
 // Branch that supplies the trusted CI scripts. It must equal the branch that
-// Remote Jenkinsfile Provider loads this Jenkinsfile from. PR-119 pilot value;
-// change it to 'main' when the folder is cut over to every pull request.
+// Remote Jenkinsfile Provider loads this Jenkinsfile from. Change the provider
+// branch in the Jenkins folder to match when this value changes.
 String trustedCiBranch() {
-    return 'feature/CSTACKEX-340'
+    return 'main'
 }
 
 void checkoutCiScripts() {
