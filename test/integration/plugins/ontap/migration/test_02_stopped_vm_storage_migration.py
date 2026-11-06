@@ -53,7 +53,7 @@ from nose.plugins.attrib import attr
 
 from migration.migration_test_base import OntapMigrationTestBase
 
-CROSS_PROTOCOL_REJECTION = "managed storage can only be 'migrated'"
+CROSS_PROTOCOL_REJECTION = "requires matching storageIP, SVM, protocol, and pool type"
 
 
 class TestOntapStoppedVmStorageMigration(OntapMigrationTestBase):

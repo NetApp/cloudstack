@@ -21,10 +21,10 @@ Workflow:
   01-05 same-cluster NFS3 DP/C1/Z chain with root and data volumes
   06-10 same-cluster iSCSI DP/C1/Z chain with root and data volumes
   11-13 same-cluster rejections (cross-protocol and volume-only)
-  14 relocate one host once, then NFS3 cross-cluster C1/C2/Z cases
-  18-21 iSCSI cross-cluster C1/C2/Z cases
-  22 reject a cluster-1 pool mapped to a cluster-2 destination host
-  23-27 put both hosts back in the primary cluster, then live QoS
+  14-18 live QoS while both hosts are still in the primary cluster
+  19 relocate one host once, then NFS3 cross-cluster C1/C2/Z cases
+  23-26 iSCSI cross-cluster C1/C2/Z cases
+  27 reject a cluster-1 pool mapped to a cluster-2 destination host
 """
 
 import unittest
@@ -427,7 +427,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
             self.__class__.nfs_vm,
             self._c1a("ISCSI"),
             "NFS3",
-            "managed storage can only be 'migrated' to itself",
+            "requires matching storageIP, SVM, protocol, and pool type",
         )
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
@@ -437,7 +437,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
             self.__class__.iscsi_vm,
             self._c1a("NFS3"),
             "ISCSI",
-            "managed storage can only be 'migrated' to itself",
+            "requires matching storageIP, SVM, protocol, and pool type",
         )
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
@@ -475,8 +475,58 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         )
         self._assert_host_snapshot_unchanged(host_snapshot, vm)
 
+    def _live_qos(self, protocol, root_iops, data_iops, second_pool=False):
+        # test_14 through test_18 run before test_19 moves one host out.
+        # Both hosts are still in the primary cluster. The ensure call
+        # covers a rerun that starts after a previous split.
+        self.__class__._ensure_hosts_in_primary_cluster(2)
+        self.__class__._refresh_host_inventory()
+        vm = self._prepare_qos_vm(
+            root_iops, data_iops,
+            protocol=protocol if second_pool else None,
+        )
+        if second_pool:
+            source = self._pool_by_id(self._vm_volumes(vm.id)[0].storageid)
+            pools = (
+                self._migration_pool(protocol, 0),
+                self._migration_pool(protocol, 1),
+            )
+            pool = pools[1] if source.id == pools[0].id else pools[0]
+        else:
+            pool = self._c1a(protocol)
+        vm, pool = self._live_migrate(vm, pool, protocol)
+        self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
+        # A leftover QoS VM blocks the host move in test_19 and fills the
+        # 20 GiB pools for the rest of the suite.
+        self._expunge_vm(vm)
+
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_14_nfs3_cluster_to_cluster(self):
+    def test_14_nfs3_qos_default_primary_to_cluster(self):
+        """Live-migrate QoS disks from DefaultPrimary onto NFS3."""
+        self._live_qos("NFS3", (100, 500), (100, 500))
+
+    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
+    def test_15_nfs3_qos_cluster_to_cluster(self):
+        """Live-migrate QoS disks between two NFS3 cluster pools."""
+        self._live_qos("NFS3", (100, 500), (100, 500), second_pool=True)
+
+    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
+    def test_16_iscsi_qos_default_primary_to_cluster(self):
+        """Live-migrate QoS disks from DefaultPrimary onto iSCSI."""
+        self._live_qos("ISCSI", (100, 500), (100, 500))
+
+    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
+    def test_17_iscsi_qos_cluster_to_cluster(self):
+        """Live-migrate QoS disks between two iSCSI cluster pools."""
+        self._live_qos("ISCSI", (100, 500), (100, 500), second_pool=True)
+
+    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
+    def test_18_nfs3_qos_root_and_data_different_policies(self):
+        """Live NFS3 move keeps a different QoS policy on each disk."""
+        self._live_qos("NFS3", (100, 500), (200, 800))
+
+    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
+    def test_19_nfs3_cluster_to_cluster(self):
         """After host split, live-migrate NFS3 storage from C1a to C2."""
         self._ensure_cross_cluster_phase()
         vm = self._prepare_vm_on_pool(self._c1a("NFS3"))
@@ -485,7 +535,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.nfs_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_15_nfs3_cluster_to_zone(self):
+    def test_20_nfs3_cluster_to_zone(self):
         """Live-migrate NFS3 storage from C1a to Z1 onto a C2 host."""
         self._ensure_cross_cluster_phase()
         self._expunge_vm(self.__class__.nfs_vm)
@@ -495,7 +545,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.nfs_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_16_nfs3_zone_to_cluster(self):
+    def test_21_nfs3_zone_to_cluster(self):
         """Live-migrate the NFS3 VM from Z1 to C2."""
         self._ensure_cross_cluster_phase()
         vm, pool = self._live_cross(
@@ -505,7 +555,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.nfs_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_17_nfs3_zone_to_zone(self):
+    def test_22_nfs3_zone_to_zone(self):
         """Live-migrate NFS3 storage from Z1 to Z2 onto a C2 host."""
         self._ensure_cross_cluster_phase()
         vm = self._reset_running_on_pool(
@@ -516,7 +566,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.nfs_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_18_iscsi_cluster_to_cluster(self):
+    def test_23_iscsi_cluster_to_cluster(self):
         """Live-migrate iSCSI storage from C1a to C2 onto a C2 host."""
         self._ensure_cross_cluster_phase()
         self._expunge_vm(self.__class__.nfs_vm)
@@ -527,7 +577,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.iscsi_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_19_iscsi_cluster_to_zone(self):
+    def test_24_iscsi_cluster_to_zone(self):
         """Live-migrate iSCSI storage from C1a to Z1 onto a C2 host."""
         self._ensure_cross_cluster_phase()
         self._expunge_vm(self.__class__.iscsi_vm)
@@ -537,7 +587,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.iscsi_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_20_iscsi_zone_to_cluster(self):
+    def test_25_iscsi_zone_to_cluster(self):
         """Live-migrate the iSCSI VM from Z1 to C2."""
         self._ensure_cross_cluster_phase()
         vm, pool = self._live_cross(
@@ -547,7 +597,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.iscsi_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_21_iscsi_zone_to_zone(self):
+    def test_26_iscsi_zone_to_zone(self):
         """Live-migrate iSCSI storage from Z1 to Z2 onto a C2 host."""
         self._ensure_cross_cluster_phase()
         self._expunge_vm(self.__class__.iscsi_vm)
@@ -557,7 +607,7 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         self.__class__.iscsi_pool = pool
 
     @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_22_reject_pool_not_reachable_from_destination_host(self):
+    def test_27_reject_pool_not_reachable_from_destination_host(self):
         """Reject mapping a cluster-1 pool to a host that lives in cluster 2."""
         self._ensure_cross_cluster_phase()
         vm = self.__class__.nfs_vm
@@ -594,48 +644,3 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
         )
         self._assert_host_snapshot_unchanged(host_snapshot, vm)
 
-    def _live_qos(self, protocol, root_iops, data_iops, second_pool=False):
-        # test_14 leaves one host in each cluster. Live migration needs
-        # two hosts in the primary cluster, same as test_01 through test_13.
-        self.__class__._ensure_hosts_in_primary_cluster(2)
-        self.__class__._refresh_host_inventory()
-        vm = self._prepare_qos_vm(
-            root_iops, data_iops,
-            protocol=protocol if second_pool else None,
-        )
-        if second_pool:
-            source = self._pool_by_id(self._vm_volumes(vm.id)[0].storageid)
-            pools = (
-                self._migration_pool(protocol, 0),
-                self._migration_pool(protocol, 1),
-            )
-            pool = pools[1] if source.id == pools[0].id else pools[0]
-        else:
-            pool = self._c1a(protocol)
-        vm, pool = self._live_migrate(vm, pool, protocol)
-        self._assert_vm_qos(vm, protocol, pool, root_iops, data_iops)
-
-    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_23_nfs3_qos_default_primary_to_cluster(self):
-        """Live-migrate QoS disks from DefaultPrimary onto NFS3."""
-        self._live_qos("NFS3", (100, 500), (100, 500))
-
-    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_24_nfs3_qos_cluster_to_cluster(self):
-        """Live-migrate QoS disks between two NFS3 cluster pools."""
-        self._live_qos("NFS3", (100, 500), (100, 500), second_pool=True)
-
-    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_25_iscsi_qos_default_primary_to_cluster(self):
-        """Live-migrate QoS disks from DefaultPrimary onto iSCSI."""
-        self._live_qos("ISCSI", (100, 500), (100, 500))
-
-    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_26_iscsi_qos_cluster_to_cluster(self):
-        """Live-migrate QoS disks between two iSCSI cluster pools."""
-        self._live_qos("ISCSI", (100, 500), (100, 500), second_pool=True)
-
-    @attr(tags=["ontap_migration", "live_storage"], required_hardware=True)
-    def test_27_nfs3_qos_root_and_data_different_policies(self):
-        """Live NFS3 move keeps a different QoS policy on each disk."""
-        self._live_qos("NFS3", (100, 500), (200, 800))
