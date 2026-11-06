@@ -1775,20 +1775,18 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
     }
 
     /**
-     * Returns true when a volume snapshot on NetApp ONTAP is explicitly kept on managed primary/array storage.
+     * Returns true for volume snapshots on NetApp ONTAP managed primary/array storage.
      *
-     * <p>For ONTAP managed pools, {@link #updateSnapshotPayload} defaults {@code locationType} to
-     * {@link Snapshot.LocationType#PRIMARY}. ONTAP volume snapshots therefore stay on the FlexVol
-     * on primary — they are not moved or mirrored to secondary storage. The primary
-     * {@code snapshot_data_store} row must remain so volume-snapshot DELETE uses
-     * {@code StorageSystemSnapshotStrategy} and the primary datastore driver.</p>
+     * <p>ONTAP volume snapshots stay on the FlexVol on primary — they are not moved or
+     * mirrored to secondary storage. The primary {@code snapshot_data_store} row must
+     * remain so volume-snapshot DELETE uses {@code StorageSystemSnapshotStrategy} and
+     * the primary datastore driver.</p>
      *
      * <p>Other managed storage providers are not affected by this check.</p>
      */
     private boolean isManagedPrimaryLocationSnapshot(StoragePool storagePool, CreateSnapshotPayload payload) {
         return storagePool != null && storagePool.isManaged()
-                && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePool.getStorageProviderName())
-                && Snapshot.LocationType.PRIMARY.equals(payload.getLocationType());
+                && DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePool.getStorageProviderName());
     }
 
     @Override
