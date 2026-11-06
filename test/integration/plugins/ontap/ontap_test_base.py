@@ -46,6 +46,7 @@ from marvin.cloudstackAPI import (
     deleteNetwork as deleteNetworkAPI,
     deleteStoragePool as deleteStoragePoolAPI,
     deleteVolume as deleteVolumeAPI,
+    deployVirtualMachine as deployVirtualMachineAPI,
     destroyVirtualMachine as destroyVirtualMachineAPI,
     destroyVolume as destroyVolumeAPI,
     detachVolume as detachVolumeAPI,
@@ -53,10 +54,12 @@ from marvin.cloudstackAPI import (
     listDiskOfferings as listDiskOfferingsAPI,
     listNetworkOfferings as listNetworkOfferingsAPI,
     listNetworks as listNetworksAPI,
+    listRouters as listRoutersAPI,
     listServiceOfferings as listServiceOfferingsAPI,
     listTemplates as listTemplatesAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
+    startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
     resizeVolume as resizeVolumeAPI,
     updateStoragePool as updateStoragePoolAPI,
@@ -897,6 +900,17 @@ class OntapTestBase(cloudstackTestCase):
     # VM states from which the VM will never reach any other target state.
     _VM_TERMINAL_STATES = ("error", "destroyed", "expunging")
 
+    # The guest network's virtual router is created by the first VM deploy
+    # and can be briefly unreachable afterwards, which makes a VM start fail
+    # with "Unable to apply dhcp entry on router". Every wait and retry below
+    # is bounded so a genuine failure is reported, never waited out forever.
+    ROUTER_HEALTHY_TIMEOUT = 180   # seconds, per wait
+    ROUTER_POLL_INTERVAL = 10      # seconds
+    VM_START_ATTEMPTS = 3          # total tries, including the first
+    VM_START_RETRY_DELAY = 15      # seconds between tries
+    # Set once a router wait times out; see _wait_for_routers_healthy().
+    _router_wait_exhausted = False
+
     # ---- zone guard ----------------------------------------------------
 
     @classmethod
@@ -1617,6 +1631,118 @@ class OntapTestBase(cloudstackTestCase):
             if not details and "netapp" in provider and "ontap" in provider:
                 others.append(pool)
         return others
+
+    # ---- virtual router readiness and VM operations --------------------
+
+    def _unhealthy_routers(self):
+        """Describe the test account's routers that are not ready.
+
+        A router is not ready when it is not Running or reports failed health
+        checks. Returns [] when every router is ready, or when none exists
+        yet (the first VM deploy creates it).
+        """
+        cmd = listRoutersAPI.listRoutersCmd()
+        cmd.listall = True
+        if self.zone is not None:
+            cmd.zoneid = self.zone.id
+        if self.account is not None:
+            cmd.account = self.account.name
+            cmd.domainid = self.account.domainid
+        unready = []
+        for router in self.apiClient.listRouters(cmd) or []:
+            state = getattr(router, "state", "") or ""
+            failed = bool(getattr(router, "healthchecksfailed", False))
+            if state.lower() != "running" or failed:
+                unready.append(
+                    "%s (state=%s, healthchecksfailed=%s)"
+                    % (getattr(router, "name", "router"), state, failed))
+        return unready
+
+    def _wait_for_routers_healthy(self, timeout=None):
+        """Wait, for a bounded time, until the guest router is ready.
+
+        Returns True when ready (or when readiness cannot be determined) and
+        False when it is still not ready after the timeout. It never raises:
+        a router that stays flagged is reported in the log, and the VM
+        operation that follows then decides the test. After one timeout the
+        class stops waiting, so a router with a permanent health warning
+        costs one wait, not one per VM operation.
+        """
+        timeout = self.ROUTER_HEALTHY_TIMEOUT if timeout is None else timeout
+        if self.__class__._router_wait_exhausted:
+            timeout = 0
+        deadline = time.time() + timeout
+        while True:
+            try:
+                unready = self._unhealthy_routers()
+            except Exception as error:
+                log_progress(
+                    logger, "warning",
+                    "Cannot read router health, continuing: %s", error)
+                return True
+            if not unready:
+                return True
+            if time.time() >= deadline:
+                break
+            log_progress(
+                logger, "info", "Waiting for router to be ready: %s",
+                "; ".join(unready))
+            time.sleep(self.ROUTER_POLL_INTERVAL)
+        if timeout:
+            self.__class__._router_wait_exhausted = True
+        log_progress(
+            logger, "warning",
+            "Router still not ready after %ss: %s", timeout,
+            "; ".join(unready))
+        return False
+
+    def _deploy_vm(self, cmd):
+        """Deploy a VM once the router is ready, and let a new one settle."""
+        self._wait_for_routers_healthy()
+        vm = self.apiClient.deployVirtualMachine(cmd)
+        # The first deploy creates the guest network's router.
+        self._wait_for_routers_healthy()
+        return vm
+
+    def _start_vm(self, vm_id):
+        """Start a stopped VM, retrying a bounded number of times.
+
+        A start can fail only because the router was briefly unreachable
+        ("Unable to apply dhcp entry on router"); CloudStack then rolls the
+        VM back to Stopped. That, and only that, is retried. A VM in any
+        other state, or the last attempt failing, raises with every attempt's
+        error so the cause is not hidden. Returns once the VM is Running; a
+        VM that is already Running is left alone.
+        """
+        vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id)) or []
+        if vms and (vms[0].state or "").lower() == "running":
+            return
+        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
+        cmd.id = vm_id
+        attempts = self.VM_START_ATTEMPTS
+        errors = []
+        for attempt in range(1, attempts + 1):
+            self._wait_for_routers_healthy()
+            try:
+                self.apiClient.startVirtualMachine(cmd)
+                self._poll_vm_state(vm_id, "Running", timeout=900)
+                return
+            except Exception as error:
+                errors.append("attempt %d/%d: %s" % (attempt, attempts, error))
+                vms = self.apiClient.listVirtualMachines(
+                    _list_vms_cmd(vm_id)) or []
+                state = (vms[0].state if vms else "") or ""
+                if attempt == attempts or state.lower() != "stopped":
+                    raise Exception(
+                        "startVirtualMachine failed after %d attempt(s), "
+                        "VM state '%s':\n%s"
+                        % (attempt, state, "\n".join(errors))) from error
+                log_progress(
+                    logger, "warning",
+                    "startVirtualMachine attempt %d/%d failed, retrying in "
+                    "%ss: %s", attempt, attempts, self.VM_START_RETRY_DELAY,
+                    error)
+                time.sleep(self.VM_START_RETRY_DELAY)
 
     def _poll_vm_state(self, vm_id, target_state, timeout=300, interval=10):
         """

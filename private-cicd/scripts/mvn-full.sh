@@ -25,7 +25,9 @@
 #   RESULT_DIR — if set, SOURCE_ID and SOURCE_SHA are required (Jenkins handoff);
 #   PR_ID and PR_HEAD_SHA are accepted as fallbacks for pull-request builds.
 #   Optional: SKIP_TESTS, ENABLE_NOREDIST, ENABLE_SIMULATOR (default true),
-#   MAVEN_THREADS (Jenkins uses 1C; empty disables -T; unset uses nproc).
+#   MAVEN_THREADS (Jenkins uses 1C; empty disables -T; unset uses nproc),
+#   RERUN_FAILING_TESTS (default 0; Jenkins uses 2 so a timing-flaky upstream
+#   test is retried before it fails the run).
 #   Commands: mvn, java. Does not call other private-cicd scripts.
 #   When RESULT_DIR is set, apply debian/rules packaging flags so build-debs.sh
 #   can reuse target/ without a second mvn clean.
@@ -43,6 +45,7 @@ SKIP_TESTS="${SKIP_TESTS:-false}"
 ENABLE_NOREDIST="${ENABLE_NOREDIST:-false}"
 ENABLE_SIMULATOR="${ENABLE_SIMULATOR:-true}"
 THREADS="${MAVEN_THREADS-$(nproc)}"
+RERUN_FAILING_TESTS="${RERUN_FAILING_TESTS:-0}"
 RESULT_DIR="${RESULT_DIR:-}"
 
 mvn_args=(-B -P developer,systemvm)
@@ -58,6 +61,9 @@ if [[ "$SKIP_TESTS" == "true" ]]; then
 fi
 if [[ -n "$THREADS" ]]; then
   mvn_args+=(-T"$THREADS")
+fi
+if [[ "$RERUN_FAILING_TESTS" != "0" ]]; then
+  mvn_args+=("-Dsurefire.rerunFailingTestsCount=$RERUN_FAILING_TESTS")
 fi
 
 echo "==> Full build in $SOURCE_DIR"
