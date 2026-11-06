@@ -25,12 +25,13 @@ non-draft origin pull request into `main`. Remote Jenkinsfile Provider loads
 `private-cicd/Jenkinsfile` from the trusted CI branch. Match branches stays off.
 Draft pull requests get no job. Do not add a webhook.
 
-During the PR-119 pilot the trusted CI branch is `feature/CSTACKEX-340` and the
-folder include filter is `PR-119`. Both the Remote Jenkinsfile Provider branch
-and `trustedCiBranch()` in the Jenkinsfile must name that branch. Loading `main`
-before PR-119 is merged would run the old Jenkinsfile, which knows nothing about
-`CHANGE_ID` and defaults to `SOURCE_MODE=discover`. At cutover, change the
-provider branch and `trustedCiBranch()` to `main` and the filter to `PR-*`.
+The trusted CI branch is `main`. Both the Remote Jenkinsfile Provider branch and
+`trustedCiBranch()` in the Jenkinsfile must name that branch. During the PR-119
+pilot the provider branch was `feature/CSTACKEX-340` and the folder include
+filter was `PR-119`. Do not switch the provider branch to `main` until PR-119 is
+merged: the previous `main` Jenkinsfile knows nothing about `CHANGE_ID` and
+defaults to `SOURCE_MODE=discover`. After the merge, change the provider branch
+to `main` and the filter to `PR-*`, and keep `feature/CSTACKEX-340` until then.
 
 The numbered sections below that create a single Pipeline job with a five-minute
 `SOURCE_MODE=discover` timer (11 to 16) are retired. Sections on plugins,
@@ -47,12 +48,13 @@ Open `cloudstack-ontap-presubmit-mb` > **Configure**:
 | --- | --- |
 | Branch Source | GitHub, credential `cloudstack-presubmit-github-app`, repository `NetApp/cloudstack` |
 | Behaviours | Discover pull requests from origin only, strategy **The current pull request revision**; remove branch and fork discovery |
-| Filter by name | `PR-119` for the pilot, then `PR-*` |
-| Build Configuration | **by Remote Jenkinsfile Provider**, repository `https://github.com/NetApp/cloudstack.git`, branch `feature/CSTACKEX-340` (pilot) then `main`, file `private-cicd/Jenkinsfile`, **Match branches off** |
+| Filter by name | `PR-*` (`PR-119` during the pilot) |
+| Build Configuration | **by Remote Jenkinsfile Provider**, repository `https://github.com/NetApp/cloudstack.git`, branch `main` (`feature/CSTACKEX-340` during the pilot), file `private-cicd/Jenkinsfile`, **Match branches off** |
 | Scan Repository Triggers | Periodically, 1 to 5 minutes |
 | Orphaned items | Keep 14 days, 50 items |
 
-Run **Scan Repository Now** and expect one child, `PR-119`. The first build may
+Run **Scan Repository Now** and expect one child for each open non-draft pull
+request into `main` (only `PR-119` during the pilot). The first build may
 stop on Script Security. Approve only signatures requested by this Jenkinsfile
 and rebuild.
 
