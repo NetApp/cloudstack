@@ -1025,6 +1025,7 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class)))
                     .thenReturn(response);
+            when(sanFeignClient.getLunByUUID(eq(authHeader), eq("cloned-lun-uuid"))).thenReturn(clonedLun);
 
             CloudStackVolume result = unifiedSANStrategy.cloneCloudStackVolume(request);
 
@@ -1032,6 +1033,7 @@ class UnifiedSANStrategyTest {
             assertEquals("cloned-lun-uuid", result.getLun().getUuid());
             assertSame(volumeInfo, result.getVolumeInfo());
             verify(sanFeignClient).createLun(eq(authHeader), eq(true), any(Lun.class));
+            verify(sanFeignClient).getLunByUUID(eq(authHeader), eq("cloned-lun-uuid"));
         }
     }
 
@@ -1074,6 +1076,7 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
             when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
+            when(sanFeignClient.getLunByUUID(eq(authHeader), eq("new-lun-uuid"))).thenReturn(createdLun);
 
             CloudStackVolume result = unifiedSANStrategy.cloneCloudStackVolume(request);
 
