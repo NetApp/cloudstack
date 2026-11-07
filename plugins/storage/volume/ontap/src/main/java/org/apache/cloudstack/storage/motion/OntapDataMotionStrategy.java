@@ -103,6 +103,8 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
     private static final String ONTAP_SVM_UUID_DETAIL = "svmUUID";
     private static final String ONTAP_STORAGE_IP_DETAIL = "storageIP";
     private static final String ONTAP_PROTOCOL_DETAIL = "protocol";
+    private static final int QOS_PATCH_ATTEMPTS = 3;
+    private static final long QOS_PATCH_RETRY_WAIT_MS = 2000L;
 
     @Inject
     private AgentManager _agentMgr;
@@ -593,7 +595,29 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             return;
         }
         VolumeInfo refreshed = _volumeDataFactory.getVolume(destVolumeInfo.getId(), destVolumeInfo.getDataStore());
-        ((OntapPrimaryDatastoreDriver)destVolumeInfo.getDataStore().getDriver()).applyQosPolicyToVolume(refreshed);
+        OntapPrimaryDatastoreDriver driver = (OntapPrimaryDatastoreDriver)destVolumeInfo.getDataStore().getDriver();
+        // The VM is already on the destination. A failed patch must not expunge those disks.
+        for (int attempt = 1; attempt <= QOS_PATCH_ATTEMPTS; attempt++) {
+            try {
+                driver.applyQosPolicyToVolume(refreshed);
+                return;
+            } catch (Exception e) {
+                if (attempt == QOS_PATCH_ATTEMPTS) {
+                    logger.warn("Failed to reapply ONTAP QoS on volume [{}] after {} attempts",
+                            destVolumeInfo.getId(), QOS_PATCH_ATTEMPTS, e);
+                    return;
+                }
+                logger.warn("Failed to reapply ONTAP QoS on volume [{}], attempt {} of {}",
+                        destVolumeInfo.getId(), attempt, QOS_PATCH_ATTEMPTS, e);
+                try {
+                    Thread.sleep(QOS_PATCH_RETRY_WAIT_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    logger.warn("Interrupted while retrying ONTAP QoS on volume [{}]", destVolumeInfo.getId(), interrupted);
+                    return;
+                }
+            }
+        }
     }
 
     private void handleFailedMigration(Map<VolumeInfo, VolumeInfo> srcVolumeInfoToDestVolumeInfo, VirtualMachineTO vmTO, Host destHost,

@@ -37,6 +37,7 @@ import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CopyCmdAnswer;
 import org.apache.cloudstack.storage.command.CopyCommand;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.junit.jupiter.api.Test;
@@ -379,6 +380,24 @@ public class OntapDataMotionStrategyTest {
 
         strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback);
 
+        Mockito.verify(volumeService, Mockito.never()).expungeVolumeAsync(Mockito.any());
+        Mockito.verify(volumeService).copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Mockito.any(), Mockito.isNull(),
+                Mockito.eq(context.srcVolume), Mockito.eq(context.destVolume), Mockito.eq(false));
+        Mockito.verify(context.callback).complete(Mockito.argThat(result -> result != null && !result.isFailed()));
+    }
+
+    @Test
+    public void liveMigrationContinuesWhenQosReapplyFails() throws Exception {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+        OntapPrimaryDatastoreDriver ontapDriver = Mockito.mock(OntapPrimaryDatastoreDriver.class);
+        DataStore destStore = context.destVolume.getDataStore();
+        Mockito.doReturn(ontapDriver).when(destStore).getDriver();
+        Mockito.doThrow(new CloudRuntimeException("qos patch failed")).when(ontapDriver)
+                .applyQosPolicyToVolume(context.destVolume);
+
+        strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback);
+
+        Mockito.verify(ontapDriver, Mockito.times(3)).applyQosPolicyToVolume(context.destVolume);
         Mockito.verify(volumeService, Mockito.never()).expungeVolumeAsync(Mockito.any());
         Mockito.verify(volumeService).copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Mockito.any(), Mockito.isNull(),
                 Mockito.eq(context.srcVolume), Mockito.eq(context.destVolume), Mockito.eq(false));

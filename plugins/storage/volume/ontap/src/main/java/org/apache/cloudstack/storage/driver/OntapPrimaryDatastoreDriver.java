@@ -248,9 +248,16 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 logger.info("createAsync: Operation completed successfully for {}", dataObject.getType());
             }
             // Offline migration creates the destination volume with a null callback.
+            // A successful create still returns. A missing or failed result must not
+            // look like success to that caller, which has no callback to read.
             if (callback != null) {
                 callback.complete(createCmdResult);
             }
+        }
+        if (callback == null && (createCmdResult == null || !createCmdResult.isSuccess())) {
+            String message = createCmdResult != null && createCmdResult.getResult() != null
+                    ? createCmdResult.getResult() : "createAsync failed";
+            throw new CloudRuntimeException(message);
         }
     }
 
