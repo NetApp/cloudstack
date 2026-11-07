@@ -1011,7 +1011,11 @@ class OntapMigrationTestBase(OntapTestBase):
 
     @classmethod
     def _ensure_migration_pools(cls):
-        """Discover or create each protocol/scope/cluster pool requirement."""
+        """Create each protocol/scope/cluster pool for this run.
+
+        Existing OntapMigration volumes are not reused. A later case
+        would otherwise add LUNs to a FlexVol that earlier cases filled.
+        """
         pools = list_storage_pools(cls.apiClient, zoneid=cls.zone.id) or []
         selected = {"NFS3": {}, "ISCSI": {}}
         for protocol, requirements in cls._pool_requirements().items():
@@ -1022,6 +1026,9 @@ class OntapMigrationTestBase(OntapTestBase):
                     pool for pool in pools
                     if cls._is_compatible_ontap_pool(
                         pool, protocol, scope, cluster_id
+                    )
+                    and not str(getattr(pool, "name", "")).startswith(
+                        "OntapMigration"
                     )
                 ][:count]
                 for pool in selected[protocol][key]:

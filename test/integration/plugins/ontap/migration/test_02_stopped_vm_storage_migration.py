@@ -318,20 +318,21 @@ class TestOntapStoppedVmStorageMigration(OntapMigrationTestBase):
         self.assertEqual(self._get_vm(vm.id).state, "Running")
 
     def _stopped_qos(self, protocol, root_iops, data_iops, second_pool=False):
-        vm = self._prepare_qos_vm(
-            root_iops, data_iops, stop=True,
-            protocol=protocol if second_pool else None,
-        )
+        # A new FlexVol per QoS case. The chain pools are reused by the
+        # earlier cases, and another root plus data LUN does not fit.
+        cluster_id = self.__class__.cluster.id
+        if second_pool:
+            source_pool = self._create_ontap_pool(
+                protocol, "CLUSTER", cluster_id
+            )
+            vm = self._place_stopped_qos_vm(
+                source_pool, root_iops, data_iops
+            )
+        else:
+            vm = self._prepare_qos_vm(root_iops, data_iops, stop=True)
         volumes = self._vm_volumes(vm.id)
         source = self._pool_by_id(volumes[0].storageid)
-        if second_pool:
-            pools = (
-                self._migration_pool(protocol, 0),
-                self._migration_pool(protocol, 1),
-            )
-            pool = pools[1] if source.id == pools[0].id else pools[0]
-        else:
-            pool = self._migration_pool(protocol)
+        pool = self._create_ontap_pool(protocol, "CLUSTER", cluster_id)
         self._migrate_stopped_vm_storage(vm, pool)
         self._assert_migration_success(
             volumes, pool, protocol, vm=vm,
