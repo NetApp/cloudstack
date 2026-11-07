@@ -362,6 +362,28 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void testCreateAsync_NullCallback_ThrowsWhenCreateFails() {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+            when(nasStrategy.createCloudStackVolume(any())).thenThrow(new CloudRuntimeException("ontap create failed"));
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                    () -> driver.createAsync(dataStore, volumeInfo, null));
+            assertEquals("ontap create failed", thrown.getMessage());
+        }
+    }
+
+    @Test
     void testCreateAsync_VolumeWithISCSI_Success() {
         // Setup
         when(dataStore.getId()).thenReturn(1L);
