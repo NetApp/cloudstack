@@ -33,15 +33,13 @@ public abstract class SANStrategy extends StorageStrategy {
 
     /**
      * Ensures the LUN is mapped to the specified access group (igroup).
-     * If a mapping already exists, returns the existing LUN number.
-     * If not, creates a new mapping and returns the assigned LUN number.
+     * If a mapping already exists, nothing is done; otherwise a new mapping is created.
      *
      * @param svmName the SVM name
      * @param lunName the LUN name
      * @param accessGroupName the igroup name
-     * @return the logical unit number as a String
      */
-    public abstract String ensureLunMapped(String svmName, String lunName, String accessGroupName);
+    public abstract void ensureLunMapped(String svmName, String lunName, String accessGroupName);
 
     /**
      * Validates that the host initiator is present in the access group (igroup).
