@@ -643,4 +643,3 @@ class TestOntapLiveVmWithStorageMigration(OntapMigrationTestBase):
             destination_pool=dest,
         )
         self._assert_host_snapshot_unchanged(host_snapshot, vm)
-

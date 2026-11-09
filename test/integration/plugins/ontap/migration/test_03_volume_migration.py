@@ -137,8 +137,7 @@ class TestOntapVolumeMigration(OntapMigrationTestBase):
             expected_vm_id=None,
             source_pool=source_pool,
         )[0]
-        if protocol != "ISCSI":
-            self.assertNotEqual(current.path, source_path)
+        self.assertNotEqual(current.path, source_path)
         setattr(cls, attribute, migrated)
         self._assert_offline_host_state(
             protocol, destination_pool, volumes=[current]
@@ -183,8 +182,7 @@ class TestOntapVolumeMigration(OntapMigrationTestBase):
                 else source_pool
             ),
         )[0]
-        if protocol != "ISCSI":
-            self.assertNotEqual(current.path, source_path)
+        self.assertNotEqual(current.path, source_path)
         root = self._get_volume(root_id)
         self.assertEqual(root.storageid, root_pool_id)
         self.assertEqual(
