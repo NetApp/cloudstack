@@ -507,8 +507,7 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public String enableLogicalAccess(Map<String, String> values) {
-        return null;
+    public void enableLogicalAccess(Map<String, String> values) {
     }
 
     @Override
@@ -516,8 +515,8 @@ public class UnifiedNASStrategy extends NASStrategy {
     }
 
     @Override
-    public String getLogicalAccess(Map<String, String> values) {
-        return null;
+    public boolean getLogicalAccess(Map<String, String> values) {
+        return false;
     }
 
     private ExportPolicy createExportPolicy(String svmName, ExportPolicy policy) {

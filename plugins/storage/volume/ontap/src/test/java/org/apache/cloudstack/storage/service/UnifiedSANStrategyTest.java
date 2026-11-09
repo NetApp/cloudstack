@@ -725,16 +725,17 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
                     .thenReturn(new OntapResponse<>());
 
-            String result = unifiedSANStrategy.enableLogicalAccess(values);
+            // Execute
+            unifiedSANStrategy.enableLogicalAccess(values);
 
-            assertEquals("", result);
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
+            // Verify: map is created and no follow-up lookup is made
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
             verify(sanFeignClient, never()).getLunMapResponse(any(), anyMap());
         }
     }
 
     @Test
-    void testEnableLogicalAccess_AlreadyMapped_ReturnsLunNumber() {
+    void testEnableLogicalAccess_AlreadyMapped_DoesNotThrow() {
         // Setup
         Map<String, String> values = new HashMap<>();
         values.put(OntapStorageConstants.SVM_DOT_NAME, "svm1");
@@ -748,9 +749,8 @@ class UnifiedSANStrategyTest {
             Exception exception = new RuntimeException("LUN already mapped to this group");
             doThrow(exception).when(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
 
-            String result = unifiedSANStrategy.enableLogicalAccess(values);
-
-            assertEquals("", result);
+            // Execute / Verify
+            assertDoesNotThrow(() -> unifiedSANStrategy.enableLogicalAccess(values));
             verify(sanFeignClient, never()).getLunMapResponse(any(), anyMap());
         }
     }
@@ -805,11 +805,8 @@ class UnifiedSANStrategyTest {
         values.put(OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/lun1");
         values.put(OntapStorageConstants.IGROUP_DOT_NAME, "igroup1");
 
-        LunMap lunMap = new LunMap();
-        lunMap.setLogicalUnitNumber(3);
-
         OntapResponse<LunMap> response = new OntapResponse<>();
-        response.setRecords(List.of(lunMap));
+        response.setRecords(List.of(new LunMap()));
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
@@ -817,17 +814,13 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(response);
 
-            // Execute
-            String result = unifiedSANStrategy.getLogicalAccess(values);
-
-            // Verify
-            assertNotNull(result);
-            assertEquals("3", result);
+            // Execute / Verify
+            assertTrue(unifiedSANStrategy.getLogicalAccess(values));
         }
     }
 
     @Test
-    void testGetLogicalAccess_NotFound_ReturnsNull() {
+    void testGetLogicalAccess_NotFound_ReturnsFalse() {
         // Setup
         Map<String, String> values = new HashMap<>();
         values.put(OntapStorageConstants.SVM_DOT_NAME, "svm1");
@@ -841,26 +834,20 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap()))
                     .thenThrow(new RuntimeException("Not found"));
 
-            // Execute
-            String result = unifiedSANStrategy.getLogicalAccess(values);
-
-            // Verify
-            assertNull(result);
+            // Execute / Verify
+            assertFalse(unifiedSANStrategy.getLogicalAccess(values));
         }
     }
 
     @Test
-    void testEnsureLunMapped_ExistingMapping_ReturnsLunNumber() {
+    void testEnsureLunMapped_ExistingMapping_SkipsCreate() {
         // Setup
         String svmName = "svm1";
         String lunName = "/vol/vol1/lun1";
         String accessGroupName = "igroup1";
 
-        LunMap lunMap = new LunMap();
-        lunMap.setLogicalUnitNumber(2);
-
         OntapResponse<LunMap> response = new OntapResponse<>();
-        response.setRecords(List.of(lunMap));
+        response.setRecords(List.of(new LunMap()));
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
@@ -869,49 +856,37 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(response);
 
             // Execute
-            String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+            unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
             // Verify
-            assertEquals("2", result);
             verify(sanFeignClient, never()).createLunMap(any(), anyBoolean(), any());
         }
     }
 
     @Test
-    void testEnsureLunMapped_CreatesNewMapping_ReturnsLunNumber() {
+    void testEnsureLunMapped_CreatesNewMapping_SingleLookup() {
         // Setup
         String svmName = "svm1";
         String lunName = "/vol/vol1/lun1";
         String accessGroupName = "igroup1";
 
-        LunMap lunMap = new LunMap();
-        lunMap.setLogicalUnitNumber(4);
-
         OntapResponse<LunMap> emptyResponse = new OntapResponse<>();
         emptyResponse.setRecords(new ArrayList<>());
-
-        OntapResponse<LunMap> response = new OntapResponse<>();
-        response.setRecords(List.of(lunMap));
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            // First call returns empty (no existing mapping), second call returns the new mapping
-            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap()))
-                    .thenReturn(emptyResponse)  // First call - no records
-                    .thenReturn(response);      // Second call after creation
-
+            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
             when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
                     .thenReturn(new OntapResponse<>());
 
             // Execute
-            String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+            unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
-            ArgumentCaptor<LunMap> requestCaptor = ArgumentCaptor.forClass(LunMap.class);
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), requestCaptor.capture());
-            assertNull(requestCaptor.getValue().getLogicalUnitNumber());
-            assertEquals("", result);
+            // Verify: one existence lookup and one create, no follow-up lookup
+            verify(sanFeignClient, times(1)).getLunMapResponse(eq(authHeader), anyMap());
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
         }
     }
 
@@ -2159,7 +2134,7 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testEnableLogicalAccess_FetchLunMapFails_ThrowsException() {
+    void testEnableLogicalAccess_CreateLunMapFails_ThrowsException() {
         Map<String, String> values = new HashMap<>();
         values.put(OntapStorageConstants.SVM_DOT_NAME, "svm1");
         values.put(OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/lun1");
@@ -2169,8 +2144,8 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            doThrow(new RuntimeException("ONTAP unavailable")).when(sanFeignClient)
-                    .createLunMap(eq(authHeader), eq(false), any(LunMap.class));
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
+                    .thenThrow(new RuntimeException("Failed to create LunMap"));
 
             assertThrows(CloudRuntimeException.class,
                 () -> unifiedSANStrategy.enableLogicalAccess(values));
@@ -2248,16 +2223,15 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap()))
-                    .thenReturn(emptyResponse);
-
-            when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
+            // Single lookup returns empty (no existing mapping), then the map is created
+            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
                     .thenReturn(new OntapResponse<>());
 
-            String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+            unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
-            assertEquals("", result);
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
+            verify(sanFeignClient, times(1)).getLunMapResponse(eq(authHeader), anyMap());
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
         }
     }
 
@@ -2274,11 +2248,9 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap()))
-                    .thenReturn(emptyResponse);
-
-            doThrow(new RuntimeException("ONTAP unavailable")).when(sanFeignClient)
-                    .createLunMap(eq(authHeader), eq(false), any(LunMap.class));
+            when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
+                    .thenThrow(new RuntimeException("ONTAP rejected lun-map create"));
 
             assertThrows(CloudRuntimeException.class,
                 () -> unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName));
@@ -2649,7 +2621,7 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testGetLogicalAccess_EmptyResponse_ReturnsNull() {
+    void testGetLogicalAccess_EmptyResponse_ReturnsFalse() {
         Map<String, String> values = new HashMap<>();
         values.put(OntapStorageConstants.SVM_DOT_NAME, "svm1");
         values.put(OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/lun1");
@@ -2664,14 +2636,12 @@ class UnifiedSANStrategyTest {
 
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
 
-            String result = unifiedSANStrategy.getLogicalAccess(values);
-
-            assertNull(result);
+            assertFalse(unifiedSANStrategy.getLogicalAccess(values));
         }
     }
 
     @Test
-    void testGetLogicalAccess_ExceptionThrown_ReturnsNull() {
+    void testGetLogicalAccess_ExceptionThrown_ReturnsFalse() {
         Map<String, String> values = new HashMap<>();
         values.put(OntapStorageConstants.SVM_DOT_NAME, "svm1");
         values.put(OntapStorageConstants.LUN_DOT_NAME, "/vol/vol1/lun1");
@@ -2684,9 +2654,7 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap()))
                     .thenThrow(new RuntimeException("Connection failed"));
 
-            String result = unifiedSANStrategy.getLogicalAccess(values);
-
-            assertNull(result);
+            assertFalse(unifiedSANStrategy.getLogicalAccess(values));
         }
     }
 
@@ -2770,17 +2738,14 @@ class UnifiedSANStrategyTest {
     }
 
     @Test
-    void testEnsureLunMapped_ExistingMapping_ReturnsExistingNumber() {
+    void testEnsureLunMapped_ExistingMapping_DoesNotCreateAgain() {
         // Setup
         String svmName = "svm1";
         String lunName = "/vol/vol1/lun1";
         String accessGroupName = "igroup1";
 
-        LunMap lunMap = new LunMap();
-        lunMap.setLogicalUnitNumber(3);
-
         OntapResponse<LunMap> response = new OntapResponse<>();
-        response.setRecords(List.of(lunMap));
+        response.setRecords(List.of(new LunMap()));
 
         try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class)) {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
@@ -2789,10 +2754,8 @@ class UnifiedSANStrategyTest {
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(response);
 
             // Execute
-            String result = unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+            unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
-            // Verify
-            assertEquals("3", result);
             // Verify createLunMap was NOT called
             verify(sanFeignClient, never()).createLunMap(any(), anyBoolean(), any(LunMap.class));
         }
