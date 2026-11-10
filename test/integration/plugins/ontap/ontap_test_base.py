@@ -65,7 +65,7 @@ from marvin.cloudstackAPI import listHosts as listHostsAPI
 from marvin.cloudstackException import CloudstackAPIException
 from marvin.cloudstackTestCase import cloudstackTestCase
 from marvin.jsonHelper import jsonDump
-from marvin.lib.base import Account, DiskOffering
+from marvin.lib.base import Account, DiskOffering, ServiceOffering
 from marvin.sshClient import SshClient
 from marvin.lib.common import (
     get_domain, get_zone, list_clusters, list_storage_pools,
@@ -537,7 +537,7 @@ class OntapRestClient:
         """Return the ONTAP LUN record for the given full path, or None."""
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name, "name": lun_path,
-                                 "fields": "name,uuid,enabled,status,space.size"})
+                                 "fields": "name,uuid,enabled,status,space.size,serial_number"})
         records = data.get("records", [])
         return records[0] if records else None
 
@@ -546,7 +546,7 @@ class OntapRestClient:
         prefix = "/vol/%s/" % vol_name
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name,
-                                 "fields": "name,uuid,enabled,status,space.size"})
+                                 "fields": "name,uuid,enabled,status,space.size,serial_number"})
         return [r for r in data.get("records", [])
                 if r.get("name", "").startswith(prefix)]
 
@@ -559,6 +559,15 @@ class OntapRestClient:
                                            "igroup.uuid,logical_unit_number"})
         return [r for r in data.get("records", [])
                 if r.get("lun", {}).get("name", "").startswith(prefix)]
+
+    def list_lun_maps_for_igroup(self, svm_name, igroup_name):
+        """Return the names of all LUNs currently mapped to the igroup."""
+        data = self._get("/protocols/san/lun-maps",
+                         params={"svm.name": svm_name,
+                                 "igroup.name": igroup_name,
+                                 "fields": "lun.name"})
+        return [r.get("lun", {}).get("name", "")
+                for r in data.get("records", [])]
 
     # -- NFS file helpers ----------------------------------------------------
 
@@ -868,6 +877,7 @@ class OntapTestBase(cloudstackTestCase):
     vm = None
     template_id = None
     service_offering_id = None
+    _tagged_offering = None
     network_id = None
     _created_network_id = None
     # Prefix for a guest network this suite creates on Advanced zones.
@@ -994,6 +1004,10 @@ class OntapTestBase(cloudstackTestCase):
                 % parse_ex
             )
 
+        # Fail the class early when a KVM host cannot be trusted to verify
+        # results (libvirtd/agent/iscsid down, host not Up in CloudStack).
+        cls._assert_kvm_hosts_ready()
+
     # ---- KVM storage cleanup helper ------------------------------------
 
     @classmethod
@@ -1020,8 +1034,13 @@ class OntapTestBase(cloudstackTestCase):
     # ---- VM deploy/attach helpers --------------------------------------
 
     @classmethod
-    def _discover_vm_deploy_resources(cls):
+    def _discover_vm_deploy_resources(cls, storage_tags=None):
         """Resolve the template, service offering, and network for VM deploys.
+
+        With ``storage_tags`` a compute offering carrying those storage tags is
+        created (and deleted in tearDownClass) so the VM ROOT disk can only be
+        placed on the ONTAP pool; without it the smallest existing offering is
+        used and CloudStack may place the disk on any shared pool.
 
         A missing template is not fatal: ``template_id`` is left as None so
         callers can skip the VM step while the rest of the suite still runs.
@@ -1051,6 +1070,14 @@ class OntapTestBase(cloudstackTestCase):
         if offerings:
             offerings.sort(key=lambda s: getattr(s, "memory", 9999))
             cls.service_offering_id = offerings[0].id
+        if storage_tags:
+            cls._tagged_offering = ServiceOffering.create(cls.apiClient, {
+                "name": "OntapLifecycleSO_%d" % random.randint(0, 99999),
+                "displaytext": "ONTAP lifecycle SO (tagged)",
+                "cpunumber": 1, "cpuspeed": 500, "memory": 512,
+                "storagetype": "shared", "tags": storage_tags,
+            })
+            cls.service_offering_id = cls._tagged_offering.id
 
         cls.network_id = None
         if getattr(cls.zone, "networktype", "Basic").lower() != "advanced":
@@ -1198,6 +1225,13 @@ class OntapTestBase(cloudstackTestCase):
         """Best-effort cleanup of any resources left behind by a failed run."""
         cls._destroy_vm_if_present()
         cls._delete_created_network()
+        if cls._tagged_offering is not None:
+            try:
+                cls._tagged_offering.delete(cls.apiClient)
+            except Exception as e:
+                logger.warning(
+                    "tearDownClass: could not delete service offering: %s" % e)
+            cls._tagged_offering = None
         if (getattr(cls, "ontap", None) is not None
                 and getattr(cls, "filler_filename", None)
                 and getattr(cls, "filler_flexvol", None)):
@@ -1455,6 +1489,333 @@ class OntapTestBase(cloudstackTestCase):
         )
         return ssh.execute(command) or []
 
+    # ---- KVM host / libvirt verification ---------------------------------
+    #
+    # A test only passes when CloudStack, ONTAP *and* the KVM host agree. These
+    # helpers add the host side: services, the libvirt domain and its XML, the
+    # by-id block device that belongs to each LUN, and the iSCSI session.
+
+    @classmethod
+    def _assert_kvm_hosts_ready(cls):
+        """Fail the class early when a KVM host cannot be trusted.
+
+        libvirtd and cloudstack-agent (plus iscsid for iSCSI) must be active,
+        virsh must answer, and CloudStack must see every cluster host as
+        Up/Enabled.  Without this, a sick host shows up as obscure failures
+        deep inside a test.
+        """
+        if not cls.kvm_hosts_ssh_creds:
+            logger.warning(
+                "_assert_kvm_hosts_ready: no KVM SSH credentials configured; "
+                "host-side checks are skipped for this class")
+            return
+        units = ["libvirtd", "cloudstack-agent"]
+        if str(cls.PROTOCOL).upper() == "ISCSI":
+            units.append("iscsid")
+        problems = []
+        for creds in cls.kvm_hosts_ssh_creds:
+            host_ip = creds["host"]
+            try:
+                for unit in units:
+                    state = kvm_host.service_state(
+                        cls.kvm_hosts_ssh_creds, host_ip, unit)
+                    if state != "active":
+                        problems.append("%s: %s is '%s' (expected 'active')"
+                                        % (host_ip, unit, state))
+                if not kvm_host.virsh_responsive(
+                        cls.kvm_hosts_ssh_creds, host_ip):
+                    problems.append("%s: virsh does not respond" % host_ip)
+            except Exception as ex:
+                problems.append("%s: could not verify host (%s)"
+                                % (host_ip, ex))
+        for host in (getattr(cls, "cluster_hosts", None) or []):
+            if (getattr(host, "state", None) != "Up"
+                    or getattr(host, "resourcestate", None) != "Enabled"):
+                problems.append(
+                    "CloudStack host %s is state=%s resourcestate=%s "
+                    "(expected Up/Enabled)"
+                    % (getattr(host, "name", "?"),
+                       getattr(host, "state", None),
+                       getattr(host, "resourcestate", None)))
+        if problems:
+            raise AssertionError(
+                "KVM host(s) are not ready: " + "; ".join(problems))
+        logger.info("KVM hosts ready: %s",
+                    ", ".join(c["host"] for c in cls.kvm_hosts_ssh_creds))
+
+    def _vm_placement(self, vm_id):
+        """Live placement of a VM: host ip, libvirt instance name, VM object.
+
+        Re-read from the API each time, because the deploy-time host and
+        instance fields go stale after stop/start/revert.
+        """
+        vms = self.apiClient.listVirtualMachines(_list_vms_cmd(vm_id)) or []
+        self.assertTrue(vms, "VM %s not found" % vm_id)
+        vm = vms[0]
+        host_id = getattr(vm, "hostid", None)
+        host_ip = None
+        if host_id:
+            for host in (self.cluster_hosts or []):
+                if host.id == host_id:
+                    host_ip = getattr(host, "ipaddress", None)
+                    break
+            if host_ip is None:
+                cmd = listHostsAPI.listHostsCmd()
+                cmd.id = host_id
+                hosts = self.apiClient.listHosts(cmd) or []
+                host_ip = hosts[0].ipaddress if hosts else None
+        return {"vm": vm, "instance": getattr(vm, "instancename", None),
+                "host_id": host_id, "host_ip": host_ip}
+
+    def _kvm_host_reachable(self, host_ip):
+        """True when SSH credentials exist for the host (else log and skip)."""
+        if host_ip and any(c["host"] == host_ip
+                           for c in self.kvm_hosts_ssh_creds):
+            return True
+        logger.warning("No KVM SSH credentials for host %s; host-side checks "
+                       "skipped", host_ip)
+        return False
+
+    def _assert_kvm_services(self, host_ip, label):
+        """libvirtd and the CloudStack agent are still active on the host."""
+        for unit in ("libvirtd", "cloudstack-agent"):
+            state = kvm_host.service_state(
+                self.kvm_hosts_ssh_creds, host_ip, unit)
+            self.assertEqual(
+                state, "active",
+                "[%s] %s on KVM host %s is '%s', expected 'active'"
+                % (label, unit, host_ip, state))
+
+    def _cs_volume_wwid(self, vol, label):
+        """Check a CloudStack volume path is /<SVM target IQN>/<WWID>.
+
+        Returns the WWID.  This is the PR #114 contract: the path carries the
+        LUN WWID rather than a logical unit number.
+        """
+        path = getattr(vol, "path", None)
+        match = re.match(r"^/([^/]+)/([0-9a-f]{32})$", path or "")
+        self.assertIsNotNone(
+            match,
+            "[%s] volume %s path %r is not '/<targetIQN>/<WWID>'"
+            % (label, vol.name, path))
+        target_iqn = self.ontap.get_iscsi_target_iqn(self.svm_name)
+        self.assertEqual(
+            match.group(1), target_iqn,
+            "[%s] volume %s path IQN %r != ONTAP SVM target %r"
+            % (label, vol.name, match.group(1), target_iqn))
+        wwid = match.group(2)
+        self.assertTrue(
+            kvm_host.WWID_RE.match(wwid),
+            "[%s] volume %s WWID %r is not a NetApp NAA identifier"
+            % (label, vol.name, wwid))
+        return wwid
+
+    def _assert_wwid_matches_ontap(self, flexvol_name, wwid, label):
+        """Some LUN in the FlexVol has a serial number that maps to the WWID."""
+        luns = self.ontap.list_luns_in_volume(self.svm_name, flexvol_name)
+        derived = {}
+        for lun in luns:
+            serial = lun.get("serial_number")
+            if serial:
+                derived[kvm_host.naa_from_serial(serial)] = lun.get("name")
+        self.assertIn(
+            wwid, derived,
+            "[%s] no LUN in FlexVol '%s' has a serial that maps to WWID %s "
+            "(LUN WWIDs: %s)" % (label, flexvol_name, wwid, sorted(derived)))
+        return derived[wwid]
+
+    def _assert_iscsi_session_to_svm(self, host_ip, label):
+        """The host holds an iSCSI session to the SVM target on a data LIF."""
+        target_iqn = self.ontap.get_iscsi_target_iqn(self.svm_name)
+        lifs = set(self.ontap.get_iscsi_data_lifs(self.svm_name))
+        sessions = kvm_host.iscsi_sessions(self.kvm_hosts_ssh_creds, host_ip)
+        match = [s for s in sessions
+                 if s["target"] == target_iqn and s["portal_ip"] in lifs]
+        self.assertTrue(
+            match,
+            "[%s] KVM host %s has no iSCSI session to target %s on a data LIF "
+            "%s (sessions: %s)" % (label, host_ip, target_iqn, sorted(lifs),
+                                   sessions))
+
+    def _assert_vm_disks_on_host(self, vm_id, pool, label):
+        """Verify a running VM on the KVM host, end to end.
+
+        Checks the live libvirt domain (state, identity, sizing) and its XML
+        (one block disk per CloudStack volume, sourced from the LUN's by-id
+        path, raw/virtio), that each LUN's block device exists on the host, and
+        that the host has an iSCSI session to the SVM.  Returns a dict with the
+        host, instance and {volume id: WWID} for later cleanup checks, or None
+        when the host cannot be reached over SSH.
+        """
+        placement = self._vm_placement(vm_id)
+        vm, host_ip, instance = (
+            placement["vm"], placement["host_ip"], placement["instance"])
+        self.assertEqual(
+            vm.state, "Running",
+            "[%s] VM %s is %s, expected Running" % (label, vm_id, vm.state))
+        self.assertTrue(
+            host_ip and instance,
+            "[%s] VM %s has no host/instance (host=%s instance=%s)"
+            % (label, vm_id, host_ip, instance))
+        if not self._kvm_host_reachable(host_ip):
+            return None
+
+        self._assert_kvm_services(host_ip, label)
+        state = kvm_host.domain_state(
+            self.kvm_hosts_ssh_creds, host_ip, instance)
+        self.assertEqual(
+            state, "running",
+            "[%s] libvirt domain %s on %s is '%s', expected 'running'"
+            % (label, instance, host_ip, state))
+
+        root = kvm_host.domain_xml(
+            self.kvm_hosts_ssh_creds, host_ip, instance)
+        self.assertIsNotNone(
+            root, "[%s] no libvirt XML for domain %s on %s"
+            % (label, instance, host_ip))
+
+        # identity and sizing
+        self.assertEqual(root.get("type"), "kvm",
+                         "[%s] domain type is not kvm" % label)
+        self.assertEqual(root.findtext("name"), instance,
+                         "[%s] domain name != instance name" % label)
+        self.assertEqual(root.findtext("uuid"), vm.id,
+                         "[%s] domain uuid != VM id" % label)
+        self.assertEqual(
+            int(root.findtext("vcpu")), int(vm.cpunumber),
+            "[%s] domain vcpu != service offering cpunumber" % label)
+        self.assertEqual(
+            int(root.findtext("memory")), int(vm.memory) * 1024,
+            "[%s] domain memory (KiB) != service offering memory" % label)
+
+        # ONTAP igroup of the host the VM runs on: it exists once a LUN is
+        # mapped (the plugin creates it on first grantAccess, not at pool
+        # creation) and holds this host's initiator IQN.
+        igroup_name = self._igroup_name(placement["host_id"])
+        igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
+        self.assertIsNotNone(
+            igroup, "[%s] ONTAP igroup '%s' for host %s not found"
+            % (label, igroup_name, host_ip))
+        iqn_lines = kvm_host.run_on_host(
+            self.kvm_hosts_ssh_creds, host_ip,
+            "awk -F= '/^InitiatorName=/{print $2}' "
+            "/etc/iscsi/initiatorname.iscsi 2>/dev/null")
+        host_iqn = next((line.strip() for line in iqn_lines
+                         if line.strip().startswith("iqn.")), None)
+        self.assertIsNotNone(
+            host_iqn, "[%s] no initiator IQN found on KVM host %s"
+            % (label, host_ip))
+        initiators = [i.get("name") for i in igroup.get("initiators", [])]
+        self.assertIn(
+            host_iqn, initiators,
+            "[%s] host IQN %s is not in igroup %s (initiators: %s)"
+            % (label, host_iqn, igroup_name, initiators))
+        lun_maps = self.ontap.list_lun_maps_for_volume(
+            self.svm_name, pool.name)
+
+        # disks
+        vols = self.apiClient.listVolumes(_list_vols_for_vm(vm_id)) or []
+        disks = [d for d in kvm_host.parse_domain_disks(root)
+                 if d["device"] == "disk"]
+        self.assertEqual(
+            len(disks), len(vols),
+            "[%s] libvirt has %d disk(s) for %s but CloudStack lists %d "
+            "volume(s): %s" % (label, len(disks), instance, len(vols),
+                               [d["source_dev"] for d in disks]))
+        wwids = {}
+        for vol in vols:
+            self.assertEqual(
+                vol.storageid, pool.id,
+                "[%s] volume %s is on pool '%s' (%s), not on the ONTAP pool "
+                "'%s' (%s)" % (label, vol.name, getattr(vol, "storage", "?"),
+                               vol.storageid, pool.name, pool.id))
+            wwid = self._cs_volume_wwid(vol, label)
+            lun_name = self._assert_wwid_matches_ontap(pool.name, wwid, label)
+            wwids[vol.id] = wwid
+            self.assertTrue(
+                [m for m in lun_maps
+                 if m.get("lun", {}).get("name") == lun_name
+                 and m.get("igroup", {}).get("name") == igroup_name],
+                "[%s] LUN %s (volume %s) is not mapped to igroup %s"
+                % (label, lun_name, vol.name, igroup_name))
+            found = [d for d in disks
+                     if d["source_dev"] in kvm_host.by_id_paths(wwid)]
+            self.assertEqual(
+                len(found), 1,
+                "[%s] expected exactly one libvirt disk sourced from the "
+                "by-id path of %s (volume %s), found %d; disks: %s"
+                % (label, wwid, vol.name, len(found),
+                   [d["source_dev"] for d in disks]))
+            disk = found[0]
+            self.assertEqual(disk["type"], "block",
+                             "[%s] %s disk type" % (label, vol.name))
+            self.assertIsNone(disk["source_file"],
+                              "[%s] %s has a file source" % (label, vol.name))
+            self.assertEqual(disk["driver_name"], "qemu",
+                             "[%s] %s driver name" % (label, vol.name))
+            self.assertEqual(disk["driver_type"], "raw",
+                             "[%s] %s driver type" % (label, vol.name))
+            self.assertEqual(disk["target_bus"], "virtio",
+                             "[%s] %s target bus" % (label, vol.name))
+            self.assertEqual(
+                disk["serial"], vol.id.replace("-", "")[:20],
+                "[%s] %s disk serial != volume uuid" % (label, vol.name))
+            if str(vol.type).upper() == "ROOT":
+                self.assertEqual(disk["target_dev"], "vda",
+                                 "[%s] ROOT disk is not vda" % label)
+            self.assertTrue(
+                kvm_host.wait_device(
+                    self.kvm_hosts_ssh_creds, host_ip, wwid, True),
+                "[%s] block device for %s (volume %s) missing on %s"
+                % (label, wwid, vol.name, host_ip))
+        self._assert_iscsi_session_to_svm(host_ip, label)
+        logger.info("[%s] host check ok: %s on %s, %d disk(s) %s",
+                    label, instance, host_ip, len(disks), sorted(wwids.values()))
+        return {"host_ip": host_ip, "instance": instance, "wwids": wwids}
+
+    def _assert_disk_detached_on_host(self, host_ip, instance, wwid, label):
+        """A LUN is no longer a disk of a running domain nor a host device."""
+        if not self._kvm_host_reachable(host_ip):
+            return
+        root = kvm_host.domain_xml(
+            self.kvm_hosts_ssh_creds, host_ip, instance)
+        self.assertIsNotNone(
+            root, "[%s] no libvirt XML for domain %s" % (label, instance))
+        sources = [d["source_dev"] for d in kvm_host.parse_domain_disks(root)]
+        self.assertFalse(
+            [s for s in sources if s in kvm_host.by_id_paths(wwid)],
+            "[%s] domain %s still has a disk for %s: %s"
+            % (label, instance, wwid, sources))
+        self._assert_devices_gone(host_ip, [wwid], label)
+
+    def _assert_devices_gone(self, host_ip, wwids, label):
+        """The block devices for these WWIDs are gone from the KVM host."""
+        if not self._kvm_host_reachable(host_ip):
+            return
+        for wwid in wwids:
+            self.assertFalse(
+                kvm_host.wait_device(
+                    self.kvm_hosts_ssh_creds, host_ip, wwid, False),
+                "[%s] block device for %s still present on %s"
+                % (label, wwid, host_ip))
+
+    def _assert_domain_absent(self, host_ip, instance, label, timeout=60):
+        """The libvirt domain is gone (stopped/destroyed VMs are transient)."""
+        if not self._kvm_host_reachable(host_ip):
+            return
+        deadline = time.time() + timeout
+        state = kvm_host.domain_state(
+            self.kvm_hosts_ssh_creds, host_ip, instance)
+        while state != "absent" and time.time() < deadline:
+            time.sleep(3)
+            state = kvm_host.domain_state(
+                self.kvm_hosts_ssh_creds, host_ip, instance)
+        self.assertEqual(
+            state, "absent",
+            "[%s] libvirt domain %s on %s is '%s', expected it to be gone"
+            % (label, instance, host_ip, state))
+        self._assert_kvm_services(host_ip, label)
+
     @classmethod
     def _igroup_name(cls, host_uuid):
         """Return the igroup name used by OntapStorageUtils."""
@@ -1496,6 +1857,30 @@ class OntapTestBase(cloudstackTestCase):
             "Captured iSCSI igroup baseline for SVM '%s': %s",
             cls.svm_name, cls.igroup_baseline,
         )
+
+    def _assert_host_igroups_follow_lun_maps(self, context):
+        """A host igroup exists exactly while it still has a LUN mapped.
+
+        The igroup is created at first volume access and removed when its last
+        LUN is unmapped, so after a teardown it must be gone when nothing else
+        (other pools, system VM disks) is mapped to it, and still be present
+        when something is.
+        """
+        for igroup_name, _ in self._iscsi_host_specs():
+            mapped = self.ontap.list_lun_maps_for_igroup(
+                self.svm_name, igroup_name)
+            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
+            if mapped:
+                self.assertIsNotNone(
+                    igroup,
+                    "ONTAP igroup '%s' is missing %s although LUNs %s are "
+                    "still mapped to it" % (igroup_name, context, mapped))
+            else:
+                self.assertIsNone(
+                    igroup,
+                    "ONTAP igroup '%s' still exists %s with no LUN mapped; "
+                    "it should be removed when its last LUN is unmapped"
+                    % (igroup_name, context))
 
     def _assert_igroup_baseline_unchanged(self, context):
         """Assert an operation did not change pre-existing shared igroups."""

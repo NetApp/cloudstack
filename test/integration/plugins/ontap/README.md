@@ -44,6 +44,9 @@ test/integration/plugins/ontap/
 ├── ontap.cfg                     # Environment config (IPs, credentials, zone info)
 ├── ontap_test_base.py            # Shared base class and ONTAP REST client
 ├── guest_ssh.py                  # Guest SSH (paramiko) for the VM workflow suites
+├── helpers/
+│   ├── kvm_host.py               # KVM host checks: services, libvirt domain XML, by-id devices, iSCSI sessions
+│   └── template_cache_*.py       # Template-cache setup, assertions and negative workflow
 ├── setup_env.sh                  # venv: Marvin plus requirements.txt
 ├── requirements.txt              # setuptools, pyvmomi, paramiko pins
 ├── TEST_CASES.md                 # Full test case reference table (151 tests)
@@ -356,6 +359,10 @@ another ONTAP pool is present.
 | `_create_volume(pool_id)` | Creates a CloudStack data volume on the given pool |
 | `_delete_pool(pool_id, forced)` | Enters Maintenance then calls `deleteStoragePool` |
 | `_parse_pool_details(pool)` | Extracts key→value pairs from the pool's `details` list |
+| `_assert_kvm_hosts_ready()` | Called from `_setup_cloudstack_resources()`: libvirtd, cloudstack-agent (and iscsid for iSCSI) active, `virsh` responsive, CloudStack host `Up`/`Enabled`; fails the class early otherwise |
+| `_vm_placement(vm_id)` | Live host IP, libvirt instance name and VM object (deploy-time values go stale after stop/start) |
+| `_assert_vm_disks_on_host(vm_id, pool, label)` | iSCSI: libvirt domain `running`; XML identity/sizing; one `block`/`raw`/`virtio` disk per CloudStack volume sourced from `/dev/disk/by-id/wwn-0x<WWID>`; volume path is `/<target IQN>/<WWID>` and the WWID matches the ONTAP LUN serial; LUN mapped to the host's igroup; block device present; iSCSI session to an SVM data LIF |
+| `_assert_disk_detached_on_host(...)`, `_assert_devices_gone(...)`, `_assert_domain_absent(...)` | After detach / stop / destroy: the disk is out of the domain XML, the by-id device and the libvirt domain are gone |
 | `OntapRestClient` | Thin HTTPS client for ONTAP REST API calls |
 
 ### `OntapRestClient` methods at a glance

@@ -68,7 +68,7 @@ steps have not yet run.  Always run the full suite.
 import base64
 import logging
 import random
-import re
+import time
 import unittest
 
 from nose.plugins.attrib import attr
@@ -161,17 +161,6 @@ class TestData:
 
 
 # ---------------------------------------------------------------------------
-# iSCSI path helpers
-# ---------------------------------------------------------------------------
-
-def _igroup_name(svm_name, host_name):
-    """Mirror OntapStorageUtils.getIgroupName: cs_{svmName}_{sanitizedHostName}"""
-    short = host_name.split(".")[0]
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", short)
-    return "cs_%s_%s" % (svm_name, sanitized)
-
-
-# ---------------------------------------------------------------------------
 # Sequential workflow test class
 # ---------------------------------------------------------------------------
 
@@ -222,7 +211,11 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
 
         cls._setup_cloudstack_resources(config, cls.testdata[TestData.account])
 
-        cls._discover_vm_deploy_resources()
+        cls._discover_vm_deploy_resources(storage_tags=tags)
+
+        # Host igroups are shared across pools and the driver creates them
+        # lazily (grantAccess), so pool-only steps must leave them untouched.
+        cls._capture_igroup_baseline()
 
     # No per-test tearDown — state intentionally persists between steps.
 
@@ -558,7 +551,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         Create an iSCSI primary storage pool and verify:
           - CloudStack state is Up, type is OntapiSCSI
           - ONTAP: FlexVol exists and is online
-          - ONTAP: one igroup per cluster host exists with the correct IQN initiator
+          - ONTAP: host igroups are unchanged (they are created at first volume access)
         """
         pool = self._create_pool()
         self.__class__.pool = pool
@@ -583,25 +576,10 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "ONTAP FlexVol should be 'online', got '%s'" % ontap_vol.get("state")
         )
 
-        # ONTAP: igroup must exist for each cluster host that has an IQN
-        for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None) or getattr(host, "StorageUrl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue  # host not iSCSI-enabled; skip igroup check for it
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            self.assertIsNotNone(
-                igroup,
-                "ONTAP igroup '%s' not found for host '%s'" % (igroup_name, host.name)
-            )
-            initiator_names = [
-                i.get("name", "") for i in igroup.get("initiators", [])
-            ]
-            self.assertIn(
-                iqn, initiator_names,
-                "Host IQN '%s' not in igroup '%s' initiators: %s"
-                % (iqn, igroup_name, initiator_names)
-            )
+        # ONTAP: the driver creates a host's igroup lazily at first volume
+        # access (grantAccess), not at pool creation, so creating the pool must
+        # leave the shared host igroups exactly as they were.
+        self._assert_igroup_baseline_unchanged("after pool creation")
 
         # Capacity reporting
         self._assert_pool_capacity(pool, "pool-created")
@@ -702,17 +680,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
         self.assertEqual(resized_ontap_vol.get("state"), "online")
 
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared after increase" % igroup_name,
-                )
+        self._assert_igroup_baseline_unchanged("after growing the pool")
 
 
     # ------------------------------------------------------------------
@@ -781,18 +749,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "Pool should stay 'Up' after a rejected resize, got '%s'"
             % after[0].state
         )
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared after a rejected "
-                    "over-max grow" % igroup_name,
-                )
+        self._assert_igroup_baseline_unchanged("after a rejected over-max grow")
 
 
     # ------------------------------------------------------------------
@@ -825,18 +782,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
         self.assertEqual(shrunk_ontap_vol.get("state"), "online")
 
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared after safe shrink"
-                    % igroup_name,
-                )
+        self._assert_igroup_baseline_unchanged("after shrinking the pool")
 
 
     # ------------------------------------------------------------------
@@ -928,18 +874,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             )
             self.assertEqual(resized_ontap.get("state"), "online")
 
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared during disabled resize"
-                    % igroup_name,
-                )
+        self._assert_igroup_baseline_unchanged("during resize of the disabled pool")
 
 
     # ------------------------------------------------------------------
@@ -1059,18 +994,7 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             )
             self.assertEqual(resized_ontap.get("state"), "online")
 
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared during maintenance resize"
-                    % igroup_name,
-                )
+        self._assert_igroup_baseline_unchanged("during resize in maintenance")
 
 
     # ------------------------------------------------------------------
@@ -1133,17 +1057,9 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "ONTAP FlexVol '%s' still exists after pool deletion" % pool_name
         )
 
-        # ONTAP: igroups for each cluster host must be deleted
-        for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None) or getattr(host, "StorageUrl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            self.assertIsNone(
-                igroup,
-                "ONTAP igroup '%s' still exists after pool deletion" % igroup_name
-            )
+        # ONTAP: host igroups are shared per host and SVM (cs_<hostUuid>_<svm>)
+        # and live only while a LUN is mapped to them.
+        self._assert_host_igroups_follow_lun_maps("after pool deletion")
 
 
     # ------------------------------------------------------------------
@@ -1248,6 +1164,23 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         pool = self.__class__.pool
         vol = self.__class__.volume
 
+        # The VM's ROOT disk is placed by CloudStack on any enabled pool that
+        # matches the offering's storage tag.  A pool left behind by an aborted
+        # run would capture it and fail the placement checks later with an
+        # unhelpful id mismatch, so name the problem here.
+        competing = [
+            sp.name for sp in (list_storage_pools(self.apiClient) or [])
+            if sp.id != pool.id and sp.type == pool.type
+            and getattr(sp, "tags", None) == getattr(pool, "tags", None)
+            and sp.state == "Up"
+        ]
+        self.assertFalse(
+            competing,
+            "Other enabled pool(s) with tag '%s' exist: %s. The VM ROOT disk "
+            "could be placed on them instead of '%s'. Delete the leftovers "
+            "from an aborted run and re-run."
+            % (getattr(pool, "tags", None), competing, pool.name))
+
         log_progress(
             logger, "info",
             "Deploying VM for iSCSI pool '%s' (template=%s, offering=%s)",
@@ -1320,18 +1253,10 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "No LUN present in FlexVol '%s' after attach" % pool.name
         )
 
-        for host in self.cluster_hosts:
-            iqn = (
-                getattr(host, "storageurl", None)
-                or getattr(host, "StorageUrl", None)
-            )
-            if iqn and iqn.startswith("iqn."):
-                igroup_name = _igroup_name(self.svm_name, host.name)
-                self.assertIsNotNone(
-                    self.ontap.get_igroup(self.svm_name, igroup_name),
-                    "ONTAP igroup '%s' disappeared after volume attach"
-                    % igroup_name,
-                )
+        # KVM host / libvirt + ONTAP igroup of the host the VM runs on.  The
+        # plugin creates a host's igroup on its first LUN mapping, so this is
+        # the point where it must exist (with the host IQN) and hold the LUNs.
+        self._assert_vm_disks_on_host(vm.id, pool, "VM with attached volume")
 
 
     # ------------------------------------------------------------------
@@ -1488,6 +1413,15 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
         self.assertEqual(grown_vol.get("state"), "online")
         self._assert_vm_running_with_volume(vm.id, vol.id, "grow-with-vm")
+        # KVM host: the resize of the pool must not disturb the guest -
+        # same disks, device present, and libvirt still reports the LUN's size.
+        host_info = self._assert_vm_disks_on_host(vm.id, pool, "grow-with-vm")
+        if host_info:
+            self.assertEqual(
+                self._get_vm_data_disk_capacity(host_info["instance"]),
+                int(self._get_cs_volume(vol.id).size),
+                "libvirt capacity of the data disk changed after the pool "
+                "resize (grow-with-vm)")
         self.assertTrue(
             self.ontap.list_luns_in_volume(self.svm_name, pool.name),
             "LUN disappeared from FlexVol '%s' during the in-use resize"
@@ -1515,6 +1449,15 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         )
         self.assertEqual(shrunk_vol.get("state"), "online")
         self._assert_vm_running_with_volume(vm.id, vol.id, "shrink-with-vm")
+        # KVM host: the resize of the pool must not disturb the guest -
+        # same disks, device present, and libvirt still reports the LUN's size.
+        host_info = self._assert_vm_disks_on_host(vm.id, pool, "shrink-with-vm")
+        if host_info:
+            self.assertEqual(
+                self._get_vm_data_disk_capacity(host_info["instance"]),
+                int(self._get_cs_volume(vol.id).size),
+                "libvirt capacity of the data disk changed after the pool "
+                "resize (shrink-with-vm)")
         self.assertTrue(
             self.ontap.list_luns_in_volume(self.svm_name, pool.name),
             "LUN disappeared from FlexVol '%s' during the in-use resize"
@@ -1536,15 +1479,31 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
           - Pool transitions to Maintenance
           - Pool is removed from CloudStack after force deletion
           - ONTAP: FlexVol deleted
-          - ONTAP: igroups for all cluster hosts deleted
+          - ONTAP: the host igroup is removed once its last LUN is unmapped
         """
         self.assertIsNotNone(self.__class__.pool, "Pool absent - test_15 must pass first")
         self.assertIsNotNone(self.__class__.volume, "Volume absent - test_15 must pass first")
 
         # A volume still attached to a VM cannot be deleted, so unwind test_16
         # first.  Both steps are no-ops when test_16 skipped.
+        # KVM host: remember the domain and LUN devices while the VM runs
+        host_info = None
+        if self.__class__.vm is not None:
+            host_info = self._assert_vm_disks_on_host(
+                self.__class__.vm.id, self.__class__.pool,
+                "before detach/destroy")
+
         self._detach_volume_if_attached(self.__class__.volume.id)
         self.__class__._destroy_vm_if_present()
+
+        # KVM host: the domain is gone and every LUN device is released
+        if host_info:
+            self._assert_domain_absent(
+                host_info["host_ip"], host_info["instance"],
+                "after VM destroy")
+            self._assert_devices_gone(
+                host_info["host_ip"], list(host_info["wwids"].values()),
+                "after VM destroy")
 
         pool = self.__class__.pool
         pool_name = pool.name
@@ -1556,13 +1515,27 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
         self.apiClient.deleteVolume(cmd)
         self.__class__.volume = None
 
-        # ONTAP: LUN must be gone from the FlexVol
-        luns = self.ontap.list_luns_in_volume(self.svm_name, pool_name)
-        self.assertEqual(
-            len(luns), 0,
-            "Expected 0 LUNs in FlexVol '%s' after volume deletion, found %d"
-            % (pool_name, len(luns))
+        # ONTAP: this volume's LUN must be gone from the FlexVol.  The FlexVol
+        # also holds LUNs that are not this test's (the template cache LUN and
+        # the guest network router's ROOT disk), so "no LUNs at all" is not the
+        # right check; look for this volume's own LUN.
+        data_lun = "/vol/%s/%s" % (pool_name, vol.name)
+        deadline = time.time() + 60
+        while True:
+            lun_names = [
+                l.get("name", "")
+                for l in self.ontap.list_luns_in_volume(self.svm_name, pool_name)
+            ]
+            if data_lun not in lun_names or time.time() >= deadline:
+                break
+            time.sleep(3)
+        self.assertNotIn(
+            data_lun, lun_names,
+            "LUN '%s' still exists in FlexVol '%s' after volume deletion "
+            "(other LUNs present: %s)" % (data_lun, pool_name, lun_names)
         )
+        logger.info("LUNs left in FlexVol '%s' after volume deletion: %s",
+                    pool_name, lun_names)
 
         # ONTAP: FlexVol must still be online (pool not yet deleted)
         ontap_vol = self.ontap.get_volume(pool_name)
@@ -1598,17 +1571,9 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
             "ONTAP FlexVol '%s' still exists after pool deletion" % pool_name
         )
 
-        # ONTAP: igroups for each cluster host must be deleted
-        for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None) or getattr(host, "StorageUrl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
-            igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
-            self.assertIsNone(
-                igroup,
-                "ONTAP igroup '%s' still exists after pool deletion" % igroup_name
-            )
+        # ONTAP: the host igroup is removed when its last LUN is unmapped, and
+        # kept while other LUNs (other pools, system VM disks) are still mapped.
+        self._assert_host_igroups_follow_lun_maps("after volume and pool deletion")
 
     # ------------------------------------------------------------------
     # Step 20 - delete pool with flexvol predeleted

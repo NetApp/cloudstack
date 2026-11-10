@@ -617,8 +617,34 @@ class OntapTemplateCacheNegativeWorkflow(OntapTemplateCacheBase):
             )
             self._assert_cache_on_ontap(pool, spool)
 
+            # KVM host / libvirt: the seed VM runs from a by-id block disk
+            # (the ROOT LUN, a clone of the cache LUN) with the right XML,
+            # igroup and session.
+            seed_host = self._assert_vm_disks_on_host(
+                vm1.id, pool, "seed VM")
+            # ONTAP: the cache LUN is only mapped while the template is copied
+            # into it; once the VM runs it must not stay mapped to any host.
+            cache_lun = "/vol/%s/cs_tmpl_%s" % (
+                pool.name, self.__class__.template_db_id)
+            stray_maps = [
+                m for m in self.ontap.list_lun_maps_for_volume(
+                    self.svm_name, pool.name)
+                if m.get("lun", {}).get("name") == cache_lun]
+            self.assertEqual(
+                stray_maps, [],
+                "Template cache LUN %s is still mapped after the seed VM "
+                "started: %s" % (cache_lun, stray_maps))
+
             self._destroy_vm_static(vm1.id)
             vm1 = None
+            # KVM host: the seed VM's domain and ROOT device are released
+            if seed_host:
+                self._assert_domain_absent(
+                    seed_host["host_ip"], seed_host["instance"],
+                    "seed VM destroyed")
+                self._assert_devices_gone(
+                    seed_host["host_ip"], list(seed_host["wwids"].values()),
+                    "seed VM destroyed")
             # Allow clone/ROOT LUN cleanup so the cache LUN is no longer a
             # FlexClone parent before out-of-band delete.
             time.sleep(30)
