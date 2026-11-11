@@ -528,6 +528,10 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
         }
     }
 
+    private ImageFormat getImageFormatForPoolType(StoragePoolType poolType) {
+        return poolType == StoragePoolType.OntapiSCSI ? ImageFormat.RAW : ImageFormat.QCOW2;
+    }
+
     private VolumeVO duplicateVolumeOnAnotherStorage(Volume volume, StoragePoolVO storagePoolVO) {
         VolumeVO newVol = new VolumeVO(volume);
         newVol.setInstanceId(null);
@@ -538,6 +542,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
         newVol.setPodId(storagePoolVO.getPodId());
         newVol.setPoolId(storagePoolVO.getId());
         newVol.setPoolType(storagePoolVO.getPoolType());
+        // The row is copied from the source, so it carries the source format. The destination
+        // object is created from this row, so it must carry the destination pool's format.
+        newVol.setFormat(getImageFormatForPoolType(storagePoolVO.getPoolType()));
         newVol.setLastPoolId(volume.getPoolId());
         newVol.setLastId(volume.getId());
         return _volumeDao.persist(newVol);
@@ -559,7 +566,7 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             StoragePoolVO srcPoolVO = _storagePoolDao.findById(srcVolumeInfo.getPoolId());
             StoragePoolVO destPoolVO = _storagePoolDao.findById(destVolumeInfo.getPoolId());
             VolumeVO volumeVO = _volumeDao.findById(destVolumeInfo.getId());
-            volumeVO.setFormat(destPoolVO != null && destPoolVO.getPoolType() == StoragePoolType.OntapiSCSI ? ImageFormat.RAW : ImageFormat.QCOW2);
+            volumeVO.setFormat(getImageFormatForPoolType(destPoolVO != null ? destPoolVO.getPoolType() : null));
             volumeVO.setLastId(srcVolumeInfo.getId());
             _volumeDao.update(volumeVO.getId(), volumeVO);
 

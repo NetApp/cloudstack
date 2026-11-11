@@ -1058,7 +1058,7 @@ class UnifiedSANStrategyTest {
         response.setRecords(List.of(copiedLun));
         when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
         markLunCopyComplete(copiedLun);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         CloudStackVolume result = copyDestLun(10);
 
@@ -1069,7 +1069,7 @@ class UnifiedSANStrategyTest {
         assertEquals("source-lun-uuid", requestCaptor.getValue().getCopy().getSource().getUuid());
         assertEquals("/vol/dest/lun", requestCaptor.getValue().getName());
         assertEquals("svm1", requestCaptor.getValue().getSvm().getName());
-        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+        verify(sanFeignClient).getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any());
     }
 
     @Test
@@ -1087,7 +1087,7 @@ class UnifiedSANStrategyTest {
                 .thenThrow(sourceBusyException)
                 .thenReturn(response);
         markLunCopyComplete(copiedLun);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         CloudStackVolume result = copyDestLun(3);
 
@@ -1116,7 +1116,7 @@ class UnifiedSANStrategyTest {
                 OntapStorageConstants.SVM_DOT_NAME, "svm1",
                 OntapStorageConstants.NAME, "/vol/dest/lun"))).thenReturn(existingCopyResponse);
         markLunCopyComplete(copiedLun);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         CloudStackVolume result = copyDestLun(3);
 
@@ -1125,7 +1125,7 @@ class UnifiedSANStrategyTest {
         verify(sanFeignClient).getLunResponse(authHeader, Map.of(
                 OntapStorageConstants.SVM_DOT_NAME, "svm1",
                 OntapStorageConstants.NAME, "/vol/dest/lun"));
-        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+        verify(sanFeignClient).getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any());
     }
 
     @Test
@@ -1151,7 +1151,7 @@ class UnifiedSANStrategyTest {
                 OntapStorageConstants.SVM_DOT_NAME, "svm1",
                 OntapStorageConstants.NAME, "/vol/dest/lun"))).thenReturn(absentDestinationResponse);
         markLunCopyComplete(copiedLun);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         CloudStackVolume result = copyDestLun(3);
 
@@ -1160,7 +1160,7 @@ class UnifiedSANStrategyTest {
         verify(sanFeignClient).getLunResponse(authHeader, Map.of(
                 OntapStorageConstants.SVM_DOT_NAME, "svm1",
                 OntapStorageConstants.NAME, "/vol/dest/lun"));
-        verify(sanFeignClient).getLunCopyStatus(authHeader, "copied-lun-uuid");
+        verify(sanFeignClient).getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any());
     }
 
     @Test
@@ -1193,7 +1193,7 @@ class UnifiedSANStrategyTest {
         activeLun.setCopy(activeCopy);
 
         when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(activeLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(activeLun);
 
         assertThrows(CloudRuntimeException.class, () -> copyDestLun(0));
 
@@ -1209,7 +1209,7 @@ class UnifiedSANStrategyTest {
         response.setRecords(List.of(copiedLun));
 
         when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         assertThrows(CloudRuntimeException.class, () -> copyDestLun(0));
 
@@ -1236,7 +1236,7 @@ class UnifiedSANStrategyTest {
         response.setRecords(List.of(copiedLun));
         when(sanFeignClient.createLun(eq(authHeader), eq(true), any(Lun.class))).thenReturn(response);
         markLunCopyComplete(copiedLun);
-        when(sanFeignClient.getLunCopyStatus(authHeader, "copied-lun-uuid")).thenReturn(copiedLun);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("copied-lun-uuid"), any())).thenReturn(copiedLun);
 
         CloudStackVolume result = unifiedSANStrategy.copyCloudStackVolume(srcVolumeInfo, destVolumeInfo, destStoragePool,
                 Map.of(OntapStorageConstants.SVM_NAME, "svm1"), 10);

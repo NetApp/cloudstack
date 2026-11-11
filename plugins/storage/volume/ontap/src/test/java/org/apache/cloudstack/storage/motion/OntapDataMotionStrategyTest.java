@@ -297,6 +297,12 @@ public class OntapDataMotionStrategyTest {
         Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class));
     }
 
+    private VolumeVO captureDuplicatedVolume() {
+        ArgumentCaptor<VolumeVO> captor = ArgumentCaptor.forClass(VolumeVO.class);
+        Mockito.verify(volumeDao).persist(captor.capture());
+        return captor.getValue();
+    }
+
     @Test
     public void liveMigrationToOntapNfsUsesFileDiskAndUuidPath() throws Exception {
         LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
@@ -312,6 +318,7 @@ public class OntapDataMotionStrategyTest {
         assertEquals("dest-connected", diskInfo.getSourceText());
         Mockito.verify(context.destVolumeVO).setPath("dest-uuid");
         Mockito.verify(context.destVolumeVO).setFormat(Storage.ImageFormat.QCOW2);
+        assertEquals(Storage.ImageFormat.QCOW2, captureDuplicatedVolume().getFormat());
         assertSame(context.destVolumeTO, context.vmDisk.getData());
         Mockito.verify(volumeService).copyPoliciesBetweenVolumesAndDestroySourceVolumeAfterMigration(Mockito.any(), Mockito.isNull(),
                 Mockito.eq(context.srcVolume), Mockito.eq(context.destVolume), Mockito.eq(false));
@@ -335,6 +342,7 @@ public class OntapDataMotionStrategyTest {
         assertSame(diskInfo, migrateCommand.getMigrateStorage().get("src-connected"));
         Mockito.verify(context.destVolumeVO).setPath("/iqn/dest/1");
         Mockito.verify(context.destVolumeVO).setFormat(Storage.ImageFormat.RAW);
+        assertEquals(Storage.ImageFormat.RAW, captureDuplicatedVolume().getFormat());
         Mockito.verify(volumeService).grantAccess(context.srcVolume, context.srcHost, context.srcVolume.getDataStore());
         ArgumentCaptor<ModifyTargetsCommand> targetsCaptor = ArgumentCaptor.forClass(ModifyTargetsCommand.class);
         Mockito.verify(agentManager, Mockito.atLeastOnce()).easySend(Mockito.eq(SRC_HOST_ID), targetsCaptor.capture());
