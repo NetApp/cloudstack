@@ -104,7 +104,6 @@ Running:
 import base64
 import logging
 import random
-import re
 import threading
 import time
 import unittest
@@ -792,11 +791,17 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
     def _stop_vm(self, vm_id):
         if (self._vm_state(vm_id) or "").lower() == "stopped":
             return
+        # Remember where the VM runs so the host can be checked after the stop.
+        placement = self._vm_placement(vm_id)
         cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
         cmd.id = vm_id
         cmd.forced = True
         self.apiClient.stopVirtualMachine(cmd)
         self._poll_vm_state(vm_id, "Stopped", timeout=600)
+        # Host: the libvirt domain is gone and libvirtd/agent are still up.
+        if placement["host_ip"] and placement["instance"]:
+            self._assert_domain_absent(
+                placement["host_ip"], placement["instance"], "after stop")
 
     def _start_vm(self, vm_id):
         if (self._vm_state(vm_id) or "").lower() == "running":
@@ -805,6 +810,9 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         cmd.id = vm_id
         self.apiClient.startVirtualMachine(cmd)
         self._poll_vm_state(vm_id, "Running", timeout=900)
+        # Host: domain running, XML and by-id devices match every volume.
+        self._assert_vm_disks_on_host(
+            vm_id, self.__class__.pool, "after start")
 
     def _root_volume(self, vm_id):
         cmd = listVolumesAPI.listVolumesCmd()
@@ -1057,6 +1065,10 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         spool = self._wait_for_ready_spool_ref(self.__class__.pool_db_id)
         self._assert_cache_on_ontap(pool, spool)
 
+        # KVM host: libvirt domain running, XML (block/raw/virtio, by-id
+        # source of the ROOT LUN), block device, iSCSI session, igroup/LUN-map
+        self._assert_vm_disks_on_host(vm.id, pool, "deploy VM")
+
         # Data volume LUN-map must not exist yet (volume not yet attached)
         lun_maps = self._lun_maps()
         self.assertEqual(
@@ -1107,6 +1119,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             "Expected one additional non-cache LUN for the VM-2 ROOT clone",
         )
 
+        # KVM host: VM-2 has its own domain/ROOT device, and VM-1 is untouched
+        self._assert_vm_disks_on_host(vm2.id, pool, "deploy VM-2")
+        self._assert_vm_disks_on_host(
+            self.__class__.vm.id, pool, "VM-1 unaffected by VM-2 deploy")
+
     # ------------------------------------------------------------------
     # Step 03b — Expunge the second VM — template cache LUN survives
     # ------------------------------------------------------------------
@@ -1126,6 +1143,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                              "Second VM absent — test_03a must pass first")
         pool = self.__class__.pool
 
+        # Remember where VM-2 and its LUNs live so the host can be checked
+        # once the VM is gone.
+        vm2_host = self._assert_vm_disks_on_host(
+            self.__class__.vm2.id, pool, "VM-2 before expunge")
+
         self._stop_and_expunge_vm(self.__class__.vm2.id)
         self.__class__.vm2 = None
 
@@ -1133,6 +1155,16 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             pool, self.__class__.vm2_baseline_luns)
         spool = self._assert_single_ready_spool_ref(self.__class__.pool_db_id)
         self._assert_cache_on_ontap(pool, spool)
+
+        # KVM host: VM-2's domain and its ROOT device are gone; VM-1 is fine
+        if vm2_host:
+            self._assert_domain_absent(
+                vm2_host["host_ip"], vm2_host["instance"], "VM-2 expunged")
+            self._assert_devices_gone(
+                vm2_host["host_ip"], list(vm2_host["wwids"].values()),
+                "VM-2 expunged")
+        self._assert_vm_disks_on_host(
+            self.__class__.vm.id, pool, "VM-1 unaffected by VM-2 expunge")
 
     # ------------------------------------------------------------------
     # Step 04 — Attach iSCSI volume to running VM  (TDS SN 27 iSCSI)
@@ -1186,6 +1218,19 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             self._data_lun_size(), initial_size,
             "Initial ONTAP LUN size should match the CloudStack volume size")
 
+        # KVM host / libvirt: the VM now has ROOT + data disk, both block/raw/
+        # virtio disks sourced from the LUN by-id paths; the data LUN's WWID
+        # (from the CloudStack path) matches the ONTAP serial; it is mapped to
+        # this host's igroup; the device exists; libvirt sees the full size.
+        host_info = self._assert_vm_disks_on_host(
+            self.__class__.vm.id, self.__class__.pool, "after attach")
+        if host_info:
+            self.assertEqual(
+                self._get_vm_data_disk_capacity(host_info["instance"]),
+                initial_size,
+                "libvirt capacity of the attached data disk should equal the "
+                "CloudStack volume size")
+
 
     # ------------------------------------------------------------------
     # Step 05 — Stop VM — LUN-maps should be removed
@@ -1204,6 +1249,10 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.vm is None:
             self.skipTest("VM not deployed — test_03 was skipped")
 
+        # KVM host: record where the VM runs and which LUN devices it holds
+        host_info = self._assert_vm_disks_on_host(
+            self.__class__.vm.id, self.__class__.pool, "before stop")
+
         cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
         cmd.id = self.__class__.vm.id
         self.apiClient.stopVirtualMachine(cmd)
@@ -1214,6 +1263,15 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             result.state, "Stopped",
             "VM should be 'Stopped', got '%s'" % result.state
         )
+
+        # KVM host: the libvirt domain is gone and the LUN block devices are
+        # released (the agent disconnects them when the VM stops).
+        if host_info:
+            self._assert_domain_absent(
+                host_info["host_ip"], host_info["instance"], "after VM stop")
+            self._assert_devices_gone(
+                host_info["host_ip"], list(host_info["wwids"].values()),
+                "after VM stop")
 
         # ONTAP: LUN-map must be removed once VM is stopped
         lun_maps = self._lun_maps()
@@ -1353,6 +1411,12 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             len(lun_maps), 0,
             "Expected ≥1 LUN-map after VM start (re-map), found 0"
         )
+
+        # KVM host / libvirt: the domain runs again with both disks, the same
+        # by-id sources (WWID is stable across stop/start), devices are back,
+        # and the host has its iSCSI session to the SVM.
+        self._assert_vm_disks_on_host(
+            self.__class__.vm.id, self.__class__.pool, "after VM start")
 
     # ------------------------------------------------------------------
     # Step 09 — Guest SSH access for snapshot checks
@@ -1782,6 +1846,10 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.assertIsNotNone(self.__class__.volume,
                              "Volume absent — test_02 must pass first")
 
+        # KVM host: record the data LUN's WWID while it is still attached
+        host_info = self._assert_vm_disks_on_host(
+            self.__class__.vm.id, self.__class__.pool, "before detach")
+
         cmd = detachVolumeAPI.detachVolumeCmd()
         cmd.id = self.__class__.volume.id
 
@@ -1826,6 +1894,18 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             len(luns) > 0,
             "Data volume LUN should still exist in ONTAP FlexVol after detach"
         )
+
+        # KVM host / libvirt: the data disk is no longer in the running
+        # domain's XML and its block device is gone, while the VM keeps
+        # running on its ROOT disk (still a by-id block disk with a session).
+        if host_info:
+            self._assert_disk_detached_on_host(
+                host_info["host_ip"], host_info["instance"],
+                host_info["wwids"][self.__class__.volume.id],
+                "after detach")
+            self._assert_vm_disks_on_host(
+                self.__class__.vm.id, self.__class__.pool,
+                "after detach (ROOT only)")
 
     # ------------------------------------------------------------------
 
@@ -1913,6 +1993,12 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
             vms = self.apiClient.listVirtualMachines(
                 _list_vms_cmd(self.__class__.vm.id))
             current_state = vms[0].state if vms else "unknown"
+            # KVM host: record the domain and its LUN devices while the VM is
+            # still running, to prove they are released by the destroy.
+            host_info = None
+            if current_state.lower() == "running" and pool is not None:
+                host_info = self._assert_vm_disks_on_host(
+                    self.__class__.vm.id, pool, "before destroy")
             if current_state.lower() not in ("stopped", "destroyed"):
                 stop_cmd = stopVirtualMachineAPI.stopVirtualMachineCmd()
                 stop_cmd.id = self.__class__.vm.id
@@ -1931,6 +2017,16 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                 spool = self._assert_single_ready_spool_ref(
                     self.__class__.pool_db_id)
                 self._assert_cache_on_ontap(pool, spool)
+
+            # KVM host: the domain is gone, its LUN devices are released and
+            # libvirtd/agent are still healthy at the end of the suite.
+            if host_info:
+                self._assert_domain_absent(
+                    host_info["host_ip"], host_info["instance"],
+                    "after VM destroy")
+                self._assert_devices_gone(
+                    host_info["host_ip"], list(host_info["wwids"].values()),
+                    "after VM destroy")
 
         if vol is not None and pool is not None:
             pool_name = pool.name
@@ -1977,16 +2073,11 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                 % pool_name
             )
 
-            # ONTAP: per-host igroups must be deleted by the pool force-delete
+            # ONTAP: per-host igroups must be deleted by the pool force-delete.
+            # The driver names them cs_<hostUuid>_<svm> (OntapStorageUtils
+            # .getIgroupName); build the same name so this check can fail.
             for host in self.cluster_hosts:
-                iqn = getattr(host, "storageurl", None)
-                if not iqn or not iqn.startswith("iqn."):
-                    continue
-                short = host.name.split(".")[0]
-                igroup_name = "cs_%s_%s" % (
-                    self.svm_name,
-                    re.sub(r"[^a-zA-Z0-9_-]", "_", short),
-                )
+                igroup_name = self._igroup_name(host.id)
                 igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
                 self.assertIsNone(
                     igroup,

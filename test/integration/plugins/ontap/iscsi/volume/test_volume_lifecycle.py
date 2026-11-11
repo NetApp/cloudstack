@@ -51,7 +51,6 @@ provides a safety net for mid-run failures.
 import base64
 import logging
 import random
-import re
 import unittest
 
 from nose.plugins.attrib import attr
@@ -128,17 +127,6 @@ class TestData:
                 },
             },
         }
-
-
-# ---------------------------------------------------------------------------
-# iSCSI path helpers
-# ---------------------------------------------------------------------------
-
-def _igroup_name(svm_name, host_name):
-    """Mirror OntapStorageUtils.getIgroupName: cs_{svmName}_{sanitizedHostName}"""
-    short = host_name.split(".")[0]
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", short)
-    return "cs_%s_%s" % (svm_name, sanitized)
 
 
 # ---------------------------------------------------------------------------
@@ -404,12 +392,11 @@ class TestOntapISCSIVolumeLifecycle(OntapTestBase):
             "ONTAP FlexVol '%s' still exists after force deletion" % pool_name
         )
 
-        # ONTAP: igroups for each cluster host must be deleted
+        # ONTAP: igroups for each cluster host must be deleted.  The driver
+        # names them cs_<hostUuid>_<svm> (OntapStorageUtils.getIgroupName);
+        # use the same name so this check can actually fail.
         for host in self.cluster_hosts:
-            iqn = getattr(host, "storageurl", None) or getattr(host, "StorageUrl", None)
-            if not iqn or not iqn.startswith("iqn."):
-                continue
-            igroup_name = _igroup_name(self.svm_name, host.name)
+            igroup_name = self._igroup_name(host.id)
             igroup = self.ontap.get_igroup(self.svm_name, igroup_name)
             self.assertIsNone(
                 igroup,
