@@ -204,7 +204,7 @@ public class UnifiedNASStrategyTest {
         when(volumeObject.getId()).thenReturn(100L);
         when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
         VolumeObjectTO volumeObjectTO = new VolumeObjectTO();
-        volumeObjectTO.setFormat(Storage.ImageFormat.RAW);
+        volumeObjectTO.setFormat(Storage.ImageFormat.QCOW2);
         when(volumeObject.getTO()).thenReturn(volumeObjectTO);
         when(volumeDao.findById(100L)).thenReturn(volumeVO);
         when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
@@ -221,12 +221,14 @@ public class UnifiedNASStrategyTest {
         ArgumentCaptor<CreateObjectCommand> cmdCaptor = ArgumentCaptor.forClass(CreateObjectCommand.class);
         verify(endPoint).sendMessage(cmdCaptor.capture());
         VolumeObjectTO sentTO = (VolumeObjectTO) cmdCaptor.getValue().getData();
+        // The strategy sends the TO as the driver prepared it. It no longer overrides the format.
+        assertSame(volumeObjectTO, sentTO);
         assertEquals(Storage.ImageFormat.QCOW2, sentTO.getFormat());
     }
 
     @Test
     public void testCopyCloudStackVolume_NotSupported() {
-        assertThrows(CloudRuntimeException.class, () -> strategy.copyCloudStackVolume(mock(VolumeInfo.class),
+        assertThrows(UnsupportedOperationException.class, () -> strategy.copyCloudStackVolume(mock(VolumeInfo.class),
                 mock(VolumeInfo.class), mock(StoragePoolVO.class), Map.of(), 0));
     }
 

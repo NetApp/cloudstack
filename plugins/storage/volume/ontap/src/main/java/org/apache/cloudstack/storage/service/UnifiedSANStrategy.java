@@ -63,6 +63,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     private static final Logger logger = LogManager.getLogger(UnifiedSANStrategy.class);
     private static final int LUN_COPY_POLL_INTERVAL_MS = 2000;
+    private static final Map<String, Object> LUN_COPY_STATUS_QUERY = Map.of("fields", "copy,name,uuid");
     private static final String LUN_COPY_ALREADY_EXISTS_ERROR_CODE = "7018919";
     private static final String LUN_COPY_SOURCE_BUSY_ERROR_CODE = "5375060";
     @Inject
@@ -440,7 +441,7 @@ public class UnifiedSANStrategy extends SANStrategy {
 
     protected void waitForLunCopy(String authHeader, String lunUuid, long deadline) {
         while (true) {
-            Lun lun = sanFeignClient.getLunCopyStatus(authHeader, lunUuid);
+            Lun lun = sanFeignClient.getLunByUUID(authHeader, lunUuid, LUN_COPY_STATUS_QUERY);
             if (lun == null) {
                 throw new CloudRuntimeException("Unable to retrieve ONTAP LUN copy status for Lun [" + lunUuid + "]");
             }

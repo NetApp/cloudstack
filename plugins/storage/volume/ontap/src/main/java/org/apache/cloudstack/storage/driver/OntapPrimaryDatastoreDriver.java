@@ -169,6 +169,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
     public void createAsync(DataStore dataStore, DataObject dataObject, AsyncCompletionCallback<CreateCmdResult> callback) {
         CreateCmdResult createCmdResult = null;
         String errMsg;
+        Exception createFailure = null;
 
         if (dataObject == null) {
             throw new InvalidParameterValueException("dataObject should not be null");
@@ -239,6 +240,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 throw new CloudRuntimeException(errMsg);
             }
         } catch (Exception e) {
+            createFailure = e;
             errMsg = e.getMessage();
             logger.error("createAsync: Failed for dataObject name [{}]: {}", dataObject.getName(), errMsg);
             createCmdResult = new CreateCmdResult(null, new Answer(null, false, errMsg));
@@ -255,9 +257,13 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             }
         }
         if (callback == null && (createCmdResult == null || !createCmdResult.isSuccess())) {
-            String message = createCmdResult != null && createCmdResult.getResult() != null
-                    ? createCmdResult.getResult() : "createAsync failed";
-            throw new CloudRuntimeException(message);
+            // Built from what failed, not from the result object, so it does not depend on how
+            // the catch block above populated it.
+            String message = "createAsync failed for [" + dataObject.getName() + "] on pool [" + dataStore.getName() + "]";
+            if (createFailure != null) {
+                message += ": " + createFailure.getMessage();
+            }
+            throw new CloudRuntimeException(message, createFailure);
         }
     }
 

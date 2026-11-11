@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ import feign.jackson.JacksonDecoder;
 class SANFeignClientTest {
 
     @Test
-    void getLunCopyStatusUsesSingleFieldsQueryParameter() {
+    void getLunByUUIDSendsFieldsQueryParameter() {
         AtomicReference<Request> capturedRequest = new AtomicReference<>();
         SANFeignClient client = Feign.builder()
                 .client((request, options) -> {
@@ -50,7 +51,7 @@ class SANFeignClientTest {
                 .decoder(new JacksonDecoder())
                 .target(SANFeignClient.class, "http://localhost");
 
-        client.getLunCopyStatus("Basic credentials", "lun-uuid");
+        client.getLunByUUID("Basic credentials", "lun-uuid", Map.of("fields", "copy,name,uuid"));
 
         assertEquals("http://localhost/api/storage/luns/lun-uuid?fields=copy%2Cname%2Cuuid",
                 capturedRequest.get().url());

@@ -379,7 +379,8 @@ class OntapPrimaryDatastoreDriverTest {
 
             CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
                     () -> driver.createAsync(dataStore, volumeInfo, null));
-            assertEquals("ontap create failed", thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("ontap create failed"));
+            assertTrue(thrown.getMessage().startsWith("createAsync failed for ["));
         }
     }
 
