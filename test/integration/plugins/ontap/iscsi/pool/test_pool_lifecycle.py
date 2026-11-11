@@ -709,10 +709,19 @@ class TestOntapISCSIPoolLifecycle(OntapTestBase):
 
         listed = list_storage_pools(self.apiClient, id=pool.id)
         self.assertTrue(listed, "Pool missing before over-max resize")
+        # The precondition is the FlexVol size on ONTAP, which is what the
+        # over-max request is judged against and is the same for both
+        # protocols.  CloudStack's own capacity figure is not used: iSCSI
+        # reports the stored value while NFS reports the host-measured usable
+        # space (95% of the FlexVol with the default snapshot reserve) and
+        # refreshes it periodically, so it can legitimately differ from 300 TiB.
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol, "ONTAP FlexVol '%s' not found" % pool.name)
         self.assertEqual(
-            int(getattr(listed[0], "capacitybytes", 0) or 0),
+            int(ontap_vol.get("space", {}).get("size", 0) or 0),
             TestData.ONTAP_MAX_VOLUME_SIZE,
-            "Pool should sit at the 300 TiB maximum - test_05 must pass first"
+            "FlexVol should sit at the 300 TiB maximum - test_05 must pass first"
         )
 
         # Overshoot by only 1 GiB: at 0.0003% of the limit this probes the
