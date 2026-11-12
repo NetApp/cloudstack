@@ -546,6 +546,29 @@ cloudstack-ontap-presubmit
 
 Without protection it is informational. Verify pending/failed results block merge and each new SHA needs a new Check.
 
+How the Check behaves once it is required:
+
+| Build result | Check conclusion | Merge |
+| --- | --- | --- |
+| `SUCCESS` | `success` | allowed |
+| `FAILURE`, `UNSTABLE` | `failure` | blocked |
+| `ABORTED`, superseded or timed out | `cancelled` | blocked until a new run passes |
+| not built (draft, fork, closed, wrong base) | no Check, or `cancelled` if one was started | blocked until a run passes |
+
+- The Check is created `in_progress` at the start of the run and completed after the report is archived. The
+  completed Check names the failed stage and links the Jenkins build and the HTML report.
+- If creating the Check failed at the start, the final step publishes an already completed Check instead, so the
+  result still reaches the pull request. If that also fails, the job description says
+  `GitHub Check result not published`, and the Check stays missing or in progress, which blocks the merge.
+  Fix the cause (run `SOURCE_MODE=diagnose`), then push a commit or rebuild the PR job.
+- Completion is retried three times. A Jenkins crash or restart mid-run still leaves the Check in progress. Rebuild
+  the PR job, or push a commit, to replace it. A GitHub **Re-run** button does nothing, because Jenkins receives no
+  webhooks.
+- In the branch rule, select the Check produced by the presubmit GitHub App as its source, not **Any source**.
+- Do not require the `continuous-integration/jenkins/pr-head` status that GitHub Branch Source can also post. The
+  Check above is the only gate.
+- A pull request from a fork never gets a Check, so it cannot merge while the Check is required.
+
 ## 13. Manual branch job and exact SHA
 
 Create a separate Pipeline-from-SCM job:

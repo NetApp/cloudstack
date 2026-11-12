@@ -29,7 +29,11 @@
 #   process list.
 #   GITHUB_HEAD_SHA — create, commit-email and diagnose. BUILD_URL — create and
 #   complete. GITHUB_CHECK_RUN_ID, GITHUB_CHECK_CONCLUSION — complete.
-#   Optional: PR_ID and BUILD_TAG label the check run.
+#   Optional: PR_ID and BUILD_TAG label the check run. For create, setting
+#   GITHUB_CHECK_CONCLUSION publishes an already completed check run, which is
+#   how a result is still reported when the run could not be created at the
+#   start. GITHUB_CHECK_FAILED_STAGE and GITHUB_CHECK_REPORT_URL add the failed
+#   stage and the report link to the check's summary.
 #   Called by the Jenkinsfile. Does not call other private-cicd scripts.
 
 set -euo pipefail
@@ -129,6 +133,65 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 }
 
+# Builds the check-run payload for the "create" and "complete" subcommands from
+# the environment. GITHUB_CHECK_CONCLUSION makes it a completed run.
+write_payload() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import os
+import sys
+
+kind = sys.argv[2]
+env = os.environ.get
+conclusion = env("GITHUB_CHECK_CONCLUSION", "")
+build_url = env("BUILD_URL", "")
+sha = env("GITHUB_HEAD_SHA", "")
+pr = env("PR_ID", "unknown")
+
+payload = {
+    "name": "cloudstack-ontap-presubmit",
+    "details_url": build_url,
+}
+if kind == "create":
+    payload["head_sha"] = sha
+    payload["external_id"] = env("BUILD_TAG", "")
+
+if kind == "create" and not conclusion:
+    payload["status"] = "in_progress"
+    payload["output"] = {
+        "title": f"CloudStack ONTAP presubmit for PR-{pr}",
+        "summary": (
+            f"Jenkins build started for {sha[:12]}. "
+            f"Details: {build_url}"
+        ),
+    }
+else:
+    verdict = {
+        "success": "passed",
+        "failure": "failed",
+        "cancelled": "was cancelled",
+        "timed_out": "timed out",
+        "neutral": "finished with a neutral result",
+    }.get(conclusion, conclusion)
+    lines = [f"The CloudStack ONTAP presubmit {verdict}."]
+    if env("GITHUB_CHECK_FAILED_STAGE"):
+        lines.append(f"Failed stage: {env('GITHUB_CHECK_FAILED_STAGE')}")
+    if sha:
+        lines.append(f"Commit: {sha[:12]}")
+    lines.append(f"Jenkins build and logs: {build_url}")
+    if env("GITHUB_CHECK_REPORT_URL"):
+        lines.append(f"Test report: {env('GITHUB_CHECK_REPORT_URL')}")
+    payload["status"] = "completed"
+    payload["conclusion"] = conclusion
+    payload["output"] = {
+        "title": f"CloudStack ONTAP presubmit {verdict}",
+        "summary": "\n\n".join(lines),
+    }
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    json.dump(payload, output)
+PY
+}
+
 create_check() {
     require_env GITHUB_ACCESS_TOKEN GITHUB_REPOSITORY GITHUB_HEAD_SHA BUILD_URL
     local payload response
@@ -136,28 +199,7 @@ create_check() {
     response="$(mktemp)"
     trap "rm -f '$payload' '$response'" EXIT
 
-    python3 - "$payload" <<'PY'
-import json
-import os
-import sys
-
-payload = {
-    "name": "cloudstack-ontap-presubmit",
-    "head_sha": os.environ["GITHUB_HEAD_SHA"],
-    "status": "in_progress",
-    "details_url": os.environ["BUILD_URL"],
-    "external_id": os.environ.get("BUILD_TAG", ""),
-    "output": {
-        "title": f"CloudStack ONTAP presubmit for PR-{os.environ.get('PR_ID', 'unknown')}",
-        "summary": (
-            f"Jenkins build started for {os.environ['GITHUB_HEAD_SHA'][:12]}. "
-            f"Details: {os.environ['BUILD_URL']}"
-        ),
-    },
-}
-with open(sys.argv[1], "w", encoding="utf-8") as output:
-    json.dump(payload, output)
-PY
+    write_payload "$payload" create
 
     github_api POST "/repos/${GITHUB_REPOSITORY}/check-runs" "$payload" > "$response" || {
         local status=$?
@@ -178,41 +220,28 @@ PY
 complete_check() {
     require_env GITHUB_ACCESS_TOKEN GITHUB_REPOSITORY GITHUB_CHECK_RUN_ID \
         GITHUB_CHECK_CONCLUSION BUILD_URL
-    local payload response
+    local payload response attempt
     payload="$(mktemp)"
     response="$(mktemp)"
     trap "rm -f '$payload' '$response'" EXIT
 
-    python3 - "$payload" <<'PY'
-import json
-import os
-import sys
+    write_payload "$payload" complete
 
-conclusion = os.environ["GITHUB_CHECK_CONCLUSION"]
-payload = {
-    "name": "cloudstack-ontap-presubmit",
-    "status": "completed",
-    "conclusion": conclusion,
-    "details_url": os.environ["BUILD_URL"],
-    "output": {
-        "title": f"CloudStack ONTAP presubmit: {conclusion}",
-        "summary": (
-            f"Jenkins build completed with conclusion {conclusion}. "
-            f"Details and logs: {os.environ['BUILD_URL']}"
-        ),
-    },
-}
-with open(sys.argv[1], "w", encoding="utf-8") as output:
-    json.dump(payload, output)
-PY
-
-    if ! github_api PATCH \
-            "/repos/${GITHUB_REPOSITORY}/check-runs/${GITHUB_CHECK_RUN_ID}" \
-            "$payload" > "$response"; then
-        echo "GitHub refused to complete the check run:" >&2
+    # A check left in progress blocks a pull request that requires it, so a
+    # transient GitHub error gets a few retries before the failure is reported.
+    for attempt in 1 2 3; do
+        if github_api PATCH \
+                "/repos/${GITHUB_REPOSITORY}/check-runs/${GITHUB_CHECK_RUN_ID}" \
+                "$payload" > "$response"; then
+            return 0
+        fi
+        echo "GitHub refused to complete the check run (attempt ${attempt}/3):" >&2
         print_github_error "$response"
-        return 1
-    fi
+        if (( attempt < 3 )); then
+            sleep "${CHECK_RETRY_SECONDS:-10}"
+        fi
+    done
+    return 1
 }
 
 # Read-only probes plus one write probe, ordered so that the first failure

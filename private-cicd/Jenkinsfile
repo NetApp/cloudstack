@@ -545,10 +545,15 @@ void createGithubCheck() {
     }
 }
 
-void completeGithubCheck(String conclusion) {
-    if (!env.GITHUB_CHECK_RUN_ID?.trim() || !hasGithubAppCredential()) {
+// Publishes the final result. When the run could not be created at the start
+// (no run ID), a completed check run is created instead, so the result still
+// reaches the pull request. This matters once the check is required: a pull
+// request without a reported result stays blocked.
+void completeGithubCheck(String conclusion, String failedStage = '', String reportUrl = '') {
+    if (!hasGithubAppCredential() || sourceValue('SOURCE_MODE') != 'pull_request') {
         return
     }
+    def runId = env.GITHUB_CHECK_RUN_ID?.trim()
     try {
         withCredentials([
             usernamePassword(
@@ -558,13 +563,28 @@ void completeGithubCheck(String conclusion) {
             )
         ]) {
             withEnv(githubEnvironment() + [
-                "GITHUB_CHECK_CONCLUSION=${conclusion}"
+                "GITHUB_CHECK_CONCLUSION=${conclusion}",
+                "GITHUB_CHECK_FAILED_STAGE=${failedStage}",
+                "GITHUB_CHECK_REPORT_URL=${reportUrl}"
             ]) {
-                sh 'private-cicd/scripts/github-check-run.sh complete'
-                echo "Completed GitHub Check Run ${env.GITHUB_CHECK_RUN_ID} with conclusion ${conclusion}."
+                if (runId) {
+                    sh 'private-cicd/scripts/github-check-run.sh complete'
+                    echo "Completed GitHub Check Run ${runId} with conclusion ${conclusion}."
+                } else {
+                    def created = sh(
+                        script: 'private-cicd/scripts/github-check-run.sh create',
+                        returnStdout: true
+                    ).trim()
+                    echo "No GitHub Check Run existed; published a completed one (${created}) " +
+                        "with conclusion ${conclusion}."
+                }
             }
         }
     } catch (Exception e) {
+        currentBuild.description = (
+            (currentBuild.description ? currentBuild.description + ' | ' : '') +
+            'GitHub Check result not published'
+        )
         echo "GitHub Check completion failed; presubmit result is unchanged: ${e}"
     }
 }
@@ -1398,6 +1418,10 @@ void deployAndRunOntapIntegration() {
 void publishPresubmitResults() {
     if (isMultibranchPullRequest() && currentBuild.currentResult == 'NOT_BUILT') {
         echo "Multibranch PR-${env.CHANGE_ID} was not built."
+        // A check created before the build stopped must not stay in progress.
+        if (env.GITHUB_CHECK_RUN_ID?.trim()) {
+            completeGithubCheck('cancelled')
+        }
         return
     }
     if (sourceValue('SOURCE_MODE') == 'discover') {
@@ -1421,7 +1445,6 @@ void publishPresubmitResults() {
             "yyyy-MM-dd'T'HH:mm:ssXXX",
             TimeZone.getTimeZone('UTC')
         )
-        completeGithubCheck(conclusion)
         if (!env.PRESUBMIT_MAIL_TO?.trim()) {
             resolvePresubmitMailRecipient()
         }
@@ -1472,6 +1495,11 @@ void publishPresubmitResults() {
         }
         def failedStage = fileExists("${env.PRESUBMIT_RESULTS}/failed-stage.txt") ?
             readFile("${env.PRESUBMIT_RESULTS}/failed-stage.txt").trim() : ''
+        // Completed after the report and the archive exist, so the check can
+        // name the failed stage and link the report.
+        def reportUrl = fileExists("${env.PRESUBMIT_RESULTS}/report.html") ?
+            "${env.BUILD_URL}artifact/${env.PRESUBMIT_RESULTS}/report.html" : ''
+        completeGithubCheck(conclusion, failedStage, reportUrl)
         def finalSubject = failedStage ?
             "${presubmitSubjectBase()}: ${result} in ${failedStage}" :
             "${presubmitSubjectBase()}: ${result}"
