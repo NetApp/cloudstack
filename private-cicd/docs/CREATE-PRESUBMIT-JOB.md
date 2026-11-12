@@ -25,13 +25,38 @@ non-draft origin pull request into `main`. Remote Jenkinsfile Provider loads
 `private-cicd/Jenkinsfile` from the trusted CI branch. Match branches stays off.
 Draft pull requests get no job. Do not add a webhook.
 
-The trusted CI branch is `main`. Both the Remote Jenkinsfile Provider branch and
-`trustedCiBranch()` in the Jenkinsfile must name that branch. During the PR-119
-pilot the provider branch was `feature/CSTACKEX-340` and the folder include
-filter was `PR-119`. Do not switch the provider branch to `main` until PR-119 is
-merged: the previous `main` Jenkinsfile knows nothing about `CHANGE_ID` and
-defaults to `SOURCE_MODE=discover`. After the merge, change the provider branch
-to `main` and the filter to `PR-*`, and keep `feature/CSTACKEX-340` until then.
+The trusted CI branch is `main`. The Jenkinsfile and the CI scripts of every pull
+request build come from the trusted branch, never from the pull request, so a PR
+that changes `private-cicd/` is built with the unchanged trusted copy. Its
+changes apply only after they are merged. To try a Jenkinsfile or script change
+before the merge, run the manual job (`SOURCE_MODE=pull_request` or `branch`)
+against the feature branch.
+
+The CI scripts branch is chosen by `trustedCiBranch()` in the Jenkinsfile:
+
+1. the `PRESUBMIT_TRUSTED_CI_BRANCH` environment variable, if the job or folder
+   defines it;
+2. for the manual job, the branch of its own Pipeline SCM;
+3. otherwise `main`.
+
+A multibranch pull request build cannot read its branch from `scm`, because
+there `scm` is the pull request's own code. The value must therefore equal the
+Remote Jenkinsfile Provider branch. When the provider branch is not `main`, set
+`PRESUBMIT_TRUSTED_CI_BRANCH` to the same branch in the same step. A mismatch
+shows as `NOT_BUILT` with "pull request lookup failed", because the scripts
+are missing on the other branch.
+
+During the PR-119 pilot the provider branch was `feature/CSTACKEX-340`, the
+folder include filter was `PR-119`, and `PRESUBMIT_TRUSTED_CI_BRANCH` had to name
+that branch. Do not switch the provider branch to `main` until PR-119 is merged:
+the previous `main` Jenkinsfile knows nothing about `CHANGE_ID` and defaults to
+`SOURCE_MODE=discover`. After the merge, change the provider branch to `main`,
+remove `PRESUBMIT_TRUSTED_CI_BRANCH` and change the filter to `PR-*`. Keep
+`feature/CSTACKEX-340` until then.
+
+A pull request that is closed or merged is not built, even if someone selects
+Rebuild on an orphaned item: the build ends `NOT_BUILT` with "pull request is not
+open".
 
 The numbered sections below that create a single Pipeline job with a five-minute
 `SOURCE_MODE=discover` timer (11 to 16) are retired. Sections on plugins,

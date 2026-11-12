@@ -73,6 +73,7 @@ def assess(pull, pr_id, indexed_sha, change_target, expected_repository):
         "pr_head_sha": head.get("sha") or "",
         "pr_head_branch": head.get("ref") or "",
         "pr_base_branch": base.get("ref") or "",
+        "pr_state": (pull or {}).get("state") or "",
         "pr_draft": bool((pull or {}).get("draft")),
         "pr_title": (pull or {}).get("title") or "",
         "pr_url": (pull or {}).get("html_url") or "",
@@ -94,6 +95,9 @@ def assess(pull, pr_id, indexed_sha, change_target, expected_repository):
             f"base branch is '{decision['pr_base_branch']}' and change target "
             f"is '{change_target}'."
         )
+    elif decision["pr_state"] != "open":
+        decision["reason"] = (
+            f"pull request is not open (state: {decision['pr_state'] or 'unknown'}).")
     elif decision["pr_draft"]:
         decision["reason"] = "pull request is a draft."
     elif not decision["pr_head_sha"] or len(decision["pr_head_sha"]) != 40:

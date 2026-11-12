@@ -136,8 +136,13 @@ def html_document(title, body):
 FAILURE_HEADER = re.compile(r"^(ERROR|FAIL):\s*(.*)$")
 DESCRIBED_TEST = re.compile(
     r"^(.*?)\s*\.\.\.\s*=== TestName:\s+(\S+)\s+\|\s+Status\s+:\s+(\S+)")
+# The message ends at the quote that closes the errortext value: one followed by
+# the closing brace or by the next "key :" pair. A quote inside the message,
+# such as a quoted VM name, is kept. A message with no closing quote runs to the
+# end of the line.
 JOB_ERROR = re.compile(
-    r"errorcode\s*:\s*(\d+)\s*,\s*errortext\s*:\s*'(.*?)(?:'\s*[,}]|$)")
+    r"errorcode\s*:\s*(\d+)\s*,\s*errortext\s*:\s*'"
+    r"(.*?)(?:'\s*(?:\}|,\s*\w+\s*:)|$)")
 MAX_FAILURE_LINES = 80
 MAX_ERROR_CHARS = 400
 

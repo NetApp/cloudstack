@@ -965,10 +965,43 @@ void abortSupersededRun() {
     }
 }
 
-// Branch that supplies the trusted CI scripts. It must equal the branch that
-// Remote Jenkinsfile Provider loads this Jenkinsfile from. Change the provider
-// branch in the Jenkins folder to match when this value changes.
+// Branch name from a Git SCM branch spec such as '*/main' or 'refs/heads/main'.
+// Returns '' for a wildcard or any name Git would not accept.
+String branchFromSpec(String spec) {
+    def name = (spec ?: '').trim()
+    if (name.startsWith('*/')) {
+        name = name.substring(2)
+    }
+    if (name.startsWith('refs/heads/')) {
+        name = name.substring('refs/heads/'.length())
+    }
+    return name.contains('*') || !isValidBranchName(name) ? '' : name
+}
+
+// Branch that supplies the trusted CI scripts, in this order:
+//  1. PRESUBMIT_TRUSTED_CI_BRANCH, a job or folder environment variable. Set it
+//     to the Remote Jenkinsfile Provider branch when that is not 'main', for
+//     example while a Jenkinsfile change is piloted from a feature branch.
+//  2. For the manual job, the branch of the job's own Pipeline SCM.
+//  3. 'main'.
+// A multibranch pull request build never reads scm: there it is the pull
+// request's own code, and the trusted scripts must not come from the PR.
 String trustedCiBranch() {
+    def override = branchFromSpec(env.PRESUBMIT_TRUSTED_CI_BRANCH)
+    if (override) {
+        return override
+    }
+    if (!isMultibranchPullRequest()) {
+        try {
+            // A BranchSpec prints as its name; this avoids a new sandbox approval.
+            def fromJob = scm?.branches ? branchFromSpec("${scm.branches[0]}") : ''
+            if (fromJob) {
+                return fromJob
+            }
+        } catch (Exception e) {
+            echo "Could not read the job's SCM branch, using main: ${e}"
+        }
+    }
     return 'main'
 }
 

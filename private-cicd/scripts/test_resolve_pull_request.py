@@ -31,11 +31,13 @@ SPEC.loader.exec_module(MODULE)
 SHA = "a" * 40
 
 
-def pull(number="98", draft=False, base="main", repo="NetApp/cloudstack", sha=SHA):
+def pull(number="98", draft=False, base="main", repo="NetApp/cloudstack", sha=SHA,
+         state="open"):
     return {
         "number": int(number),
         "title": "Test",
         "html_url": f"https://github.com/NetApp/cloudstack/pull/{number}",
+        "state": state,
         "draft": draft,
         "base": {"ref": base},
         "head": {
@@ -69,6 +71,15 @@ class AssessPullRequestTest(unittest.TestCase):
             decision = MODULE.assess(
                 candidate, "98", SHA, "main", "NetApp/cloudstack")
             self.assertFalse(decision["eligible"], candidate)
+
+    def test_rejects_closed_or_merged_pr(self):
+        # A merged PR is also reported by GitHub as state "closed".
+        for state in ("closed", "", None):
+            decision = MODULE.assess(
+                pull(state=state), "98", SHA, "main", "NetApp/cloudstack")
+
+            self.assertFalse(decision["eligible"], state)
+            self.assertIn("not open", decision["reason"])
 
     def test_accepts_github_head_when_jenkins_sha_is_missing(self):
         decision = MODULE.assess(pull(), "98", "", "main", "NetApp/cloudstack")

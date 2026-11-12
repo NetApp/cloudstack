@@ -100,6 +100,28 @@ class ParseSuiteFailuresTest(unittest.TestCase):
             self.parse(text)[0]["error"],
             "Job failed (code 530): Unable to start the VM")
 
+    def test_cloudstack_job_failure_keeps_quoted_names_in_the_message(self):
+        messages = [
+            "Unable to start VM 'i-2-5-VM', host unreachable",
+            "Volume doesn't exist",
+            "Failed to detach 'vol-1' from 'VM-2'",
+        ]
+        for message in messages:
+            line = ("Exception: Job failed: {accountid : 'a', jobresult : "
+                    "{errorcode : 530, errortext : '%s'}, jobinstancetype : "
+                    "'Volume'}" % message)
+            text = f"{SEP}\nERROR: d\n{DASH}\n{line}\n"
+            self.assertEqual(
+                self.parse(text)[0]["error"],
+                "Job failed (code 530): " + message)
+
+    def test_cloudstack_job_failure_without_closing_quote_shows_the_rest(self):
+        line = ("Exception: Job failed: {jobresult : {errorcode : 530, "
+                "errortext : 'cut off here")
+        text = f"{SEP}\nERROR: d\n{DASH}\n{line}\n"
+        self.assertEqual(
+            self.parse(text)[0]["error"], "Job failed (code 530): cut off here")
+
     def test_unmapped_block_is_kept_without_names(self):
         failures = self.parse(SETUP_ERROR)
         self.assertEqual(len(failures), 1)
