@@ -545,11 +545,63 @@ void createGithubCheck() {
     }
 }
 
+// Builds the ONTAP plugin coverage summary from the unit-test report written by
+// the Maven build and the functional dumps collected from the lab VM. It never
+// fails the build: a missing part is named in the summary. Returns the path of
+// the markdown summary, or '' when there is none.
+String buildCoverageSummary() {
+    if ((env.PRESUBMIT_COVERAGE ?: 'true') == 'false' ||
+            !fileExists('private-cicd/scripts/coverage-report.sh')) {
+        return ''
+    }
+    try {
+        withEnv([
+            "RESULTS_DIR=${env.WORKSPACE}/${env.PRESUBMIT_RESULTS}",
+            "SOURCE_DIR=${env.WORKSPACE}/${env.SOURCE_DIR}"
+        ]) {
+            sh 'private-cicd/scripts/coverage-report.sh'
+        }
+    } catch (Exception e) {
+        echo "Unable to build the coverage summary: ${e}"
+    }
+    def summary = "${env.PRESUBMIT_RESULTS}/coverage/summary.md"
+    return fileExists(summary) ? summary : ''
+}
+
+// Creates or updates the single coverage comment on the pull request. Turn it
+// off with PRESUBMIT_COVERAGE_COMMENT=false. The App needs Pull requests or
+// Issues write; without it only this step fails and the build is unchanged.
+void postCoverageComment(String summaryFile) {
+    if (!summaryFile || !hasGithubAppCredential() ||
+            sourceValue('SOURCE_MODE') != 'pull_request' ||
+            (env.PRESUBMIT_COVERAGE_COMMENT ?: 'true') == 'false') {
+        return
+    }
+    try {
+        withCredentials([
+            usernamePassword(
+                credentialsId: params.GITHUB_APP_CREDENTIALS_ID,
+                usernameVariable: 'GITHUB_APP',
+                passwordVariable: 'GITHUB_ACCESS_TOKEN'
+            )
+        ]) {
+            withEnv(githubEnvironment() + [
+                "GITHUB_COVERAGE_FILE=${env.WORKSPACE}/${summaryFile}"
+            ]) {
+                sh 'private-cicd/scripts/github-check-run.sh coverage-comment'
+            }
+        }
+    } catch (Exception e) {
+        echo "Coverage comment not posted; the presubmit result is unchanged: ${e}"
+    }
+}
+
 // Publishes the final result. When the run could not be created at the start
 // (no run ID), a completed check run is created instead, so the result still
 // reaches the pull request. This matters once the check is required: a pull
 // request without a reported result stays blocked.
-void completeGithubCheck(String conclusion, String failedStage = '', String reportUrl = '') {
+void completeGithubCheck(String conclusion, String failedStage = '', String reportUrl = '',
+        String coverageFile = '') {
     if (!hasGithubAppCredential() || sourceValue('SOURCE_MODE') != 'pull_request') {
         return
     }
@@ -565,7 +617,8 @@ void completeGithubCheck(String conclusion, String failedStage = '', String repo
             withEnv(githubEnvironment() + [
                 "GITHUB_CHECK_CONCLUSION=${conclusion}",
                 "GITHUB_CHECK_FAILED_STAGE=${failedStage}",
-                "GITHUB_CHECK_REPORT_URL=${reportUrl}"
+                "GITHUB_CHECK_REPORT_URL=${reportUrl}",
+                "GITHUB_CHECK_COVERAGE_FILE=${coverageFile}"
             ]) {
                 if (runId) {
                     sh 'private-cicd/scripts/github-check-run.sh complete'
@@ -1285,6 +1338,7 @@ void runUnitTests() {
         ENABLE_SIMULATOR=false \
         MAVEN_THREADS=1C \
         RERUN_FAILING_TESTS=2 \
+        ONTAP_COVERAGE="${PRESUBMIT_COVERAGE:-true}" \
         MAVEN_OPTS="-Xms1g -Xmx8g" \
         private-cicd/scripts/mvn-full.sh
         '''
@@ -1407,6 +1461,7 @@ void deployAndRunOntapIntegration() {
                         SOURCE_ID="$RESOLVED_SOURCE_ID" \
                         SOURCE_SHA="$RESOLVED_SOURCE_SHA" \
                         BRIDGE="$VM_BRIDGE" \
+                        FUNCTIONAL_COVERAGE="${PRESUBMIT_COVERAGE:-true}" \
                             private-cicd/scripts/run-phase2-remote.sh
                     '''
                 }
@@ -1450,6 +1505,8 @@ void publishPresubmitResults() {
         }
         def sourceName = sourceValue('SOURCE_MODE') == 'branch' ?
             "branch ${params.SOURCE_BRANCH}" : "PR-${sourceValue('PR_ID')}"
+        // Before the report, which embeds the coverage summary.
+        def coverageFile = buildCoverageSummary()
         try {
             if (fileExists('private-cicd/scripts/generate-presubmit-report.py')) {
                 withEnv([
@@ -1499,7 +1556,8 @@ void publishPresubmitResults() {
         // name the failed stage and link the report.
         def reportUrl = fileExists("${env.PRESUBMIT_RESULTS}/report.html") ?
             "${env.BUILD_URL}artifact/${env.PRESUBMIT_RESULTS}/report.html" : ''
-        completeGithubCheck(conclusion, failedStage, reportUrl)
+        completeGithubCheck(conclusion, failedStage, reportUrl, coverageFile)
+        postCoverageComment(coverageFile)
         def finalSubject = failedStage ?
             "${presubmitSubjectBase()}: ${result} in ${failedStage}" :
             "${presubmitSubjectBase()}: ${result}"

@@ -569,6 +569,37 @@ How the Check behaves once it is required:
   Check above is the only gate.
 - A pull request from a fork never gets a Check, so it cannot merge while the Check is required.
 
+### ONTAP plugin test coverage
+
+Every run reports the coverage of the ONTAP storage plugin
+(`plugins/storage/volume/ontap`) from two sources, in the mail, in `report.html`, in the summary of the
+`cloudstack-ontap-presubmit` Check, and in one PR comment that later runs update in place.
+
+| Source | How it is produced |
+| --- | --- |
+| Unit tests | `mvn-full.sh` passes `-Dontap.coverage=true`, which activates the `ontap-coverage` profile in the plugin's `pom.xml`. The same Maven build that runs the tests writes `target/site/jacoco/jacoco.xml`. `mvn-full.sh` copies it to `presubmit-results/unit-tests/coverage/unit/`. |
+| Functional (Marvin) tests | `run-phase2-remote.sh` fetches the JaCoCo agent and command line (`fetch-jacoco.sh`, version 0.8.11) and ships them to the VM. `configure-cloudstack-vm.sh` adds `-javaagent:...,output=tcpserver,address=127.0.0.1,port=36320` to the management server `JAVA_OPTS` before its first start. `marvin-run.sh` dumps and resets the data after the iSCSI suites and again after the NFS3 suites into `phase2/coverage/*.exec`. |
+| Summary | `coverage-report.sh` merges the dumps and builds a report from the plugin jar inside the deployed management package, so the report matches the code that ran. `ontap-coverage.py` then writes `coverage/summary.{json,md,html}`. |
+
+Notes:
+
+- The **combined** figure is line coverage over the union of both runs, taken line by line from the two reports, so
+  it does not depend on the two reports agreeing on class IDs. Branch and method figures are shown per source only.
+- Only the management server is instrumented, which is where the ONTAP plugin runs. The KVM agent is not.
+- The coverage is informational. It never changes the build result or the Check conclusion.
+- Every part degrades on its own. If the JaCoCo jars cannot be fetched, the agent cannot be attached, a dump fails or
+  the report cannot be built, the run goes on and the summary says which source is missing.
+- A management server restart between two dumps loses the data collected since the last dump.
+- The JaCoCo HTML under `coverage/functional/html` and `unit-tests/coverage/unit` is linked for detail, but Jenkins
+  blocks the scripts and styles of archived HTML, so those pages look plain. The tables in the mail and the PR come
+  from the summary instead.
+- `PRESUBMIT_COVERAGE=false` (a job, folder or global environment variable) turns the whole feature off.
+  `PRESUBMIT_COVERAGE_COMMENT=false` keeps the summary in the mail and the Check but stops the PR comment.
+- The PR comment needs **Pull requests: Read and write** (or **Issues: Read and write**) on the GitHub App. Without
+  it only the comment step fails; the log says so and the build is unchanged. The comment is found by the marker
+  `<!-- ontap-coverage-bot -->` among comments written by a bot, so it does not touch the `coverage-grade-bot` comment
+  that the repository's own workflow posts.
+
 ## 13. Manual branch job and exact SHA
 
 Create a separate Pipeline-from-SCM job:
