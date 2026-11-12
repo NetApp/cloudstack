@@ -58,6 +58,24 @@ run_suite() {
     return "$status"
 }
 
+# Functional-test coverage: dump (and reset) the JaCoCo data of the management
+# server after a suite, so a later restart cannot lose it. The data is only
+# collected when the agent was attached; a failed dump never fails the run.
+dump_coverage() {
+    local name="$1"
+    if [[ -z "${JACOCO_CLI:-}" || ! -f "$JACOCO_CLI" || -z "${COVERAGE_DIR:-}" ]]; then
+        return 0
+    fi
+    mkdir -p "$COVERAGE_DIR"
+    if java -jar "$JACOCO_CLI" dump --address 127.0.0.1 \
+            --port "${COVERAGE_PORT:-36320}" --reset \
+            --destfile "$COVERAGE_DIR/${name}.exec"; then
+        echo "Functional coverage for ${name}: $COVERAGE_DIR/${name}.exec"
+    else
+        echo "Could not dump functional coverage for ${name}" >&2
+    fi
+}
+
 echo "==> Creating and validating the CloudStack zone"
 if ! run_suite setup_zone; then
     echo "Zone setup failed; protocol suites cannot run" >&2
@@ -67,9 +85,11 @@ fi
 suite_status=0
 echo "==> Running ONTAP iSCSI suites"
 run_suite iscsi || suite_status=1
+dump_coverage iscsi
 
 echo "==> Running ONTAP NFS3 suites"
 run_suite nfs3 || suite_status=1
+dump_coverage nfs3
 
 ontap_results=test/integration/plugins/ontap/results
 if [[ -d "$ontap_results" ]]; then

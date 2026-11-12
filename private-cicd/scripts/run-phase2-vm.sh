@@ -68,10 +68,22 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# Functional-test coverage is on only when it was requested and the pipeline
+# shipped the JaCoCo jars. Empty values leave it off.
+coverage_agent=""
+coverage_cli=""
+if [[ "${FUNCTIONAL_COVERAGE:-false}" == "true" \
+        && -f "$source_dir/jacoco/jacocoagent.jar" \
+        && -f "$source_dir/jacoco/jacococli.jar" ]]; then
+    coverage_agent="$source_dir/jacoco/jacocoagent.jar"
+    coverage_cli="$source_dir/jacoco/jacococli.jar"
+fi
+
 DEB_DIR="$deb_dir" \
 SECRETS_FILE="$secrets_file" \
 ONTAP_CONFIG="$ontap_config" \
 BRIDGE="$BRIDGE" \
+JACOCO_AGENT_JAR="$coverage_agent" \
     "$scripts_dir/configure-cloudstack-vm.sh" \
     2>&1 | tee "$result_dir/configure-cloudstack.log"
 
@@ -84,4 +96,6 @@ BRIDGE="$BRIDGE" \
 CLOUDSTACK_DIR="$source_dir" \
 PHASE2_RESULT_DIR="$result_dir/marvin" \
 MARVIN_ARCHIVE="$marvin_archive" \
+JACOCO_CLI="$coverage_cli" \
+COVERAGE_DIR="$result_dir/coverage" \
     "$scripts_dir/marvin-run.sh"
