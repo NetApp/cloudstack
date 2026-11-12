@@ -46,7 +46,7 @@ public interface SANFeignClient {
     @Headers({"Authorization: {authHeader}"})
     OntapResponse<Lun> getLunResponse(@Param("authHeader") String authHeader, @QueryMap Map<String, Object> queryMap);
 
-    @RequestLine("GET /api/storage/luns/{uuid}")
+    @RequestLine("GET /{uuid}")
     @Headers({"Authorization: {authHeader}"})
     Lun getLunByUUID(@Param("authHeader") String authHeader, @Param("uuid") String uuid);
 
