@@ -30,9 +30,9 @@ This is the consolidated operator and developer reference. The current [`Jenkins
 
 The guide covers:
 
-- the trusted production Pipeline-from-SCM job with five-minute GitHub API
-  discovery, including first-PR cutover from `feature/CSTACKEX-223` to `main`
-  ([`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md));
+- the multibranch folder `cloudstack-ontap-presubmit-mb`, which scans about
+  once a minute and runs trusted CI from `main` for every non-draft origin
+  pull request into `main` ([`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md));
 - the separate triggerless manual branch job;
 - local CI-file validation and direct disposable-VM validation;
 - Stage 1 build, unit-test, and Debian package handoff;
@@ -68,12 +68,10 @@ VM lock.
 ## 3. Architecture and data flow
 
 ```text
-Jenkins timer -> discover mode (every 5 minutes)
-  -> GitHub API -> unseen PR head SHAs
-  -> self-queue at most MAX_ACTIVE_WORKERS pull_request builds
-  -> extra SHAs deferred with watermark held
-  -> self-queued worker builds in the same job
-    -> trusted Jenkinsfile/scripts from protected main
+Folder scan about once a minute (not a pipeline build)
+  -> one child job per open non-draft origin PR into main
+  -> trusted Jenkinsfile/scripts from protected main
+  -> exact indexed PR head SHA, confirmed with the pull request API
   -> request, eligibility, credential, inventory, and builder checks
   -> exact PR or branch SHA checkout into cloudstack-src
   -> Maven clean install and unit tests
@@ -156,12 +154,10 @@ Lightweight checkout: off
 PR code cannot replace trusted CI helpers before credentials are used. The source under test is checked out
 separately.
 
-Until `feature/CSTACKEX-223` is merged, that Jenkinsfile is not on `main`. Create one job named
-`cloudstack-ontap-presubmit` that loads CI from `*/feature/CSTACKEX-223`, using
-[`CREATE-PRESUBMIT-JOB.md`](CREATE-PRESUBMIT-JOB.md). Its timer builds discover work and self-queue workers in the
-same item. After merge, change only **Branches to build** to `*/main`. Keep the same job, GitHub App, credentials,
-resources, and Check. Do not create a GitHub repository webhook: OpenLab Jenkins is not reachable from GitHub.com.
-Do not create a GitHub Organization folder for this presubmit.
+Production is the multibranch folder `cloudstack-ontap-presubmit-mb`. Remote Jenkinsfile
+Provider loads this Jenkinsfile from `main` with Match branches off. A folder scan,
+not a webhook, finds pull requests. Keep the old `cloudstack-ontap-presubmit` job
+disabled. Do not create a GitHub repository webhook or a GitHub Organization folder.
 
 ### Manual-job trust boundary
 
@@ -549,6 +545,60 @@ cloudstack-ontap-presubmit
 ```
 
 Without protection it is informational. Verify pending/failed results block merge and each new SHA needs a new Check.
+
+How the Check behaves once it is required:
+
+| Build result | Check conclusion | Merge |
+| --- | --- | --- |
+| `SUCCESS` | `success` | allowed |
+| `FAILURE`, `UNSTABLE` | `failure` | blocked |
+| `ABORTED`, superseded or timed out | `cancelled` | blocked until a new run passes |
+| not built (draft, fork, closed, wrong base) | no Check, or `cancelled` if one was started | blocked until a run passes |
+
+- The Check is created `in_progress` at the start of the run and completed after the report is archived. The
+  completed Check names the failed stage and links the Jenkins build and the HTML report.
+- If creating the Check failed at the start, the final step publishes an already completed Check instead, so the
+  result still reaches the pull request. If that also fails, the job description says
+  `GitHub Check result not published`, and the Check stays missing or in progress, which blocks the merge.
+  Fix the cause (run `SOURCE_MODE=diagnose`), then push a commit or rebuild the PR job.
+- Completion is retried three times. A Jenkins crash or restart mid-run still leaves the Check in progress. Rebuild
+  the PR job, or push a commit, to replace it. A GitHub **Re-run** button does nothing, because Jenkins receives no
+  webhooks.
+- In the branch rule, select the Check produced by the presubmit GitHub App as its source, not **Any source**.
+- Do not require the `continuous-integration/jenkins/pr-head` status that GitHub Branch Source can also post. The
+  Check above is the only gate.
+- A pull request from a fork never gets a Check, so it cannot merge while the Check is required.
+
+### ONTAP plugin test coverage
+
+Every run reports the coverage of the ONTAP storage plugin
+(`plugins/storage/volume/ontap`) from two sources, in the mail, in `report.html`, in the summary of the
+`cloudstack-ontap-presubmit` Check, and in one PR comment that later runs update in place.
+
+| Source | How it is produced |
+| --- | --- |
+| Unit tests | `mvn-full.sh` passes `-Dontap.coverage=true`, which activates the `ontap-coverage` profile in the plugin's `pom.xml`. The same Maven build that runs the tests writes `target/site/jacoco/jacoco.xml`. `mvn-full.sh` copies it to `presubmit-results/unit-tests/coverage/unit/`. |
+| Functional (Marvin) tests | `run-phase2-remote.sh` fetches the JaCoCo agent and command line (`fetch-jacoco.sh`, version 0.8.11) and ships them to the VM. `configure-cloudstack-vm.sh` adds `-javaagent:...,output=tcpserver,address=127.0.0.1,port=36320` to the management server `JAVA_OPTS` before its first start. `marvin-run.sh` dumps and resets the data after the iSCSI suites and again after the NFS3 suites into `phase2/coverage/*.exec`. |
+| Summary | `coverage-report.sh` merges the dumps and builds a report from the plugin jar inside the deployed management package, so the report matches the code that ran. `ontap-coverage.py` then writes `coverage/summary.{json,md,html}`. |
+
+Notes:
+
+- The **combined** figure is line coverage over the union of both runs, taken line by line from the two reports, so
+  it does not depend on the two reports agreeing on class IDs. Branch and method figures are shown per source only.
+- Only the management server is instrumented, which is where the ONTAP plugin runs. The KVM agent is not.
+- The coverage is informational. It never changes the build result or the Check conclusion.
+- Every part degrades on its own. If the JaCoCo jars cannot be fetched, the agent cannot be attached, a dump fails or
+  the report cannot be built, the run goes on and the summary says which source is missing.
+- A management server restart between two dumps loses the data collected since the last dump.
+- The JaCoCo HTML under `coverage/functional/html` and `unit-tests/coverage/unit` is linked for detail, but Jenkins
+  blocks the scripts and styles of archived HTML, so those pages look plain. The tables in the mail and the PR come
+  from the summary instead.
+- `PRESUBMIT_COVERAGE=false` (a job, folder or global environment variable) turns the whole feature off.
+  `PRESUBMIT_COVERAGE_COMMENT=false` keeps the summary in the mail and the Check but stops the PR comment.
+- The PR comment needs **Pull requests: Read and write** (or **Issues: Read and write**) on the GitHub App. Without
+  it only the comment step fails; the log says so and the build is unchanged. The comment is found by the marker
+  `<!-- ontap-coverage-bot -->` among comments written by a bot, so it does not touch the `coverage-grade-bot` comment
+  that the repository's own workflow posts.
 
 ## 13. Manual branch job and exact SHA
 
