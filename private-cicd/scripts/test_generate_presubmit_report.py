@@ -140,6 +140,22 @@ class ParseSuiteFailuresTest(unittest.TestCase):
         self.assertEqual(len(error), report.MAX_ERROR_CHARS + 1)
 
 
+class CoverageSectionTest(unittest.TestCase):
+    def test_summary_fragment_is_included_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory)
+            (results / "coverage").mkdir()
+            (results / "coverage" / "summary.html").write_text(
+                "<h3>ONTAP storage plugin test coverage</h3>", encoding="utf-8")
+
+            self.assertIn("ONTAP storage plugin test coverage",
+                          report.coverage_section(results))
+
+    def test_no_summary_gives_an_empty_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual("", report.coverage_section(Path(directory)))
+
+
 class IstTimeTest(unittest.TestCase):
     def test_utc_time_is_shown_in_ist(self):
         value = report.parse_time("2026-11-05T01:54:07Z")

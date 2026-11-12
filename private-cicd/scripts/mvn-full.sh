@@ -26,6 +26,8 @@
 #   PR_ID and PR_HEAD_SHA are accepted as fallbacks for pull-request builds.
 #   Optional: SKIP_TESTS, ENABLE_NOREDIST, ENABLE_SIMULATOR (default true),
 #   MAVEN_THREADS (Jenkins uses 1C; empty disables -T; unset uses nproc),
+#   ONTAP_COVERAGE=true also writes the ONTAP plugin JaCoCo report to
+#   $RESULT_DIR/coverage/unit,
 #   RERUN_FAILING_TESTS (default 0; Jenkins uses 2 so a timing-flaky upstream
 #   test is retried before it fails the run).
 #   Commands: mvn, java. Does not call other private-cicd scripts.
@@ -46,6 +48,7 @@ ENABLE_NOREDIST="${ENABLE_NOREDIST:-false}"
 ENABLE_SIMULATOR="${ENABLE_SIMULATOR:-true}"
 THREADS="${MAVEN_THREADS-$(nproc)}"
 RERUN_FAILING_TESTS="${RERUN_FAILING_TESTS:-0}"
+ONTAP_COVERAGE="${ONTAP_COVERAGE:-false}"
 RESULT_DIR="${RESULT_DIR:-}"
 
 mvn_args=(-B -P developer,systemvm)
@@ -64,6 +67,11 @@ if [[ -n "$THREADS" ]]; then
 fi
 if [[ "$RERUN_FAILING_TESTS" != "0" ]]; then
   mvn_args+=("-Dsurefire.rerunFailingTestsCount=$RERUN_FAILING_TESTS")
+fi
+if [[ "$ONTAP_COVERAGE" == "true" ]]; then
+  # Activates the ontap-coverage profile of the ONTAP plugin module, so the
+  # same build that runs its unit tests also writes the JaCoCo report.
+  mvn_args+=(-Dontap.coverage=true)
 fi
 
 echo "==> Full build in $SOURCE_DIR"
@@ -116,6 +124,18 @@ if [[ "$report_count" -gt 0 ]]; then
   done < <(find . -type f -path '*/target/surefire-reports/*.xml' -print0)
   find . -type f -path '*/target/surefire-reports/*.xml' -print0 \
     | tar --null -czf "$RESULT_DIR/surefire-reports.tar.gz" --files-from -
+fi
+
+# JaCoCo report written by the ontap-coverage profile of the ONTAP plugin.
+ontap_coverage_dir="plugins/storage/volume/ontap/target/site/jacoco"
+if [[ "$ONTAP_COVERAGE" == "true" ]]; then
+  if [[ -f "$ontap_coverage_dir/jacoco.xml" ]]; then
+    mkdir -p "$RESULT_DIR/coverage"
+    cp -a "$ontap_coverage_dir" "$RESULT_DIR/coverage/unit"
+    echo "ONTAP unit-test coverage report: $RESULT_DIR/coverage/unit/jacoco.xml"
+  else
+    echo "ONTAP unit-test coverage was requested but $ontap_coverage_dir/jacoco.xml was not produced" >&2
+  fi
 fi
 
 if [[ "$maven_status" -eq 0 ]]; then

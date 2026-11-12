@@ -527,6 +527,14 @@ def table(headers, rows):
         f"<thead><tr>{cells}</tr></thead><tbody>{styled_rows}</tbody></table>")
 
 
+def coverage_section(results):
+    """The ONTAP coverage summary written by coverage-report.sh, if any."""
+    try:
+        return (results / "coverage" / "summary.html").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def main():
     args = parse_args()
     args.results.mkdir(parents=True, exist_ok=True)
@@ -595,8 +603,8 @@ def main():
         if tests else
         "<h2>ONTAP tests</h2><p>No Marvin test summary was available.</p>")
     body = (
-        header + failure + "<h2>Pipeline stages</h2>" +
-        stage_table + test_section)
+        header + failure + coverage_section(args.results) +
+        "<h2>Pipeline stages</h2>" + stage_table + test_section)
     document = html_document("CloudStack ONTAP presubmit report", body)
     (args.results / "report.html").write_text(document, encoding="utf-8")
     (args.results / "email-body.html").write_text(body, encoding="utf-8")
