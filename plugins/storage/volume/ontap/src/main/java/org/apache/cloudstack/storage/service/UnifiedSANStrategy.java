@@ -233,7 +233,7 @@ public class UnifiedSANStrategy extends SANStrategy {
      * It is a sis-clone, so it stays readable after the source LUN is deleted.</p>
      *
      * <p>The create response includes the LUN uuid. That uuid is confirmed with repeated
-     * {@code GET /api/storage/luns/{uuid}} calls while ONTAP returns 404.</p>
+     * {@code GET /api/storage/luns?uuid=} calls until the response contains a record.</p>
      */
     @Override
     public CloudStackVolume cloneCloudStackVolume(CloudStackVolume cloudstackVolume) {
@@ -250,16 +250,17 @@ public class UnifiedSANStrategy extends SANStrategy {
                 lunRequest.getName(),
                 lunRequest.getClone().getSource().getName(),
                 lunRequest.getClone().getSource().getUuid());
+        String lunUuid = null;
         try {
             String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
-            OntapResponse<Lun> created = sanFeignClient.createLun(authHeader, true, lunRequest);
-            if (created == null || created.getRecords() == null || created.getRecords().isEmpty()
-                    || created.getRecords().get(0) == null
-                    || StringUtils.isBlank(created.getRecords().get(0).getUuid())) {
+            OntapResponse<Lun> clonedLun = sanFeignClient.createLun(authHeader, true, lunRequest);
+            if (clonedLun == null || CollectionUtils.isEmpty(clonedLun.getRecords())
+                    || clonedLun.getRecords().get(0) == null
+                    || StringUtils.isBlank(clonedLun.getRecords().get(0).getUuid())) {
                 logger.error("cloneCloudStackVolume: LUN clone returned no records for Lun {}", lunRequest.getName());
                 throw new CloudRuntimeException("Failed to clone Lun: " + lunRequest.getName());
             }
-            String lunUuid = created.getRecords().get(0).getUuid();
+            lunUuid = clonedLun.getRecords().get(0).getUuid();
             Lun lun = getLunByUuidUntilVisible(authHeader, lunUuid, lunRequest.getName());
             validateCreatedLun(lun, lunRequest.getName(), "cloneCloudStackVolume");
             logger.debug("cloneCloudStackVolume: LUN cloned successfully. Lun: {}", lun);
@@ -269,28 +270,59 @@ public class UnifiedSANStrategy extends SANStrategy {
             clonedCloudStackVolume.setVolumeInfo(cloudstackVolume.getVolumeInfo());
             return clonedCloudStackVolume;
         } catch (FeignException e) {
+            bestEffortDeleteClonedLun(lunUuid, lunRequest.getName());
             logger.error("FeignException occurred while cloning LUN: {}, Status: {}, Exception: {}",
                     lunRequest.getName(), e.status(), e.getMessage());
             throw new CloudRuntimeException("Failed to clone Lun: " + e.getMessage());
         } catch (CloudRuntimeException e) {
+            bestEffortDeleteClonedLun(lunUuid, lunRequest.getName());
             throw e;
         } catch (Exception e) {
+            bestEffortDeleteClonedLun(lunUuid, lunRequest.getName());
             logger.error("Exception occurred while cloning LUN: {}, Exception: {}", lunRequest.getName(), e.getMessage());
             throw new CloudRuntimeException("Failed to clone Lun: " + e.getMessage());
         }
     }
 
     /**
-     * Confirms a clone uuid by reading that LUN directly.
+     * Removes a clone that was created but could not be confirmed.
      *
-     * <p>{@code GET /api/storage/luns/{uuid}} returns 404 until the clone is visible. Those
-     * 404s are retried. Any other GET failure is returned to the caller.</p>
+     * <p>The LUN is already on ONTAP once create returns a uuid. Leaving it in place makes the
+     * next clone of the same name fail as a duplicate.</p>
+     */
+    private void bestEffortDeleteClonedLun(String lunUuid, String lunName) {
+        if (StringUtils.isBlank(lunUuid)) {
+            return;
+        }
+        try {
+            Lun lun = new Lun();
+            lun.setUuid(lunUuid);
+            lun.setName(lunName);
+            CloudStackVolume deleteRequest = new CloudStackVolume();
+            deleteRequest.setLun(lun);
+            deleteCloudStackVolume(deleteRequest);
+            logger.info("bestEffortDeleteClonedLun: Removed leftover cloned LUN [{}] uuid [{}]",
+                    lunName, lunUuid);
+        } catch (Exception cleanupEx) {
+            logger.warn("bestEffortDeleteClonedLun: Failed to remove leftover cloned LUN [{}] uuid [{}]: {}",
+                    lunName, lunUuid, cleanupEx.getMessage());
+        }
+    }
+
+    /**
+     * Confirms a clone uuid from the collection GET record.
+     *
+     * <p>{@code GET /api/storage/luns?uuid=} returns no records until the clone is visible.
+     * Empty responses and 404s are retried. Any other GET failure is returned to the caller.</p>
      */
     private Lun getLunByUuidUntilVisible(String authHeader, String lunUuid, String lunName) {
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.UUID, lunUuid);
         for (int attempt = 1; attempt <= OntapStorageConstants.ONTAP_LUN_CLONE_GET_MAX_RETRIES; attempt++) {
             try {
-                Lun lun = sanFeignClient.getLunByUUID(authHeader, lunUuid);
-                if (lun != null) {
+                OntapResponse<Lun> lunResponse = sanFeignClient.getLunResponse(authHeader, queryParams);
+                if (lunResponse != null && !CollectionUtils.isEmpty(lunResponse.getRecords())
+                        && lunResponse.getRecords().get(0) != null) {
+                    Lun lun = lunResponse.getRecords().get(0);
                     if (StringUtils.isBlank(lun.getUuid())) {
                         lun.setUuid(lunUuid);
                     }
