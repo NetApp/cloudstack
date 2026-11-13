@@ -32,6 +32,11 @@ jobs:
     outputs:
       names: ${{ steps.list.outputs.names }}
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - id: list
         env:
           NAMES: ${{ vars.GH_AW_COPILOT_TOKEN_NAMES || '[]' }}
@@ -46,6 +51,11 @@ jobs:
       matrix:
         name: ${{ fromJson(needs.resolve.outputs.names) }}
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - name: Check token liveness
         env:
           TOKEN: ${{ secrets[format('COPILOT_GITHUB_TOKEN_{0}', matrix.name)] }}
