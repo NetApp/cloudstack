@@ -398,8 +398,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             return;
         }
         StoragePoolVO storagePool = storagePoolDao.findById(volumeInfo.getPoolId());
-        if (storagePool == null
-                || !DataStoreProvider.ONTAP_PLUGIN_NAME.equals(storagePool.getStorageProviderName())) {
+        if (storagePool == null) {
             return;
         }
         Volume.Type volumeType = volumeInfo.getVolumeType();
