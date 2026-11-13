@@ -1806,22 +1806,20 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
     /**
      * True when this grant should connect the host for a migration.
-     * The source volume is already Migrating. An offline destination is still Ready, Allocated,
-     * or Creating, and unattached, because createAsync does not call grantAccess.
+     * A live migration destination is already Migrating. An offline destination keeps its normal
+     * state, so OntapDataMotionStrategy tags it with the {@code ontap.migration.destination} volume
+     * detail while it holds access. Other unattached volumes are never treated as migration targets.
      * iSCSI then connects the host to the pool. NFS updates the export policy and connects the host.
      */
     private boolean shouldConnectHostForMigration(VolumeVO volumeVO) {
         if (Volume.State.Migrating.equals(volumeVO.getState())) {
             return true;
         }
-        return isUnattachedMigrationDestination(volumeVO);
+        return isTaggedMigrationDestination(volumeVO);
     }
 
-    private boolean isUnattachedMigrationDestination(VolumeVO volumeVO) {
-        return volumeVO.getInstanceId() == null
-                && (Volume.State.Ready.equals(volumeVO.getState())
-                        || Volume.State.Allocated.equals(volumeVO.getState())
-                        || Volume.State.Creating.equals(volumeVO.getState()));
+    private boolean isTaggedMigrationDestination(VolumeVO volumeVO) {
+        return volumeDetailsDao.findDetail(volumeVO.getId(), OntapStorageConstants.MIGRATION_DESTINATION) != null;
     }
 
     private void updateNfsExportPolicyForHost(StoragePoolVO storagePool, Host host, Map<String, String> details,
