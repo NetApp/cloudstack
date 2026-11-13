@@ -40,9 +40,11 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.to.VolumeObjectTO;
+import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -51,6 +53,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import com.cloud.agent.AgentManager;
+import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.CheckVirtualMachineAnswer;
 import com.cloud.agent.api.CheckVirtualMachineCommand;
 import com.cloud.agent.api.MigrateAnswer;
@@ -82,6 +85,7 @@ import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.GuestOSCategoryDao;
 import com.cloud.storage.dao.GuestOSDao;
 import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
@@ -108,6 +112,8 @@ public class OntapDataMotionStrategyTest {
     private PrimaryDataStoreDao primaryDataStoreDao;
     @Mock
     private VolumeDao volumeDao;
+    @Mock
+    private VolumeDetailsDao volumeDetailsDao;
     @Mock
     private VolumeDataFactory volumeDataFactory;
     @Mock
@@ -245,6 +251,54 @@ public class OntapDataMotionStrategyTest {
         ArgumentCaptor<MigrateVolumeCommand> commandCaptor = ArgumentCaptor.forClass(MigrateVolumeCommand.class);
         Mockito.verify(agentManager).send(Mockito.eq(context.host.getId()), commandCaptor.capture());
         assertEquals("/iqn/2", commandCaptor.getValue().getSrcDetails().get(DiskTO.IQN));
+    }
+
+    @Test
+    public void offlineMigrationTagsDestinationBeforeGrantAndClearsItAfter() throws Exception {
+        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm1", null);
+        VolumeObjectTO copiedVolume = new VolumeObjectTO();
+        copiedVolume.setPath("copied-volume-path");
+        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class)))
+                .thenReturn(new CopyCmdAnswer(copiedVolume));
+
+        strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback);
+
+        InOrder inOrder = Mockito.inOrder(volumeDetailsDao, volumeService, context.callback);
+        inOrder.verify(volumeDetailsDao).addDetail(20L, OntapStorageConstants.MIGRATION_DESTINATION,
+                OntapStorageConstants.TRUE, false);
+        inOrder.verify(volumeService).grantAccess(Mockito.eq(context.destVolume), Mockito.any(Host.class), Mockito.any());
+        // Revoked once after the copy command and once more by the outer finally.
+        inOrder.verify(volumeService, Mockito.times(2)).revokeAccess(Mockito.eq(context.destVolume), Mockito.any(Host.class), Mockito.any());
+        inOrder.verify(volumeDetailsDao).removeDetail(20L, OntapStorageConstants.MIGRATION_DESTINATION);
+        inOrder.verify(context.callback).complete(Mockito.any());
+    }
+
+    @Test
+    public void offlineMigrationClearsDestinationTagWhenMigrationFails() throws Exception {
+        OfflineMigrationTestContext context = configureOfflineMigration(true, "NFS3", "svm1", null);
+        Answer failedAnswer = Mockito.mock(Answer.class);
+        Mockito.when(failedAnswer.getResult()).thenReturn(false);
+        Mockito.when(failedAnswer.getDetails()).thenReturn("copy failed");
+        Mockito.when(agentManager.send(Mockito.eq(context.host.getId()), Mockito.any(CopyCommand.class)))
+                .thenReturn(failedAnswer);
+
+        assertThrows(CloudRuntimeException.class, () ->
+                strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback));
+
+        Mockito.verify(volumeDetailsDao).addDetail(20L, OntapStorageConstants.MIGRATION_DESTINATION,
+                OntapStorageConstants.TRUE, false);
+        Mockito.verify(volumeDetailsDao).removeDetail(20L, OntapStorageConstants.MIGRATION_DESTINATION);
+        Mockito.verify(context.callback).complete(Mockito.argThat(CopyCommandResult::isFailed));
+    }
+
+    @Test
+    public void liveMigrationDoesNotTagDestination() throws Exception {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+
+        strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback);
+
+        Mockito.verify(volumeDetailsDao, Mockito.never()).addDetail(Mockito.anyLong(),
+                Mockito.eq(OntapStorageConstants.MIGRATION_DESTINATION), Mockito.anyString(), Mockito.anyBoolean());
     }
 
     @Test

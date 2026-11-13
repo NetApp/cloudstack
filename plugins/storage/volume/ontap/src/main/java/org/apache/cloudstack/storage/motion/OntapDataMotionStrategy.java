@@ -46,6 +46,7 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.driver.OntapPrimaryDatastoreDriver;
 import org.apache.cloudstack.storage.to.VolumeObjectTO;
+import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -85,6 +86,7 @@ import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.GuestOSCategoryDao;
 import com.cloud.storage.dao.GuestOSDao;
 import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
@@ -114,6 +116,8 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
     private PrimaryDataStoreDao _storagePoolDao;
     @Inject
     private VolumeDao _volumeDao;
+    @Inject
+    private VolumeDetailsDao _volumeDetailsDao;
     @Inject
     private VolumeDataFactory _volumeDataFactory;
     @Inject
@@ -160,6 +164,9 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
             checkUnsupportedOntapCrossProtocolMigration(srcVolumeInfo, destVolumeInfo);
 
             destVolumeInfo.getDataStore().getDriver().createAsync(destVolumeInfo.getDataStore(), destVolumeInfo, null);
+            // The offline destination keeps its normal state, so tag it for the driver's grantAccess.
+            _volumeDetailsDao.addDetail(destVolumeInfo.getId(), OntapStorageConstants.MIGRATION_DESTINATION,
+                    OntapStorageConstants.TRUE, false);
             VolumeVO volumeVO = _volumeDao.findById(destVolumeInfo.getId());
             if (volumeVO.get_iScsiName() != null) {
                 volumeVO.setPath(volumeVO.get_iScsiName());
@@ -194,6 +201,11 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                 } catch (Exception e) {
                     logger.warn("Failed to revoke access for volume [{}] after a migration attempt", destVolumeInfo.getUuid(), e);
                 }
+            }
+            try {
+                _volumeDetailsDao.removeDetail(destVolumeInfo.getId(), OntapStorageConstants.MIGRATION_DESTINATION);
+            } catch (Exception e) {
+                logger.warn("Failed to clear the migration tag on volume [{}]", destVolumeInfo.getUuid(), e);
             }
             completeVolumeMigrationCallback(destVolumeInfo, callback, errMsg);
         }

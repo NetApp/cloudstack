@@ -126,6 +126,8 @@ public class OntapStorageConstants {
     public static final String LUN_DOT_NAME = "lun.name";
     public static final String IQN = "iqn";
     public static final String LUN_DOT_UUID = "lun.uuid";
+    /** Volume detail set on an offline migration destination while the strategy holds host access to it. */
+    public static final String MIGRATION_DESTINATION = "ontap.migration.destination";
     public static final String LUN_DOT_SERIAL_NUMBER = "lun.serial_number";
     public static final String QOS_POLICY_UUID = "qosPolicyUuid";
     public static final String IS_AFF = "isAFF";
