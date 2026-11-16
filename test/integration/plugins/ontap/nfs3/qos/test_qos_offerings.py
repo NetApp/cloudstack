@@ -26,8 +26,9 @@ custom IOPS supplied at deploy. Root and data disks are also checked
 together.
 
 Minimum IOPS run on AFF. On FAS those creates are rejected and no QoS
-policy is left behind. Each test removes its own volumes and VMs.
-tearDownClass still force-deletes the pool.
+policy is left behind. Each test removes its CloudStack volumes and VMs,
+then the ONTAP file and any unused QoS policy. tearDownClass unmounts the
+pool, then force-deletes the pool, the FlexVol, and the export policy.
 
 Workflow:
   01  Fixed disk, no IOPS

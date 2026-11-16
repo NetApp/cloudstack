@@ -26,8 +26,9 @@ custom IOPS supplied at deploy. Root and data disks are also checked
 together. iSCSI checks the QoS policy on the LUN.
 
 Minimum IOPS run on AFF. On FAS those creates are rejected and no QoS
-policy is left behind. Each test removes its own volumes and VMs.
-tearDownClass still force-deletes the pool.
+policy is left behind. Each test removes its CloudStack volumes and VMs,
+then the ONTAP LUN and any unused QoS policy. tearDownClass still
+force-deletes the pool and the FlexVol.
 
 Workflow:
   01  Fixed disk, no IOPS

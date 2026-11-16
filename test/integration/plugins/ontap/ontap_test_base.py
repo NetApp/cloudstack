@@ -655,6 +655,16 @@ class OntapRestClient:
         records = data.get("records", [])
         return records[0] if records else None
 
+    def delete_qos_policy(self, svm_name, policy_name):
+        """Delete one SVM QoS policy by name. No-op when it is already gone."""
+        policy = self.get_qos_policy(svm_name, policy_name)
+        if not policy:
+            return
+        policy_uuid = policy.get("uuid")
+        if not policy_uuid:
+            return
+        self._delete("/storage/qos/policies/%s" % policy_uuid)
+
     def is_all_flash(self):
         """True when every cluster node reports is_all_flash_optimized."""
         data = self._get(

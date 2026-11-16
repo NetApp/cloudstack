@@ -17,9 +17,11 @@
 
 """Shared QoS offering cases for the NFS3 and iSCSI Marvin suites.
 
-Each test is independent. setUpClass creates one cluster pool. A test that
-creates a volume or VM removes it before the next test starts, and
-tearDownClass still force-deletes the pool if a test stops halfway.
+Each test is independent. setUpClass creates one cluster pool. tearDown
+removes that test's CloudStack VMs and volumes, then the ONTAP LUN or NFS
+file and any QoS policy those volumes no longer use. tearDownClass unmounts
+an NFS pool on the KVM hosts, then force-deletes the CloudStack pool and
+the ONTAP FlexVol.
 
 Minimum IOPS are applied only on AFF. On FAS the same request must fail
 before ONTAP creates a policy. The driver writes that reason to the
@@ -43,6 +45,8 @@ from marvin.cloudstackAPI import (
     createVolume as createVolumeAPI,
     deleteVolume as deleteVolumeAPI,
     deployVirtualMachine as deployVirtualMachineAPI,
+    destroyVolume as destroyVolumeAPI,
+    detachVolume as detachVolumeAPI,
     enableStorageMaintenance,
     listServiceOfferings as listServiceOfferingsAPI,
     listVolumes as listVolumesAPI,
@@ -183,6 +187,21 @@ class OntapQosOfferingsBase(OntapTestBase):
             cls.vm = vm
             cls._destroy_vm_if_present()
         cls._qos_vms = []
+        for volume in list(getattr(cls, "extra_volumes", []) or []):
+            cls._cleanup_tracked_volume(volume)
+        # Unmount NFS before the base class deletes the FlexVol. A stale
+        # mount makes KVMHAMonitor reboot the host.
+        if cls.PROTOCOL == "NFS3":
+            for pool in (getattr(cls, "pool2", None), getattr(cls, "pool", None)):
+                if pool is None:
+                    continue
+                try:
+                    cls._cleanup_kvm_storage_pool_mounts(pool.id)
+                except Exception as exc:
+                    logger.warning(
+                        "tearDownClass: could not unmount pool %s: %s",
+                        getattr(pool, "id", None), exc,
+                    )
         super(OntapQosOfferingsBase, cls).tearDownClass()
 
     def setUp(self):
@@ -373,18 +392,145 @@ class OntapQosOfferingsBase(OntapTestBase):
         return volume
 
     def _remember_volume(self, volume):
+        volume_id = getattr(volume, "id", None)
+        if any(getattr(item, "id", None) == volume_id for item in self._volumes):
+            return
         self._volumes.append(volume)
-        self.__class__.extra_volumes.append(volume)
+        if not any(getattr(item, "id", None) == volume_id
+                   for item in self.__class__.extra_volumes):
+            self.__class__.extra_volumes.append(volume)
 
     def _delete_volume(self, volume):
+        self.__class__._cleanup_tracked_volume(volume)
+
+    @classmethod
+    def _cleanup_tracked_volume(cls, volume):
+        """Remove one volume from CloudStack, then its ONTAP object.
+
+        deleteVolume is tried first. destroyVolume(expunge=False) is the
+        fallback used by the other suites when libvirt cannot expunge the
+        volume. A shared QoS policy is removed only after its last object
+        is gone.
+        """
         if volume is None or not getattr(volume, "id", None):
             return
-        cmd = deleteVolumeAPI.deleteVolumeCmd()
-        cmd.id = volume.id
+        if getattr(cls, "apiClient", None) is None:
+            return
+        policy_name, lun_path, nfs_path = cls._ontap_volume_identity(volume)
+        cls._detach_volume_if_attached(volume.id)
         try:
-            self.apiClient.deleteVolume(cmd)
+            cmd = deleteVolumeAPI.deleteVolumeCmd()
+            cmd.id = volume.id
+            cls.apiClient.deleteVolume(cmd)
         except Exception as exc:
-            logger.warning("could not delete volume %s: %s", volume.id, exc)
+            logger.warning(
+                "cleanup: deleteVolume failed for %s (%s); "
+                "falling back to destroyVolume",
+                volume.id, exc,
+            )
+            try:
+                destroy = destroyVolumeAPI.destroyVolumeCmd()
+                destroy.id = volume.id
+                destroy.expunge = False
+                cls.apiClient.destroyVolume(destroy)
+            except Exception as destroy_exc:
+                logger.warning(
+                    "cleanup: destroyVolume also failed for %s: %s",
+                    volume.id, destroy_exc,
+                )
+        cls._delete_ontap_volume_object(lun_path, nfs_path)
+        cls._delete_unused_qos_policy(policy_name)
+
+    @classmethod
+    def _ontap_volume_identity(cls, volume):
+        """LUN path or NFS file path, and the QoS policy name, if present."""
+        pool = getattr(cls, "pool", None)
+        pool_name = getattr(pool, "name", None)
+        nfs_path = getattr(volume, "path", None)
+        lun_path = None
+        if pool_name and getattr(volume, "name", None):
+            lun_path = "/vol/%s/%s" % (
+                pool_name, volume.name.replace("-", "_")
+            )
+        record = None
+        try:
+            if cls.PROTOCOL == "NFS3" and pool_name and nfs_path:
+                record = cls.ontap.get_nfs_file(pool_name, nfs_path)
+            elif cls.PROTOCOL != "NFS3" and lun_path:
+                record = cls.ontap.get_lun(cls.svm_name, lun_path)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not read ONTAP object for volume %s: %s",
+                volume.id, exc,
+            )
+        policy = (record or {}).get("qos_policy") or {}
+        if isinstance(policy, dict):
+            policy_name = policy.get("name")
+        else:
+            policy_name = policy or None
+        return policy_name, lun_path, nfs_path
+
+    @classmethod
+    def _detach_volume_if_attached(cls, volume_id):
+        try:
+            cmd = listVolumesAPI.listVolumesCmd()
+            cmd.id = volume_id
+            cmd.listall = True
+            listed = cls.apiClient.listVolumes(cmd) or []
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not list volume %s: %s", volume_id, exc
+            )
+            return
+        if not listed or not getattr(listed[0], "virtualmachineid", None):
+            return
+        try:
+            detach = detachVolumeAPI.detachVolumeCmd()
+            detach.id = volume_id
+            cls.apiClient.detachVolume(detach)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not detach volume %s: %s", volume_id, exc
+            )
+
+    @classmethod
+    def _delete_ontap_volume_object(cls, lun_path, nfs_path):
+        pool = getattr(cls, "pool", None)
+        pool_name = getattr(pool, "name", None)
+        ontap = getattr(cls, "ontap", None)
+        if ontap is None or not pool_name:
+            return
+        try:
+            if cls.PROTOCOL == "NFS3" and nfs_path:
+                ontap.delete_file_in_volume(pool_name, nfs_path)
+            elif lun_path:
+                ontap.delete_lun(cls.svm_name, lun_path)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not delete ONTAP object for pool %s: %s",
+                pool_name, exc,
+            )
+
+    @classmethod
+    def _delete_unused_qos_policy(cls, policy_name):
+        if not policy_name or not str(policy_name).startswith("cs_"):
+            return
+        ontap = getattr(cls, "ontap", None)
+        if ontap is None:
+            return
+        try:
+            policy = ontap.get_qos_policy(cls.svm_name, policy_name)
+            if not policy:
+                return
+            count = policy.get("object_count")
+            if count is None or int(count) > 0:
+                return
+            ontap.delete_qos_policy(cls.svm_name, policy_name)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not delete QoS policy %s: %s",
+                policy_name, exc,
+            )
 
     def _delete_volumes_named(self, name):
         cmd = listVolumesAPI.listVolumesCmd()
@@ -691,6 +837,7 @@ class OntapQosOfferingsBase(OntapTestBase):
         ]
         self.assertEqual(len(roots), 1, "VM %s has %d ROOT volumes" % (vm.id, len(roots)))
         ready = self._wait_ready(roots[0].id, timeout=600)
+        self._remember_volume(ready)
         self.assertEqual(
             ready.storageid, self.__class__.pool.id,
             "ROOT volume is on pool %s, expected %s"
@@ -724,21 +871,70 @@ class OntapQosOfferingsBase(OntapTestBase):
         return self._wait_ready(volume.id, timeout=600)
 
     def _force_delete_pool(self, pool):
+        """CloudStack force-delete, then the ONTAP FlexVol and export policy.
+
+        NFS is unmounted first. If that unmount fails, the pool is left in
+        place so the export is not removed out from under KVM.
+        """
         if pool is None:
             return
+        if self.PROTOCOL == "NFS3":
+            try:
+                self._cleanup_kvm_storage_pool_mounts(pool.id)
+            except Exception as exc:
+                logger.warning(
+                    "cleanup: could not unmount pool %s: %s", pool.name, exc
+                )
+                self.__class__.pool2 = pool
+                return
         try:
-            maint = enableStorageMaintenance.enableStorageMaintenanceCmd()
-            maint.id = pool.id
-            self.apiClient.enableStorageMaintenance(maint)
-            self._poll_pool_state(pool.id, "Maintenance", timeout=120)
-        except Exception as exc:
-            logger.warning("could not maintain pool %s: %s", pool.id, exc)
+            listed = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            listed = None
+        if listed and getattr(listed[0], "state", None) != "Maintenance":
+            try:
+                maint = enableStorageMaintenance.enableStorageMaintenanceCmd()
+                maint.id = pool.id
+                self.apiClient.enableStorageMaintenance(maint)
+                self._poll_pool_state(pool.id, "Maintenance", timeout=120)
+            except Exception as exc:
+                logger.warning("could not maintain pool %s: %s", pool.id, exc)
+        if listed:
+            try:
+                self._delete_pool(pool.id, forced=True)
+            except Exception as exc:
+                logger.warning("could not delete pool %s: %s", pool.id, exc)
+        self._delete_ontap_pool(pool)
         try:
-            self._delete_pool(pool.id, forced=True)
+            remaining = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            remaining = None
+        if not remaining:
             self.__class__.pool2 = None
-        except Exception as exc:
-            logger.warning("could not delete pool %s: %s", pool.id, exc)
+        else:
             self.__class__.pool2 = pool
+
+    def _delete_ontap_pool(self, pool):
+        """Delete the FlexVol, and the NFS export policy, left after CloudStack."""
+        try:
+            if self.ontap.get_volume(pool.name) is not None:
+                self.ontap.offline_and_delete_volume(pool.name)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not delete ONTAP FlexVol %s: %s",
+                pool.name, exc,
+            )
+        if self.PROTOCOL != "NFS3":
+            return
+        ep_name = "cs-%s-%s" % (self.__class__.svm_name, pool.name)
+        try:
+            if self.ontap.get_export_policy(ep_name) is not None:
+                self.ontap.delete_export_policy(ep_name)
+        except Exception as exc:
+            logger.warning(
+                "cleanup: could not delete export policy %s: %s",
+                ep_name, exc,
+            )
 
     # ------------------------------------------------------------------
     # Disk offerings
