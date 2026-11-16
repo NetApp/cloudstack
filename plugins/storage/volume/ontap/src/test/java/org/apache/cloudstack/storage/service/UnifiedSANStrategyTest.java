@@ -1216,6 +1216,107 @@ class UnifiedSANStrategyTest {
         verify(sanFeignClient).deleteLun(eq(authHeader), eq("copied-lun-uuid"), anyMap());
     }
 
+    private Lun lunWithCopyProgress(Integer percent, String state) {
+        Lun.Progress progress = new Lun.Progress();
+        progress.setPercentComplete(percent);
+        progress.setState(state);
+        Lun.Source source = new Lun.Source();
+        source.setProgress(progress);
+        Lun.Copy copy = new Lun.Copy();
+        copy.setSource(source);
+        Lun lun = new Lun();
+        lun.setCopy(copy);
+        return lun;
+    }
+
+    private long farDeadline() {
+        return System.currentTimeMillis() + 60_000L;
+    }
+
+    private FeignException feignExceptionWithStatus(int status) {
+        FeignException exception = mock(FeignException.class);
+        when(exception.status()).thenReturn(status);
+        return exception;
+    }
+
+    @Test
+    void testWaitForLunCopy_NullLunThrows() {
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any())).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        assertTrue(ex.getMessage().contains("Unable to retrieve ONTAP LUN copy status for Lun [lun-uuid]"));
+    }
+
+    @Test
+    void testWaitForLunCopy_NotFoundWithinGraceTimeIsRetried() {
+        FeignException notFound = feignExceptionWithStatus(404);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any()))
+                .thenThrow(notFound)
+                .thenReturn(lunWithCopyProgress(100, "complete"));
+
+        assertDoesNotThrow(() -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        verify(sanFeignClient, times(2)).getLunByUUID(eq(authHeader), eq("lun-uuid"), any());
+    }
+
+    @Test
+    void testWaitForLunCopy_NotFoundAfterGraceTimeThrowsWithCause() {
+        FeignException notFound = feignExceptionWithStatus(404);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any())).thenThrow(notFound);
+        unifiedSANStrategy.lunCopyStatusGraceMs = 0L;
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        assertSame(notFound, ex.getCause());
+    }
+
+    @Test
+    void testWaitForLunCopy_NonNotFoundFeignErrorIsNotRetried() {
+        FeignException serverError = feignExceptionWithStatus(500);
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any())).thenThrow(serverError);
+
+        assertSame(serverError, assertThrows(FeignException.class,
+                () -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline())));
+
+        verify(sanFeignClient, times(1)).getLunByUUID(eq(authHeader), eq("lun-uuid"), any());
+    }
+
+    @Test
+    void testWaitForLunCopy_MissingCopyWithinGraceTimeIsRetried() {
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any()))
+                .thenReturn(new Lun())
+                .thenReturn(lunWithCopyProgress(100, "complete"));
+
+        assertDoesNotThrow(() -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        verify(sanFeignClient, times(2)).getLunByUUID(eq(authHeader), eq("lun-uuid"), any());
+    }
+
+    @Test
+    void testWaitForLunCopy_MissingCopyAfterGraceTimeThrows() {
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any())).thenReturn(new Lun());
+        unifiedSANStrategy.lunCopyStatusGraceMs = 0L;
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        assertTrue(ex.getMessage().contains("did not return copy details for Lun [lun-uuid]"));
+    }
+
+    @Test
+    void testWaitForLunCopy_FailedStateThrows() {
+        when(sanFeignClient.getLunByUUID(eq(authHeader), eq("lun-uuid"), any()))
+                .thenReturn(lunWithCopyProgress(40, "failed"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.waitForLunCopy(authHeader, "lun-uuid", farDeadline()));
+
+        assertTrue(ex.getMessage().contains("ONTAP LUN copy failed for Lun [lun-uuid]"));
+    }
+
     @Test
     void testCopyCloudStackVolume_BuildsLunCopyRequestFromVolumes() {
         VolumeInfo srcVolumeInfo = mock(VolumeInfo.class);

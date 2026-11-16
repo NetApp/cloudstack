@@ -362,6 +362,13 @@ public class OntapDataMotionStrategy implements DataMotionStrategy {
                     vmTO.getId(), destHost.getId(), ex.getMessage());
             logger.error(errMsg, ex);
             throw new CloudRuntimeException(errMsg);
+        } catch (Exception ex) {
+            // Anything not caught above would leave errMsg null and the callback would report success.
+            errMsg = String.format("Unexpected error while migrating volume(s) of VM [%s] from host [%s] to host [%s]: %s",
+                    vmTO.getId(), srcHost.getId(), destHost.getId(), StringUtils.defaultIfBlank(ex.getMessage(), ex.getClass().getSimpleName()));
+            logger.error("{}. Exception: [{}], VM already migrated: [{}], destination host prepared: [{}]",
+                    errMsg, ex.getClass().getName(), success, preparedForMigration, ex);
+            throw new CloudRuntimeException(errMsg, ex);
         } finally {
             if (!success) {
                 handleFailedMigration(srcVolumeInfoToDestVolumeInfo, vmTO, destHost, preparedForMigration);

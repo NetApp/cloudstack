@@ -430,6 +430,37 @@ public class OntapDataMotionStrategyTest {
     }
 
     @Test
+    public void liveMigrationUnexpectedExceptionReportsFailureAndRollsBack() {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+        IllegalStateException unexpected = new IllegalStateException("unexpected state");
+        Mockito.doThrow(unexpected).when(volumeService)
+                .grantAccess(Mockito.eq(context.destVolume), Mockito.eq(context.destHost), Mockito.any());
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () ->
+                strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback));
+
+        assertSame(unexpected, thrown.getCause());
+        assertTrue(thrown.getMessage().contains("Unexpected error while migrating"));
+        assertTrue(thrown.getMessage().contains("unexpected state"));
+        Mockito.verify(volumeService).expungeVolumeAsync(context.destVolume);
+        Mockito.verify(context.callback).complete(Mockito.argThat(result -> result.isFailed() && result.getResult() != null
+                && result.getResult().contains("unexpected state")));
+    }
+
+    @Test
+    public void liveMigrationUnexpectedExceptionWithoutMessageStillReportsFailure() {
+        LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
+        Mockito.doThrow(new NullPointerException()).when(volumeService)
+                .grantAccess(Mockito.eq(context.destVolume), Mockito.eq(context.destHost), Mockito.any());
+
+        assertThrows(CloudRuntimeException.class, () ->
+                strategy.copyAsync(context.volumeMap, context.vmTO, context.srcHost, context.destHost, context.callback));
+
+        Mockito.verify(context.callback).complete(Mockito.argThat(result -> result.isFailed()
+                && result.getResult().contains("NullPointerException")));
+    }
+
+    @Test
     public void liveMigrationTimeoutKeepsDestinationWhenVmIsRunningThere() throws Exception {
         LiveMigrationTestContext context = configureLiveMigration("NFS3", StoragePoolType.NetworkFilesystem);
         VMInstanceVO vm = vmDao.findById(5L);

@@ -66,6 +66,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     private static final Map<String, Object> LUN_COPY_STATUS_QUERY = Map.of("fields", "copy,name,uuid");
     private static final String LUN_COPY_ALREADY_EXISTS_ERROR_CODE = "7018919";
     private static final String LUN_COPY_SOURCE_BUSY_ERROR_CODE = "5375060";
+    // How long ONTAP may keep returning 404 or no copy object for the new LUN before the copy fails. Package-private so tests can shorten it.
+    long lunCopyStatusGraceMs = 60_000L;
     @Inject
     private StoragePoolDetailsDao storagePoolDetailsDao;
     @Inject
@@ -440,12 +442,30 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     protected void waitForLunCopy(String authHeader, String lunUuid, long deadline) {
+        long startTime = System.currentTimeMillis();
         while (true) {
-            Lun lun = sanFeignClient.getLunByUUID(authHeader, lunUuid, LUN_COPY_STATUS_QUERY);
-            if (lun == null) {
+            Lun lun = null;
+            FeignException notFoundException = null;
+            try {
+                lun = sanFeignClient.getLunByUUID(authHeader, lunUuid, LUN_COPY_STATUS_QUERY);
+            } catch (FeignException e) {
+                if (e.status() != 404) {
+                    throw e;
+                }
+                notFoundException = e;
+            }
+            if (lun == null && notFoundException == null) {
                 throw new CloudRuntimeException("Unable to retrieve ONTAP LUN copy status for Lun [" + lunUuid + "]");
             }
-            Lun.Source source = lun.getCopy() != null ? lun.getCopy().getSource() : null;
+            // ONTAP may take a while to expose a new LUN or its copy details. Tolerate that for a limited time.
+            if (lun == null || lun.getCopy() == null) {
+                if (System.currentTimeMillis() - startTime >= lunCopyStatusGraceMs) {
+                    throw new CloudRuntimeException("ONTAP did not return copy details for Lun [" + lunUuid + "] within "
+                            + (lunCopyStatusGraceMs / 1000) + "s", notFoundException);
+                }
+                logger.warn("ONTAP has not returned copy details for Lun [{}] yet, will retry", lunUuid);
+            }
+            Lun.Source source = lun != null && lun.getCopy() != null ? lun.getCopy().getSource() : null;
             Lun.Progress progress = source != null ? source.getProgress() : null;
             // A missing progress object means ONTAP has not reported the copy yet. Keep waiting.
             if (progress != null && Integer.valueOf(100).equals(progress.getPercentComplete())) {
