@@ -65,6 +65,7 @@ ISCSI_SUITES=(
     "iSCSI pool lifecycle|iscsi_workflow|${ONTAP_DIR}/iscsi/pool/test_pool_lifecycle.py"
     "iSCSI pool with volumes|iscsi_with_volumes|${ONTAP_DIR}/iscsi/pool/test_pool_with_volumes.py"
     "iSCSI volume lifecycle|iscsi_volume|${ONTAP_DIR}/iscsi/volume/test_volume_lifecycle.py"
+    "iSCSI QoS offerings|iscsi_qos|${ONTAP_DIR}/iscsi/qos/test_qos_offerings.py"
     "iSCSI zone-scoped pool|iscsi_zone_pool|${ONTAP_DIR}/iscsi/pool/test_zone_scoped_pool.py"
     "iSCSI VM volume workflow|iscsi_vm_workflow|${ONTAP_DIR}/iscsi/instance/test_vm_volume_attach.py"
     "iSCSI template cache negative|iscsi_template_cache_negative|${ONTAP_DIR}/iscsi/template/test_template_cache_negative.py"
@@ -74,6 +75,7 @@ NFS3_SUITES=(
     "NFS3 pool lifecycle|nfs3_workflow|${ONTAP_DIR}/nfs3/pool/test_pool_lifecycle.py"
     "NFS3 pool with volumes|nfs3_with_volumes|${ONTAP_DIR}/nfs3/pool/test_pool_with_volumes.py"
     "NFS3 volume lifecycle|nfs3_volume|${ONTAP_DIR}/nfs3/volume/test_volume_lifecycle.py"
+    "NFS3 QoS offerings|nfs3_qos|${ONTAP_DIR}/nfs3/qos/test_qos_offerings.py"
     "NFS3 zone-scoped pool|zone_pool|${ONTAP_DIR}/nfs3/pool/test_zone_scoped_pool.py"
     "NFS3 VM volume attach|vm_volume_workflow|${ONTAP_DIR}/nfs3/instance/test_vm_volume_attach.py"
     "NFS3 template cache negative|nfs3_template_cache_negative|${ONTAP_DIR}/nfs3/template/test_template_cache_negative.py"
@@ -260,7 +262,8 @@ run_group() {
     set +e
     $PYTHON "$NOSE_RUNNER" --with-marvin --marvin-config="$CFG" "$file" -a "tags=${tag}" -v -s 2>&1 | tee "$tmpout"
     rc=${PIPESTATUS[0]}
-    set -e
+    # Stay +e: a missing "Final results" line makes grep return 1, and set -e
+    # would abort the rest of the protocol batch (including later suites).
     out=$(cat "$tmpout")
 
     log_folder=$(echo "$out" | grep "Final results are now copied to" | sed 's/.*copied to: //; s/ ===.*//' | tr -d '[:space:]')

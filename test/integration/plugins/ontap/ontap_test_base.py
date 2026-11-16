@@ -537,7 +537,8 @@ class OntapRestClient:
         """Return the ONTAP LUN record for the given full path, or None."""
         data = self._get("/storage/luns",
                          params={"svm.name": svm_name, "name": lun_path,
-                                 "fields": "name,uuid,enabled,status,space.size"})
+                                 "fields": "name,uuid,qos_policy,enabled,"
+                                           "status,space.size"})
         records = data.get("records", [])
         return records[0] if records else None
 
@@ -591,6 +592,81 @@ class OntapRestClient:
             return []
         return [r.get("name", "") for r in resp.get("records", [])
                 if r.get("name") not in (".", "..")]
+
+    def get_nfs_file(self, vol_name, file_name):
+        """Return one FlexVol file, including its QoS policy, or None."""
+        vol = self.get_volume(vol_name)
+        if not vol or not vol.get("uuid") or not file_name:
+            return None
+        encoded = quote(str(file_name), safe="")
+        try:
+            resp = self._get(
+                "/storage/volumes/%s/files/%s" % (vol["uuid"], encoded),
+                params={
+                    "fields": "name,path,qos_policy",
+                    "return_metadata": "true",
+                },
+            )
+        except Exception:
+            resp = None
+        record = self._nfs_file_record(resp, file_name)
+        if record is not None:
+            return record
+        try:
+            resp = self._get(
+                "/storage/volumes/%s/files" % vol["uuid"],
+                params={
+                    "path": "/",
+                    "name": str(file_name),
+                    "fields": "name,path,qos_policy",
+                    "max_records": "20",
+                },
+            )
+        except Exception:
+            return None
+        return self._nfs_file_record(resp, file_name)
+
+    def _nfs_file_record(self, resp, file_name):
+        if not isinstance(resp, dict):
+            return None
+        records = resp.get("records")
+        if records is None and (
+            resp.get("path") or resp.get("name") or resp.get("qos_policy")
+        ):
+            records = [resp]
+        wanted = str(file_name)
+        for record in records or []:
+            if record.get("name") == wanted or record.get("path") == wanted:
+                return record
+        if records and len(records) == 1:
+            return records[0]
+        return None
+
+    def get_qos_policy(self, svm_name, policy_name):
+        """Return the named SVM QoS policy, or None when ONTAP has no match."""
+        data = self._get(
+            "/storage/qos/policies",
+            params={
+                "svm.name": svm_name,
+                "name": policy_name,
+                "fields": "name,uuid,object_count,fixed",
+            },
+        )
+        records = data.get("records", [])
+        return records[0] if records else None
+
+    def is_all_flash(self):
+        """True when every cluster node reports is_all_flash_optimized."""
+        data = self._get(
+            "/cluster/nodes",
+            params={"fields": "name,is_all_flash_optimized"},
+        )
+        records = [r for r in data.get("records", []) if r]
+        if not records:
+            raise RuntimeError(
+                "ONTAP returned no cluster nodes; cannot tell AFF from FAS"
+            )
+        return all(bool(node.get("is_all_flash_optimized")) for node in records)
 
     def _unmap_lun(self, svm_name, lun_uuid):
         """Best-effort removal of all lun-maps for a LUN UUID."""
@@ -1049,7 +1125,10 @@ class OntapTestBase(cloudstackTestCase):
         so_cmd = listServiceOfferingsAPI.listServiceOfferingsCmd()
         offerings = cls.apiClient.listServiceOfferings(so_cmd) or []
         if offerings:
-            offerings.sort(key=lambda s: getattr(s, "memory", 9999))
+            # Custom offerings report memory=None. getattr's default is
+            # used only when the attribute is missing, so treat None as large
+            # and keep a real offering first.
+            offerings.sort(key=lambda s: getattr(s, "memory", None) or 9999)
             cls.service_offering_id = offerings[0].id
 
         cls.network_id = None
