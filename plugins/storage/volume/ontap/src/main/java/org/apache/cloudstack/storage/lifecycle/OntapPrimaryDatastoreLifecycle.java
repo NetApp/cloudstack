@@ -48,6 +48,7 @@ import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
+import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
@@ -191,13 +192,16 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
         int port;
         switch (protocol) {
             case NFS3:
+            case NFS4_1: {
+                NfsProtocolSpec spec = NfsProtocolSpec.forProtocol(protocol);
                 parameters.setType(Storage.StoragePoolType.NetworkFilesystem);
                 path = OntapStorageConstants.SLASH + storagePoolName;
-                port = OntapStorageConstants.NFS3_PORT;
-                // Force NFSv3 for ONTAP managed storage to avoid NFSv4 ID mapping issues
-                details.put(ApiConstants.NFS_MOUNT_OPTIONS, OntapStorageConstants.NFS3_MOUNT_OPTIONS_VER_3);
-                logger.info("Setting NFS path for storage pool: " + path + ", port: " + port + " with mount option: vers=3");
+                port = OntapStorageConstants.NFS_PORT;
+                details.put(ApiConstants.NFS_MOUNT_OPTIONS, spec.mountOptions());
+                logger.info("Setting NFS path for storage pool: " + path + ", port: " + port
+                        + " with mount option: " + spec.mountOptions());
                 break;
+            }
             case ISCSI:
                 parameters.setType(Storage.StoragePoolType.OntapiSCSI);
                 path = storageStrategy.getStoragePath();
@@ -431,6 +435,7 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
                 }
                 break;
             case NFS3:
+            case NFS4_1:
                 String ip = "";
                 for (HostVO host : hosts) {
                     if (host != null) {
@@ -453,13 +458,14 @@ public class OntapPrimaryDatastoreLifecycle extends BasePrimaryDataStoreLifeCycl
     }
 
     /**
-     * Creates an NFS export policy (access group) on the ONTAP storage if the protocol is NFS3
-     * and there are eligible hosts. Skipped for iSCSI (igroups are created per-host in grantAccess).
+     * Creates an NFS export policy (access group) on the ONTAP storage for any NFS pool
+     * (NFSv3 or NFSv4.1) when there are eligible hosts. Skipped for iSCSI (igroups are
+     * created per-host in grantAccess).
      */
     private void createNfsAccessGroupIfNeeded(Map<String, String> details, List<String> hostsIdentifier,
                                               List<HostVO> hostsToConnect, Scope scope,
                                               StoragePoolVO storagePool, StorageStrategy strategy) {
-        if (!ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+        if (!NfsProtocolSpec.isNfs(details.get(OntapStorageConstants.PROTOCOL))) {
             return;
         }
         if (hostsIdentifier.isEmpty()) {

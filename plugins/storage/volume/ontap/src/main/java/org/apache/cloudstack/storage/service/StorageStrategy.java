@@ -306,9 +306,14 @@ public abstract class StorageStrategy {
             // Call the SVM API to check if the SVM exists
             Svm svm = new Svm();
             logger.info("Fetching the SVM details...");
+            // Request both the top-level nfs.enabled flag and the nested v41 flag so a single
+            // SVM GET gates NFSv3 and NFSv4.1 pool creation without a second REST round-trip.
             Map<String, Object> queryParams = Map.of(OntapStorageConstants.NAME, svmName, OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATES +
                     OntapStorageConstants.COMMA + OntapStorageConstants.STATE +
-                    OntapStorageConstants.COMMA +  OntapStorageConstants.NFS_ENABLED + OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI_ENABLED);
+                    OntapStorageConstants.COMMA + OntapStorageConstants.NFS_ENABLED +
+                    OntapStorageConstants.COMMA + OntapStorageConstants.SVM_FIELD_NFS_V41_ENABLED +
+                    OntapStorageConstants.COMMA + OntapStorageConstants.SVM_FIELD_NFS_V4_ID_DOMAIN +
+                    OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI_ENABLED);
             OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
                 svm = svms.getRecords().get(0);
@@ -325,6 +330,16 @@ public abstract class StorageStrategy {
             if (Objects.equals(storage.getProtocol(), ProtocolType.NFS3) && !svm.getNfsEnabled()) {
                 logger.error("NFS protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+            } else if (Objects.equals(storage.getProtocol(), ProtocolType.NFS4_1)) {
+                if (!svm.getNfsEnabled()) {
+                    logger.error("NFS protocol is not enabled on SVM " + svmName);
+                    throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
+                }
+                if (!svm.getNfsV41Enabled()) {
+                    logger.error("NFSv4.1 is not enabled on SVM " + svmName
+                            + " (nfs.protocol.v41_enabled=false). Enable it via PATCH /protocols/nfs/services/{uuid}.");
+                    throw new CloudRuntimeException("NFSv4.1 is not enabled on SVM " + svmName);
+                }
             } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("ISCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("ISCSI protocol is not enabled on SVM " + svmName);
@@ -717,7 +732,8 @@ public abstract class StorageStrategy {
                 logger.info("Retrieved iSCSI target IQN: {}", targetIqn);
                 return targetIqn;
 
-            } else if (storage.getProtocol() == ProtocolType.NFS3) {
+            } else if (storage.getProtocol() == ProtocolType.NFS3
+                    || storage.getProtocol() == ProtocolType.NFS4_1) {
                 // TODO: Implement NFS path retrieval logic
             } else {
                 throw new CloudRuntimeException("Unsupported protocol for path retrieval: " + storage.getProtocol());
@@ -761,6 +777,7 @@ public abstract class StorageStrategy {
             if (storage.getProtocol() != null) {
                 switch (storage.getProtocol()) {
                     case NFS3:
+                    case NFS4_1:
                         queryParams.put(OntapStorageConstants.SERVICES, OntapStorageConstants.DATA_NFS);
                         break;
                     case ISCSI:

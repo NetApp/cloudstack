@@ -21,5 +21,6 @@ package org.apache.cloudstack.storage.service.model;
 
 public enum ProtocolType {
         NFS3,
+        NFS4_1,
         ISCSI
 }

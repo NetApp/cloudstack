@@ -51,6 +51,8 @@ import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.cloudstack.storage.volume.VolumeObject;
@@ -617,10 +619,16 @@ public class UnifiedNASStrategy extends NASStrategy {
             exportClients.add(exportClient);
         }
         exportRule.setClients(exportClients);
-        exportRule.setProtocols(List.of(ExportRule.ProtocolsEnum.NFS3));
-        exportRule.setRoRule(List.of("sys"));
-        exportRule.setRwRule(List.of("sys"));
-        exportRule.setSuperuser(List.of("sys"));
+        NfsProtocolSpec nfsSpec = NfsProtocolSpec.forProtocol(storage.getProtocol());
+        exportRule.setProtocols(List.of(nfsSpec.exportToken()));
+        exportRule.setRoRule(List.of(OntapStorageConstants.EXPORT_AUTH_SYS));
+        exportRule.setRwRule(List.of(OntapStorageConstants.EXPORT_AUTH_SYS));
+        exportRule.setSuperuser(List.of(OntapStorageConstants.EXPORT_AUTH_SYS));
+        if (storage.getProtocol() == ProtocolType.NFS4_1) {
+            // Safety net when the SVM does not have v4_numeric_ids on and KVM-host idmapd
+            // domain does not match: root (uid 0) continues to work on the mount.
+            exportRule.setAnonymousUser(OntapStorageConstants.EXPORT_ANONYMOUS_ROOT);
+        }
         rules.add(exportRule);
 
         Svm svm = new Svm();

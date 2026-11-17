@@ -30,7 +30,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
-import org.apache.cloudstack.storage.service.model.ProtocolType;
+import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -101,7 +101,7 @@ public class OntapHostListener implements HypervisorHostListener {
                 return false;
             }
 
-            // Update NFS export policy for this connected host when the pool protocol is NFS3.
+            // Update NFS export policy for this connected host when the pool protocol is NFS (v3 or v4.1).
             updateNfsExportPolicyForConnectedHostIfNeeded(poolId, hostId, host, detailsMap);
 
             // Create the ModifyStoragePoolCommand to send to the agent
@@ -173,11 +173,11 @@ public class OntapHostListener implements HypervisorHostListener {
     }
 
     private void updateNfsExportPolicyForConnectedHostIfNeeded(long poolId, long hostId, Host host, Map<String, String> detailsMap) {
-        if (!ProtocolType.NFS3.name().equalsIgnoreCase(detailsMap.get(OntapStorageConstants.PROTOCOL))) {
+        if (!NfsProtocolSpec.isNfs(detailsMap.get(OntapStorageConstants.PROTOCOL))) {
             return;
         }
 
-        if (!isNfs3EnabledOnHost(host)) {
+        if (!isNfsEnabledOnHost(host)) {
             throw new CloudRuntimeException("NFS protocol is not enabled on host with id: " + hostId);
         }
 
@@ -190,14 +190,19 @@ public class OntapHostListener implements HypervisorHostListener {
         logger.info("hostConnect: updateNfsExportPolicyForConnectedHostIfNeeded: Updated NFS export policy rules for host {} on storage pool {}", host.getName(), poolId);
     }
 
-    private boolean isNfs3EnabledOnHost(Host host) {
+    /**
+     * The eligibility check is identical for NFSv3 and NFSv4.1 — presence of a storage or
+     * private IP the SVM export rule can match on. Kernel version negotiation happens
+     * at mount time on the KVM host.
+     */
+    private boolean isNfsEnabledOnHost(Host host) {
         if (host == null) {
             return false;
         }
 
         String storageIp = host.getStorageIpAddress() != null ? host.getStorageIpAddress().trim() : "";
         if (storageIp.isEmpty() && StringUtils.isBlank(host.getPrivateIpAddress())) {
-            logger.warn("isNfs3EnabledOnHost: Host {} is not eligible for NFS3 protocol: both storage IP and private IP are empty",
+            logger.warn("isNfsEnabledOnHost: Host {} is not eligible for NFS: both storage IP and private IP are empty",
                     host.getId());
             return false;
         }
@@ -252,13 +257,13 @@ public class OntapHostListener implements HypervisorHostListener {
                 return;
             }
 
-            // Skip non-NFS3 pools; Currently, for iSCSI type, iGroup rules are being handled as part of revokeAccess in OntapPrimaryDataStoreDriver, so no need to handle here.
-            if (!ProtocolType.NFS3.name().equalsIgnoreCase(detailsMap.get(OntapStorageConstants.PROTOCOL))) {
+            // Skip non-NFS pools; for iSCSI, iGroup rules are handled in revokeAccess inside the driver.
+            if (!NfsProtocolSpec.isNfs(detailsMap.get(OntapStorageConstants.PROTOCOL))) {
                 return;
             }
 
             logger.info("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Removing export policy rule for host {} from storage pool {}", host.getName(), pool.getName());
-            if (!isNfs3EnabledOnHost(host)) {
+            if (!isNfsEnabledOnHost(host)) {
                 logger.warn("hostAboutToBeRemoved: removeHostFromOntapPoolIfNeeded: Skipping NFS export policy removal for host {} on pool {} as host is not NFS-enabled",
                         host.getId(), pool.getId());
                 return;

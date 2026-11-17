@@ -49,6 +49,7 @@ public class StorageProviderFactory {
             protocol);
         switch (protocol) {
             case NFS3:
+            case NFS4_1:
                 UnifiedNASStrategy unifiedNASStrategy = new UnifiedNASStrategy(ontapStorage);
                 ComponentContext.inject(unifiedNASStrategy);
                 return unifiedNASStrategy;

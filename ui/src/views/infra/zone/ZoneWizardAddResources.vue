@@ -1059,9 +1059,10 @@ export default {
       if (provider === 'NetApp ONTAP') {
         this.primaryStorageProtocols = [
           { id: 'NFS3', description: 'NFS3' },
+          { id: 'NFS4_1', description: 'NFS 4.1' },
           { id: 'ISCSI', description: 'ISCSI' }
         ]
-        if (!['NFS3', 'ISCSI'].includes(this.prefillContent?.primaryStorageProtocol)) {
+        if (!['NFS3', 'NFS4_1', 'ISCSI'].includes(this.prefillContent?.primaryStorageProtocol)) {
           this.$emit('fieldsChanged', { primaryStorageProtocol: 'NFS3' })
         }
         return

@@ -18,6 +18,7 @@
  */
 package org.apache.cloudstack.storage.driver;
 
+import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
@@ -80,6 +81,7 @@ import org.apache.cloudstack.storage.service.UnifiedNASStrategy;
 import org.apache.cloudstack.storage.service.UnifiedSANStrategy;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
+import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.to.SnapshotObjectTO;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
@@ -277,7 +279,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             logger.info("createAsync: Created LUN [{}] for volume [{}]. LUN mapping will occur during grantAccess() to per-host igroup.",
                     lunName, volumeVO.getId());
             createCmdResult = new CreateCmdResult(lunName, new Answer(null, true, null));
-        } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+        }else if (NfsProtocolSpec.isNfs(details.get(OntapStorageConstants.PROTOCOL))) {
             createCmdResult = new CreateCmdResult(volInfo.getUuid(), new Answer(null, true, null));
             logger.info("createAsync: Managed NFS volume [{}] with path [{}] associated with pool {}",
                     volumeVO.getId(), volInfo.getUuid(), storagePool.getId());
@@ -1279,8 +1281,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
                 if (ProtocolType.ISCSI.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
                     // Only retrieve LUN name for iSCSI volumes
                     grantAccessIscsi(host, volumeVO, details, svmName, storagePool);
-                } else if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
-                    // For NFS, no access grant needed - file is accessible via mount
+                } else if (NfsProtocolSpec.isNfs(details.get(OntapStorageConstants.PROTOCOL))) {
+                    // For NFS (v3 or v4.1), no access grant needed - file is accessible via mount
                     logger.debug("grantAccess: NFS volume [{}], no igroup mapping required", volumeVO.getUuid());
                     return true;
                 }
@@ -1948,8 +1950,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      * @return The ONTAP path (file path for NFS, LUN name for iSCSI)
      */
     private String resolveVolumePathOnOntap(VolumeVO volumeVO, String protocol, Map<String, String> poolDetails) {
-        if (ProtocolType.NFS3.name().equalsIgnoreCase(protocol)) {
-            // For NFS, use the volume's file path
+        if (NfsProtocolSpec.isNfs(protocol)) {
+            // For NFS (v3 or v4.1), use the volume's file path
             return volumeVO.getPath();
         } else if (ProtocolType.ISCSI.name().equalsIgnoreCase(protocol)) {
             // For iSCSI, retrieve the LUN name from volume details
@@ -2134,6 +2136,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
         switch (protocolType) {
             case NFS3:
+            case NFS4_1:
                 cloudStackVolumeDeleteRequest = new CloudStackVolume();
                 cloudStackVolumeDeleteRequest.setDatastoreId(String.valueOf(storagePool.getId()));
                 cloudStackVolumeDeleteRequest.setVolumeInfo(volumeInfo);

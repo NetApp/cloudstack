@@ -47,6 +47,12 @@ public class Svm {
     @JsonIgnore
     private Boolean nfsEnabled = null;
 
+    @JsonIgnore
+    private Boolean nfsV41Enabled = null;
+
+    @JsonIgnore
+    private String nfsV4IdDomain = null;
+
     @JsonProperty("aggregates")
     private List<Aggregate> aggregates = null;
 
@@ -84,8 +90,38 @@ public class Svm {
     }
 
     @JsonSetter("nfs")
+    @SuppressWarnings("unchecked")
     public void setNfs(Map<String, Object> nfs) {
-        this.nfsEnabled = nfs != null ? Boolean.TRUE.equals(nfs.get("enabled")) : false;
+        if (nfs == null) {
+            this.nfsEnabled = false;
+            return;
+        }
+        this.nfsEnabled = Boolean.TRUE.equals(nfs.get("enabled"));
+        Object protocol = nfs.get("protocol");
+        if (protocol instanceof Map) {
+            Map<String, Object> proto = (Map<String, Object>) protocol;
+            this.nfsV41Enabled = Boolean.TRUE.equals(proto.get("v41_enabled"));
+        }
+        Object idDomain = nfs.get("v4_id_domain");
+        if (idDomain instanceof String) {
+            this.nfsV4IdDomain = (String) idDomain;
+        }
+    }
+
+    public Boolean getNfsV41Enabled() {
+        return Boolean.TRUE.equals(nfsV41Enabled);
+    }
+
+    public void setNfsV41Enabled(Boolean nfsV41Enabled) {
+        this.nfsV41Enabled = nfsV41Enabled;
+    }
+
+    public String getNfsV4IdDomain() {
+        return nfsV4IdDomain;
+    }
+
+    public void setNfsV4IdDomain(String nfsV4IdDomain) {
+        this.nfsV4IdDomain = nfsV4IdDomain;
     }
 
     public Boolean getIscsiEnabled() {

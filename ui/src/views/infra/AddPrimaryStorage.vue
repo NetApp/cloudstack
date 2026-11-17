@@ -839,7 +839,7 @@ export default {
         this.protocols = ['FiberChannel']
         this.form.protocol = 'FiberChannel'
       } else if (value === 'NetApp ONTAP') {
-        this.protocols = ['NFS3', 'ISCSI']
+        this.protocols = ['NFS3', 'NFS4_1', 'ISCSI']
         this.form.protocol = 'NFS3'
       } else {
         this.fetchHypervisor(value)

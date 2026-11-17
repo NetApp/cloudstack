@@ -25,7 +25,11 @@ public class OntapStorageConstants {
 
     /** Same as {@link DataStoreProvider#ONTAP_PLUGIN_NAME}; retained for existing ONTAP plugin call sites. */
     public static final String ONTAP_PLUGIN_NAME = DataStoreProvider.ONTAP_PLUGIN_NAME;
-    public static final int NFS3_PORT = 2049;
+    /** NFS wire port — identical for v3 and v4.1. */
+    public static final int NFS_PORT = 2049;
+    /** @deprecated use {@link #NFS_PORT}; kept for source compatibility. */
+    @Deprecated
+    public static final int NFS3_PORT = NFS_PORT;
     public static final int ISCSI_PORT = 3260;
 
     public static final String NFS = "nfs";
@@ -49,6 +53,18 @@ public class OntapStorageConstants {
     public static final String RUNNING = "running";
     public static final String EXPORT = "export";
     public static final String NFS3_MOUNT_OPTIONS_VER_3 = "vers=3";
+    public static final String NFS4_1_MOUNT_OPTIONS = "vers=4.1";
+
+    /** SVM REST field: top-level NFS enabled flag (any version). */
+    public static final String SVM_FIELD_NFS_ENABLED = "nfs.enabled";
+    /** SVM REST field: NFSv4.1 protocol enablement nested under {@code nfs.protocol}. */
+    public static final String SVM_FIELD_NFS_V41_ENABLED = "nfs.protocol.v41_enabled";
+    /** SVM REST field: ID-mapping domain used when numeric-ids is off. */
+    public static final String SVM_FIELD_NFS_V4_ID_DOMAIN = "nfs.v4_id_domain";
+    /** Export rule superuser/ro/rw auth value. */
+    public static final String EXPORT_AUTH_SYS = "sys";
+    /** Export rule anonymous-user fallback for NFSv4.1 pools (root). */
+    public static final String EXPORT_ANONYMOUS_ROOT = "0";
 
     public static final int ONTAP_PORT = 443;
 
