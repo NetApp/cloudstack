@@ -178,7 +178,7 @@ public class OntapStorageConstants {
     public static final int ONTAP_FLEXVOL_RESOLVE_MAX_RETRIES = 30;
     /** GET-by-UUID retries after LUN clone response. */
     public static final int ONTAP_LUN_CLONE_GET_MAX_RETRIES = 10;
-    public static final int ONTAP_LUN_CLONE_GET_POLL_INTERVAL_MS = 1000;
+    public static final int ONTAP_LUN_CLONE_GET_POLL_INTERVAL_MS = 2000;
 
     /** vm_snapshot_details key for ONTAP FlexVolume-level VM snapshots. */
     public static final String ONTAP_FLEXVOL_SNAPSHOT = "ontapFlexVolSnapshot";
