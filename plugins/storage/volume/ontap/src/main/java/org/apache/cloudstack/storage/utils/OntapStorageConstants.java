@@ -136,7 +136,6 @@ public class OntapStorageConstants {
     public static final String QOS_POLICY_NAME_IOPS = "iops_";
     public static final String UUID = "uuid";
     public static final String QOS_POLICY_OBJECT_COUNT_FIELDS = "uuid,name,object_count";
-    public static final String LOGICAL_UNIT_NUMBER = "logical_unit_number";
     public static final String IGROUP_DOT_NAME = "igroup.name";
     public static final String IGROUP_DOT_UUID = "igroup.uuid";
     public static final String UNDERSCORE = "_";

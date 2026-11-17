@@ -1035,9 +1035,8 @@ public abstract class StorageStrategy {
      *     //TODO  for NFS 3.0 and NFS 4.1 protocols (e.g., export rule management)
      *     //TODO  for Nvme/TCP and Nvme/FC protocols
      * @param values map including SVM name, LUN name, and igroup name (for SAN) or equivalent for NAS
-     * @return String containing logical unit number for the new/existing mapping (SAN) or relevant info for NAS
      */
-    abstract public String enableLogicalAccess(Map<String,String> values);
+    abstract public void enableLogicalAccess(Map<String,String> values);
 
     /**
      * Method encapsulates the behavior based on the opted protocol in subclasses
@@ -1050,9 +1049,9 @@ public abstract class StorageStrategy {
      * Method encapsulates the behavior based on the opted protocol in subclasses
      *     lunMap lookup for iSCSI/FC protocols (GET-only, no side-effects)
      * @param values map with SVM name, LUN name, and igroup name (for SAN) or equivalent for NAS
-     * @return String containing logical unit number if mapping exists; otherwise null
+     * @return true if the mapping exists; otherwise false
      */
-    abstract public String getLogicalAccess(Map<String, String> values);
+    abstract public boolean getLogicalAccess(Map<String, String> values);
 
     // ── FlexVolume Snapshot accessors ────────────────────────────────────────
 

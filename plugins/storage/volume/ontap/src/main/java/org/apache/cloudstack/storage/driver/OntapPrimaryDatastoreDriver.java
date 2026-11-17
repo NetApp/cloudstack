@@ -1325,10 +1325,10 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ensureAccessGroupForHost(sanStrategy, host, storagePool, svmName, accessGroupName);
 
         // Create or retrieve existing LUN mapping.
-        String lunNumber = sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
+        sanStrategy.ensureLunMapped(svmName, cloudStackVolumeName, accessGroupName);
         String lunWwid = resolveVolumeLunWwid(sanStrategy, svmName, cloudStackVolumeName, volumeVO.getId());
-        logger.debug("grantAccessIscsi: LUN [{}] mapped to igroup [{}] as logical unit number [{}], WWID [{}]",
-                cloudStackVolumeName, accessGroupName, lunNumber, lunWwid);
+        logger.debug("grantAccessIscsi: LUN [{}] mapped to igroup [{}], WWID [{}]",
+                cloudStackVolumeName, accessGroupName, lunWwid);
 
         // Update volume path if changed (e.g. the WWID was not yet known for a pre-existing volume)
         String iscsiPath = buildIscsiPath(storagePool, lunWwid);
@@ -1343,7 +1343,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
      *
      * <p>Called by the framework from {@code copyTemplateToManagedTemplateVolume} just before it
      * issues the {@code CopyCommand}. That method reads {@code managedStoreTarget} from the pool
-     * details <em>before</em> this call, when the LUN number does not exist yet, so the stale
+     * details <em>before</em> this call, when the LUN WWID is not yet known, so the stale
      * value is corrected here. The datastore details are re-read when the command is built, so the
      * update lands in time.</p>
      */
@@ -1365,13 +1365,12 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
 
         boolean lunMapped = false;
         try {
-            String lunNumber = sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
+            sanStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
             lunMapped = true;
             // The template cache LUN has no volume_details row to cache the WWID in, and this runs
             // once per template per pool, so it is fetched from the array each time.
             String lunWwid = fetchLunWwid(sanStrategy, svmName, lunName);
-            logger.debug("grantAccessTemplate: template cache LUN [{}] mapped as logical unit number [{}], WWID [{}]",
-                    lunName, lunNumber, lunWwid);
+            logger.debug("grantAccessTemplate: template cache LUN [{}] mapped, WWID [{}]", lunName, lunWwid);
             String iscsiPath = buildIscsiPath(storagePool, lunWwid);
 
             templatePoolRef.setInstallPath(iscsiPath);
