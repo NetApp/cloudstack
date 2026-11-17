@@ -18,7 +18,6 @@
  */
 package org.apache.cloudstack.storage.driver;
 
-import org.apache.cloudstack.storage.service.model.NfsProtocolSpec;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.to.DataObjectType;
@@ -1079,7 +1078,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             logger.info("copySnapshotToTemporaryVolume: Cloning CS snapshot [{}] into temporary volume [{}] on pool [{}] for template creation",
                     srcData.getId(), volInfo.getId(), storagePool.getId());
             CloudStackVolume cloned = cloneCloudStackVolumeFromSnapshot(storagePool, volInfo, details, srcData.getId(), false);
-            if (ProtocolType.NFS3.name().equalsIgnoreCase(details.get(OntapStorageConstants.PROTOCOL))) {
+            if (NfsProtocolSpec.isNfs(details.get(OntapStorageConstants.PROTOCOL))) {
                 volumeVO.setPath(volInfo.getUuid());
             }
             recordCreatedVolume(storagePool, volInfo, volumeVO, details, cloned);
@@ -2185,6 +2184,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
         switch (protocolType) {
             case NFS3:
+            case NFS4_1:
                 FileInfo fileInfo = new FileInfo();
                 fileInfo.setQosPolicy(qosPolicyReference);
                 resizeRequest.setFile(fileInfo);
@@ -2222,6 +2222,7 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
         ProtocolType protocolType = ProtocolType.valueOf(protocol);
         switch (protocolType) {
             case NFS3:
+            case NFS4_1:
                 CloudStackVolume nfsRequest = new CloudStackVolume();
                 nfsRequest.setDatastoreId(String.valueOf(storagePool.getId()));
                 nfsRequest.setFlexVolumeUuid(details.get(OntapStorageConstants.VOLUME_UUID));
