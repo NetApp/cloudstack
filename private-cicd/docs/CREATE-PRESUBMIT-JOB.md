@@ -19,12 +19,73 @@
 
 # Create the auto-triggered ONTAP presubmit job
 
-This guide creates **one** Pipeline job, `cloudstack-ontap-presubmit`. Timer
-builds poll GitHub every five minutes and self-queue one worker build for each
-new eligible PR head SHA. Worker builds compile and package concurrently, then
-wait for an available `cloudstack-presubmit-vm` Lockable Resource before
-integration. Until `feature/CSTACKEX-223` is merged, the job loads trusted CI
-from that branch. After merge, change only **Branches to build** to `*/main`.
+The current job is the multibranch folder `cloudstack-ontap-presubmit-mb`.
+It scans GitHub about once a minute and creates one child job for every open
+non-draft origin pull request into `main`. Remote Jenkinsfile Provider loads
+`private-cicd/Jenkinsfile` from the trusted CI branch. Match branches stays off.
+Draft pull requests get no job. Do not add a webhook.
+
+The trusted CI branch is `main`. The Jenkinsfile and the CI scripts of every pull
+request build come from the trusted branch, never from the pull request, so a PR
+that changes `private-cicd/` is built with the unchanged trusted copy. Its
+changes apply only after they are merged. To try a Jenkinsfile or script change
+before the merge, run the manual job (`SOURCE_MODE=pull_request` or `branch`)
+against the feature branch.
+
+The CI scripts branch is chosen by `trustedCiBranch()` in the Jenkinsfile:
+
+1. the `PRESUBMIT_TRUSTED_CI_BRANCH` environment variable, if the job or folder
+   defines it;
+2. for the manual job, the branch of its own Pipeline SCM;
+3. otherwise `main`.
+
+A multibranch pull request build cannot read its branch from `scm`, because
+there `scm` is the pull request's own code. The value must therefore equal the
+Remote Jenkinsfile Provider branch. When the provider branch is not `main`, set
+`PRESUBMIT_TRUSTED_CI_BRANCH` to the same branch in the same step. A mismatch
+shows as `NOT_BUILT` with "pull request lookup failed", because the scripts
+are missing on the other branch.
+
+During the PR-119 pilot the provider branch was `feature/CSTACKEX-340`, the
+folder include filter was `PR-119`, and `PRESUBMIT_TRUSTED_CI_BRANCH` had to name
+that branch. Do not switch the provider branch to `main` until PR-119 is merged:
+the previous `main` Jenkinsfile knows nothing about `CHANGE_ID` and defaults to
+`SOURCE_MODE=discover`. After the merge, change the provider branch to `main`,
+remove `PRESUBMIT_TRUSTED_CI_BRANCH` and change the filter to `PR-*`. Keep
+`feature/CSTACKEX-340` until then.
+
+A pull request that is closed or merged is not built, even if someone selects
+Rebuild on an orphaned item: the build ends `NOT_BUILT` with "pull request is not
+open".
+
+The numbered sections below that create a single Pipeline job with a five-minute
+`SOURCE_MODE=discover` timer (11 to 16) are retired. Sections on plugins,
+credentials, the inventory, Lockable Resources, and the GitHub App still apply.
+Keep `cloudstack-ontap-presubmit` disabled after the folder works. Do not delete
+the GitHub App, credentials, or the VM lock until a multibranch pull request has
+passed.
+
+## Multibranch folder configuration
+
+Open `cloudstack-ontap-presubmit-mb` > **Configure**:
+
+| Setting | Value |
+| --- | --- |
+| Branch Source | GitHub, credential `cloudstack-presubmit-github-app`, repository `NetApp/cloudstack` |
+| Behaviours | Discover pull requests from origin only, strategy **The current pull request revision**; remove branch and fork discovery |
+| Filter by name | `PR-*` (`PR-119` during the pilot) |
+| Build Configuration | **by Remote Jenkinsfile Provider**, repository `https://github.com/NetApp/cloudstack.git`, branch `main` (`feature/CSTACKEX-340` during the pilot), file `private-cicd/Jenkinsfile`, **Match branches off** |
+| Scan Repository Triggers | Periodically, 1 to 5 minutes |
+| Orphaned items | Keep 14 days, 50 items |
+
+Run **Scan Repository Now** and expect one child for each open non-draft pull
+request into `main` (only `PR-119` during the pilot). The first build may
+stop on Script Security. Approve only signatures requested by this Jenkinsfile
+and rebuild.
+
+The single-branch Pipeline job is now only the manual job for
+`SOURCE_MODE=branch` and `diagnose`. Point it at the same trusted branch, add no
+triggers, and never run `SOURCE_MODE=discover`.
 
 Do not create a GitHub repository webhook. OpenLab Jenkins is not reachable
 from GitHub.com, so inbound `pull_request` deliveries fail with
@@ -36,8 +97,8 @@ item for this presubmit: that would run `Jenkinsfile` from the PR branch. This
 design loads trusted CI from a fixed branch and checks the PR SHA out
 separately.
 
-Do not create a separate poller, Multibranch Pipeline, or second production
-copy of this job.
+The multibranch folder above is the production job. Do not create another
+poller or a second production copy.
 
 This guide starts before the Jenkins item exists and ends after polling and
 required Check have been verified. Follow sections 1 through 21 in order. Do

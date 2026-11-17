@@ -428,6 +428,25 @@ until systemctl is-active --quiet libvirtd; do
     sleep 1
     libvirtd_wait=$((libvirtd_wait + 1))
 done
+# Functional-test coverage: the ONTAP plugin runs inside the management server
+# JVM, so the JaCoCo agent is attached to it before its first start. A problem
+# here only loses the coverage data, it never fails the integration run.
+if [[ -n "${JACOCO_AGENT_JAR:-}" ]]; then
+    defaults_file=/etc/default/cloudstack-management
+    if [[ ! -f "$JACOCO_AGENT_JAR" ]]; then
+        echo "JACOCO_AGENT_JAR $JACOCO_AGENT_JAR does not exist; functional coverage is off." >&2
+    elif ! grep -q '^JAVA_OPTS="' "$defaults_file"; then
+        echo "No JAVA_OPTS line in $defaults_file; functional coverage is off." >&2
+    elif grep -q 'jacocoagent' "$defaults_file"; then
+        echo "The JaCoCo agent is already configured in $defaults_file."
+    else
+        install -d -m 755 /opt/jacoco
+        install -m 644 "$JACOCO_AGENT_JAR" /opt/jacoco/jacocoagent.jar
+        agent_option="-javaagent:/opt/jacoco/jacocoagent.jar=output=tcpserver,address=127.0.0.1,port=${COVERAGE_PORT:-36320},includes=org.apache.cloudstack.storage.*"
+        sed -i "s|^JAVA_OPTS=\"\(.*\)\"\$|JAVA_OPTS=\"\1 ${agent_option}\"|" "$defaults_file"
+        echo "JaCoCo agent added to the management server JAVA_OPTS."
+    fi
+fi
 db_trace_state "before first start of cloudstack-management"
 systemctl start cloudstack-management
 systemctl restart cloudstack-agent

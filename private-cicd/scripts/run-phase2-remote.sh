@@ -105,6 +105,17 @@ fi
 mkdir -p "$assets_root/test/integration/plugins" "$assets_root/marvin"
 cp -a "$SOURCE_DIR/test/integration/plugins/ontap" "$assets_root/test/integration/plugins/"
 cp "${marvin_archives[0]}" "$assets_root/marvin/"
+
+# Functional-test coverage needs the JaCoCo agent and command line on the VM.
+# If they cannot be fetched the run goes on without coverage.
+functional_coverage="${FUNCTIONAL_COVERAGE:-false}"
+if [[ "$functional_coverage" == "true" ]]; then
+    if ! "$SCRIPT_DIR/fetch-jacoco.sh" "$assets_root/jacoco"; then
+        echo "Could not fetch the JaCoCo jars; functional coverage is off." >&2
+        rm -rf "$assets_root/jacoco"
+        functional_coverage=false
+    fi
+fi
 tar -czf "$assets_archive" -C "$assets_root" .
 
 remote="${VM_SSH_USER}@${VM_HOST}"
@@ -189,8 +200,8 @@ ssh "${ssh_options[@]}" "$remote" \
      chmod +x '$remote_scripts/'*.sh"
 
 printf -v remote_command \
-    'PHASE2_ROOT=%q BRIDGE=%q %q/run-phase2-vm.sh' \
-    "$remote_root" "$BRIDGE" "$remote_scripts"
+    'PHASE2_ROOT=%q BRIDGE=%q FUNCTIONAL_COVERAGE=%q %q/run-phase2-vm.sh' \
+    "$remote_root" "$BRIDGE" "$functional_coverage" "$remote_scripts"
 
 set +e
 ssh "${ssh_options[@]}" "$remote" "$remote_command"

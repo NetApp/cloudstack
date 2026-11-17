@@ -125,7 +125,6 @@ from marvin.cloudstackAPI import (
     listNetworks as listNetworksAPI,
     listVirtualMachines as listVirtualMachinesAPI,
     listVolumes as listVolumesAPI,
-    startVirtualMachine as startVirtualMachineAPI,
     stopVirtualMachine as stopVirtualMachineAPI,
 )
 from marvin.lib.base import ServiceOffering, Snapshot, StoragePool, VmSnapshot, Volume
@@ -618,6 +617,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
                 VmSnapshot.deleteVMSnapshot(self.apiClient, snap_id)
             except Exception as exc:
                 logger.warning("tearDown: VM snapshot %s: %s" % (snap_id, exc))
+        self._delete_failed_vm_snapshots()
         for snap_id in self._volume_snapshot_ids:
             try:
                 Snapshot({"id": snap_id}).delete(self.apiClient)
@@ -798,14 +798,6 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         self.apiClient.stopVirtualMachine(cmd)
         self._poll_vm_state(vm_id, "Stopped", timeout=600)
 
-    def _start_vm(self, vm_id):
-        if (self._vm_state(vm_id) or "").lower() == "running":
-            return
-        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
-        cmd.id = vm_id
-        self.apiClient.startVirtualMachine(cmd)
-        self._poll_vm_state(vm_id, "Running", timeout=900)
-
     def _root_volume(self, vm_id):
         cmd = listVolumesAPI.listVolumesCmd()
         cmd.virtualmachineid = vm_id
@@ -901,6 +893,30 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
 
     def _vm_snapshots_of(self, vm_id):
         return VmSnapshot.list(self.apiClient, virtualmachineid=vm_id, listall=True) or []
+
+    def _delete_failed_vm_snapshots(self):
+        """Delete VM snapshots left in Error by a rejected create.
+
+        A rejected createVMSnapshot (ONTAP refusing while a revert's clones
+        exist) leaves its record behind with no id the test ever saw. Any
+        Instance Snapshot, even in Error, blocks detach, resize and destroy.
+        """
+        for vm in (self.__class__.vm, self.__class__.vm2):
+            if vm is None:
+                continue
+            try:
+                stale = [s for s in self._vm_snapshots_of(vm.id)
+                         if (getattr(s, "state", "") or "").lower() == "error"]
+            except Exception as exc:
+                logger.warning("tearDown: could not list VM snapshots of %s: %s"
+                               % (vm.id, exc))
+                continue
+            for snap in stale:
+                try:
+                    VmSnapshot.deleteVMSnapshot(self.apiClient, snap.id)
+                except Exception as exc:
+                    logger.warning("tearDown: failed VM snapshot %s: %s"
+                                   % (snap.id, exc))
 
     def _volume_snapshot_listed(self, snap_id):
         listed = Snapshot.list(self.apiClient, id=snap_id, listall=True) or []
@@ -1043,7 +1059,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm = self.apiClient.deployVirtualMachine(cmd)
+        vm = self._deploy_vm(cmd)
         self.__class__.vm = vm
 
         result = self._poll_vm_state(vm.id, "Running")
@@ -1094,7 +1110,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.network_id:
             cmd.networkids = self.__class__.network_id
 
-        vm2 = self.apiClient.deployVirtualMachine(cmd)
+        vm2 = self._deploy_vm(cmd)
         self.assertIsNotNone(vm2, "deployVirtualMachine returned None")
         self.__class__.vm2 = vm2
         self._poll_vm_state(vm2.id, "Running")
@@ -1336,9 +1352,7 @@ class TestOntapVMVolumeAttachISCSI(OntapTestBase):
         if self.__class__.vm is None:
             self.skipTest("VM not deployed — test_03 was skipped")
 
-        cmd = startVirtualMachineAPI.startVirtualMachineCmd()
-        cmd.id = self.__class__.vm.id
-        self.apiClient.startVirtualMachine(cmd)
+        self._start_vm(self.__class__.vm.id)
 
         result = self._poll_vm_state(self.__class__.vm.id, "Running",
                                      timeout=300)

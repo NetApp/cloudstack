@@ -21,9 +21,11 @@
 import argparse
 import html
 import json
+import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
@@ -69,6 +71,16 @@ def parse_time(value):
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+def format_ist(value):
+    """Show a parsed time in IST. Stored timestamps and durations stay UTC."""
+    if value is None:
+        return "—"
+    return value.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 def format_duration(start, finish):
@@ -121,7 +133,120 @@ def html_document(title, body):
 """
 
 
-def log_to_html(source, destination):
+FAILURE_HEADER = re.compile(r"^(ERROR|FAIL):\s*(.*)$")
+DESCRIBED_TEST = re.compile(
+    r"^(.*?)\s*\.\.\.\s*=== TestName:\s+(\S+)\s+\|\s+Status\s+:\s+(\S+)")
+# The message ends at the quote that closes the errortext value: one followed by
+# the closing brace or by the next "key :" pair. A quote inside the message,
+# such as a quoted VM name, is kept. A message with no closing quote runs to the
+# end of the line.
+JOB_ERROR = re.compile(
+    r"errorcode\s*:\s*(\d+)\s*,\s*errortext\s*:\s*'"
+    r"(.*?)(?:'\s*(?:\}|,\s*\w+\s*:)|$)")
+MAX_FAILURE_LINES = 80
+MAX_ERROR_CHARS = 400
+
+
+@lru_cache(maxsize=None)
+def parse_suite_failures(results_txt):
+    """Return the ERROR and FAIL blocks of one Marvin suite results.txt.
+
+    Marvin prints each block with the test's docstring as its title, while the
+    summary lines pair the same docstring with the test name, so the two are
+    joined on that text. A block that cannot be joined (for example a
+    setUpClass error) keeps an empty name list and is still shown.
+    """
+    try:
+        text = ANSI_ESCAPE.sub(
+            "", results_txt.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ()
+    lines = text.splitlines()
+    names = {}
+    for line in lines:
+        described = DESCRIBED_TEST.match(line)
+        if described:
+            names.setdefault(described.group(1).strip(), []).append(
+                described.group(2))
+    failures = []
+    index = 0
+    while index < len(lines):
+        header = FAILURE_HEADER.match(lines[index])
+        if not (header and index > 0 and lines[index - 1].startswith("=====")):
+            index += 1
+            continue
+        block = []
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            if (line.startswith("=====") or line.startswith("Ran ")
+                    or ">> begin captured" in line):
+                break
+            block.append(line)
+            index += 1
+        while block and (not block[0].strip()
+                         or set(block[0].strip()) == {"-"}):
+            block.pop(0)
+        while block and (not block[-1].strip()
+                         or set(block[-1].strip()) == {"-"}):
+            block.pop()
+        description = header.group(2).strip()
+        error = block[-1].strip() if block else ""
+        # A failed CloudStack async job prints a long object of account and
+        # domain IDs before the useful text, so lead with the job's own message.
+        job = JOB_ERROR.search(error)
+        if job:
+            error = f"Job failed (code {job.group(1)}): {job.group(2)}"
+        if len(error) > MAX_ERROR_CHARS:
+            error = error[:MAX_ERROR_CHARS] + "…"
+        failures.append({
+            "kind": header.group(1),
+            "description": description,
+            "names": tuple(names.get(description, ())),
+            "lines": tuple(block[:MAX_FAILURE_LINES]),
+            "error": error,
+        })
+    return tuple(failures)
+
+
+def failure_anchor(test_name):
+    return f"fail-{slug(test_name)}"
+
+
+def render_failures(failures, related=()):
+    if not failures:
+        return ""
+    sections = []
+    if related:
+        links = " &middot; ".join(
+            f'<a href="{html.escape(quote(path))}">{html.escape(label)}</a>'
+            for label, path in related)
+        sections.append(
+            "<p>The API error above is often only a symptom. The cause is "
+            f"usually in the CloudStack logs: {links}</p>")
+    for number, failure in enumerate(failures, 1):
+        names = failure["names"] or (f"unmapped-{number}",)
+        anchors = "".join(
+            f'<a id="{failure_anchor(name)}"></a>' for name in names)
+        title = ", ".join(failure["names"]) or failure["description"]
+        sections.append(
+            f'{anchors}<h3 style="color:#b42318">'
+            f'{html.escape(failure["kind"])}: {html.escape(title)}</h3>'
+            f'<pre style="white-space:pre-wrap;word-break:break-word;'
+            f'background:#fef3f2;border:1px solid #fda29b;padding:16px">'
+            f'{html.escape(chr(10).join(failure["lines"]))}</pre>')
+    return "<h2>Failure details</h2>" + "".join(sections) + "<h2>Suite log</h2>"
+
+
+def failure_for_test(summary_path, test):
+    suite_dir = summary_path.parent / "suites" / test.get("tag", "")
+    for failure in parse_suite_failures(suite_dir / "results.txt"):
+        if test.get("name") in failure["names"]:
+            return failure
+    return None
+
+
+def log_to_html(source, destination, failures=(), related=()):
     lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
     rendered = []
     test_pattern = re.compile(r"TestName:\s+(\S+)\s+\|\s+Status\s+:\s+(\S+)")
@@ -154,7 +279,8 @@ def log_to_html(source, destination):
         rendered.append(f"{anchor}{escaped}")
     body = (
         f"<h2>{html.escape(source.name)}</h2>"
-        f'<pre style="white-space:pre-wrap;word-break:break-word;'
+        + render_failures(failures, related)
+        + f'<pre style="white-space:pre-wrap;word-break:break-word;'
         f'background:#f9fafb;border:1px solid #d0d5dd;padding:16px">'
         + "\n".join(rendered)
         + "</pre>"
@@ -175,6 +301,12 @@ def generate_log_artifacts(results, debian_log):
         results / "phase2" / "configure-cloudstack.log",
         results / "phase2" / "health-check.log",
     ]
+    runtime = results / "phase2" / "runtime-logs"
+    related_logs = (
+        ("Management server log",
+         runtime / "var-log-cloudstack-management" / "management-server.log"),
+        ("Agent log", runtime / "var-log-cloudstack-agent" / "agent.log"),
+    )
     marvin = results / "phase2" / "marvin"
     candidates.extend(marvin.glob("*.log"))
     candidates.extend(
@@ -183,7 +315,15 @@ def generate_log_artifacts(results, debian_log):
     for source in sorted(set(candidates)):
         if not source.is_file():
             continue
-        log_to_html(source, Path(f"{source}.html"))
+        failures = (
+            parse_suite_failures(source.with_name("results.txt"))
+            if source.name == "stdout.log" else ())
+        destination = Path(f"{source}.html")
+        related = tuple(
+            (label, os.path.relpath(path, destination.parent))
+            for label, path in related_logs if path.is_file()
+        ) if failures else ()
+        log_to_html(source, destination, failures, related)
 
 
 def parse_stage_events(stage_events, results):
@@ -263,8 +403,7 @@ def stage_rows(events, results, build_url):
             log_link = (
                 f'<a href="{html.escape(console_url)}">'
                 "Console</a>")
-        started_text = (
-            started.strftime("%Y-%m-%d %H:%M:%S UTC") if started else "—")
+        started_text = format_ist(started)
         rows.append(
             "<tr>"
             f"<td>{html.escape(stage)}</td>"
@@ -339,13 +478,26 @@ def test_rows(tests, results, build_url):
     for test in tests:
         status = display_test_status(test.get("status"))
         log_path = test_log_for_summary(test["_summary"], test)
+        failure = None
+        if status not in ("PASS", "SKIP"):
+            failure = failure_for_test(test["_summary"], test)
         if log_path:
             relative = log_path.relative_to(results.parent)
-            link = artifact_url(
-                build_url, relative, f"test-{slug(test.get('name', 'test'))}")
+            name = test.get("name", "test")
+            # The failure section sits at the top of the suite page, so a
+            # failed test links straight to its exception.
+            fragment = (
+                failure_anchor(name)
+                if failure and log_path.name == "stdout.log.html"
+                else f"test-{slug(name)}")
+            link = artifact_url(build_url, relative, fragment)
             log_cell = f'<a href="{html.escape(link)}">HTML log</a>'
         else:
             log_cell = "—"
+        error_cell = (
+            f'<span style="font-size:12px;color:#b42318">'
+            f'{html.escape(failure["error"])}</span>'
+            if failure and failure["error"] else "")
         suite = str(test.get("label") or test.get("tag") or "")
         rows.append(
             "<tr>"
@@ -353,6 +505,7 @@ def test_rows(tests, results, build_url):
             f"<td>{html.escape(suite)}</td>"
             f"<td><code>{html.escape(str(test.get('name', '')))}</code></td>"
             f'<td style="{status_style(status)}">{html.escape(status)}</td>'
+            f"<td>{error_cell}</td>"
             f"<td>{log_cell}</td>"
             "</tr>")
     return "\n".join(rows)
@@ -372,6 +525,14 @@ def table(headers, rows):
     return (
         '<table style="border-collapse:collapse;width:100%;margin:12px 0">'
         f"<thead><tr>{cells}</tr></thead><tbody>{styled_rows}</tbody></table>")
+
+
+def coverage_section(results):
+    """The ONTAP coverage summary written by coverage-report.sh, if any."""
+    try:
+        return (results / "coverage" / "summary.html").read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def main():
@@ -415,9 +576,9 @@ def main():
 <tr><td><strong>VM</strong></td>
 <td>{html.escape(args.vm or 'not assigned')}</td></tr>
 <tr><td><strong>Started</strong></td>
-<td>{html.escape(args.started_at)}</td></tr>
+<td>{html.escape(format_ist(started))}</td></tr>
 <tr><td><strong>Finished</strong></td>
-<td>{html.escape(args.finished_at)}</td></tr>
+<td>{html.escape(format_ist(finished))}</td></tr>
 <tr><td><strong>Total duration</strong></td>
 <td>{html.escape(format_duration(started, finished))}</td></tr>
 </table>
@@ -437,12 +598,13 @@ def main():
         "<h2>ONTAP tests</h2>"
         "<p>Failures are listed first. Select a log link to jump to the "
         "test.</p>"
-        + table(["Protocol", "Suite", "Test", "Status", "Details"], tests_html)
+        + table(["Protocol", "Suite", "Test", "Status", "Error", "Details"],
+              tests_html)
         if tests else
         "<h2>ONTAP tests</h2><p>No Marvin test summary was available.</p>")
     body = (
-        header + failure + "<h2>Pipeline stages</h2>" +
-        stage_table + test_section)
+        header + failure + coverage_section(args.results) +
+        "<h2>Pipeline stages</h2>" + stage_table + test_section)
     document = html_document("CloudStack ONTAP presubmit report", body)
     (args.results / "report.html").write_text(document, encoding="utf-8")
     (args.results / "email-body.html").write_text(body, encoding="utf-8")

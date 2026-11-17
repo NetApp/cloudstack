@@ -22,6 +22,8 @@
 #   that run with a conclusion, commit-email prints the head commit author
 #   address used for presubmit mail, and diagnose probes the App's token type,
 #   repository access and Checks permissions to explain a refused check run.
+#   coverage-comment creates or updates the single pull-request comment that
+#   shows the ONTAP plugin coverage (needs Pull requests or Issues write).
 # Dependencies:
 #   Commands: curl, python3 (stdlib), mktemp.
 #   GITHUB_ACCESS_TOKEN, GITHUB_REPOSITORY — required by every subcommand; the
@@ -29,7 +31,14 @@
 #   process list.
 #   GITHUB_HEAD_SHA — create, commit-email and diagnose. BUILD_URL — create and
 #   complete. GITHUB_CHECK_RUN_ID, GITHUB_CHECK_CONCLUSION — complete.
-#   Optional: PR_ID and BUILD_TAG label the check run.
+#   Optional: PR_ID and BUILD_TAG label the check run. For create, setting
+#   GITHUB_CHECK_CONCLUSION publishes an already completed check run, which is
+#   how a result is still reported when the run could not be created at the
+#   start. GITHUB_CHECK_FAILED_STAGE and GITHUB_CHECK_REPORT_URL add the failed
+#   stage and the report link to the check's summary, and GITHUB_CHECK_COVERAGE_FILE
+#   appends the coverage summary (markdown) to it. coverage-comment needs PR_ID
+#   and GITHUB_COVERAGE_FILE, the markdown file whose first line is the marker
+#   that identifies the comment.
 #   Called by the Jenkinsfile. Does not call other private-cicd scripts.
 
 set -euo pipefail
@@ -129,6 +138,73 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 }
 
+# Builds the check-run payload for the "create" and "complete" subcommands from
+# the environment. GITHUB_CHECK_CONCLUSION makes it a completed run.
+write_payload() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import os
+import sys
+
+kind = sys.argv[2]
+env = os.environ.get
+conclusion = env("GITHUB_CHECK_CONCLUSION", "")
+build_url = env("BUILD_URL", "")
+sha = env("GITHUB_HEAD_SHA", "")
+pr = env("PR_ID", "unknown")
+
+payload = {
+    "name": "cloudstack-ontap-presubmit",
+    "details_url": build_url,
+}
+if kind == "create":
+    payload["head_sha"] = sha
+    payload["external_id"] = env("BUILD_TAG", "")
+
+if kind == "create" and not conclusion:
+    payload["status"] = "in_progress"
+    payload["output"] = {
+        "title": f"CloudStack ONTAP presubmit for PR-{pr}",
+        "summary": (
+            f"Jenkins build started for {sha[:12]}. "
+            f"Details: {build_url}"
+        ),
+    }
+else:
+    verdict = {
+        "success": "passed",
+        "failure": "failed",
+        "cancelled": "was cancelled",
+        "timed_out": "timed out",
+        "neutral": "finished with a neutral result",
+    }.get(conclusion, conclusion)
+    lines = [f"The CloudStack ONTAP presubmit {verdict}."]
+    if env("GITHUB_CHECK_FAILED_STAGE"):
+        lines.append(f"Failed stage: {env('GITHUB_CHECK_FAILED_STAGE')}")
+    if sha:
+        lines.append(f"Commit: {sha[:12]}")
+    lines.append(f"Jenkins build and logs: {build_url}")
+    if env("GITHUB_CHECK_REPORT_URL"):
+        lines.append(f"Test report: {env('GITHUB_CHECK_REPORT_URL')}")
+    summary = "\n\n".join(lines)
+    coverage_file = env("GITHUB_CHECK_COVERAGE_FILE")
+    if coverage_file and os.path.isfile(coverage_file):
+        with open(coverage_file, encoding="utf-8") as handle:
+            coverage = handle.read().replace("<!-- ontap-coverage-bot -->", "").strip()
+        if coverage:
+            summary += "\n\n" + coverage
+    # GitHub rejects a summary above 65535 characters.
+    payload["status"] = "completed"
+    payload["conclusion"] = conclusion
+    payload["output"] = {
+        "title": f"CloudStack ONTAP presubmit {verdict}",
+        "summary": summary[:60000],
+    }
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    json.dump(payload, output)
+PY
+}
+
 create_check() {
     require_env GITHUB_ACCESS_TOKEN GITHUB_REPOSITORY GITHUB_HEAD_SHA BUILD_URL
     local payload response
@@ -136,28 +212,7 @@ create_check() {
     response="$(mktemp)"
     trap "rm -f '$payload' '$response'" EXIT
 
-    python3 - "$payload" <<'PY'
-import json
-import os
-import sys
-
-payload = {
-    "name": "cloudstack-ontap-presubmit",
-    "head_sha": os.environ["GITHUB_HEAD_SHA"],
-    "status": "in_progress",
-    "details_url": os.environ["BUILD_URL"],
-    "external_id": os.environ.get("BUILD_TAG", ""),
-    "output": {
-        "title": f"CloudStack ONTAP presubmit for PR-{os.environ.get('PR_ID', 'unknown')}",
-        "summary": (
-            f"Jenkins build started for {os.environ['GITHUB_HEAD_SHA'][:12]}. "
-            f"Details: {os.environ['BUILD_URL']}"
-        ),
-    },
-}
-with open(sys.argv[1], "w", encoding="utf-8") as output:
-    json.dump(payload, output)
-PY
+    write_payload "$payload" create
 
     github_api POST "/repos/${GITHUB_REPOSITORY}/check-runs" "$payload" > "$response" || {
         local status=$?
@@ -178,41 +233,28 @@ PY
 complete_check() {
     require_env GITHUB_ACCESS_TOKEN GITHUB_REPOSITORY GITHUB_CHECK_RUN_ID \
         GITHUB_CHECK_CONCLUSION BUILD_URL
-    local payload response
+    local payload response attempt
     payload="$(mktemp)"
     response="$(mktemp)"
     trap "rm -f '$payload' '$response'" EXIT
 
-    python3 - "$payload" <<'PY'
-import json
-import os
-import sys
+    write_payload "$payload" complete
 
-conclusion = os.environ["GITHUB_CHECK_CONCLUSION"]
-payload = {
-    "name": "cloudstack-ontap-presubmit",
-    "status": "completed",
-    "conclusion": conclusion,
-    "details_url": os.environ["BUILD_URL"],
-    "output": {
-        "title": f"CloudStack ONTAP presubmit: {conclusion}",
-        "summary": (
-            f"Jenkins build completed with conclusion {conclusion}. "
-            f"Details and logs: {os.environ['BUILD_URL']}"
-        ),
-    },
-}
-with open(sys.argv[1], "w", encoding="utf-8") as output:
-    json.dump(payload, output)
-PY
-
-    if ! github_api PATCH \
-            "/repos/${GITHUB_REPOSITORY}/check-runs/${GITHUB_CHECK_RUN_ID}" \
-            "$payload" > "$response"; then
-        echo "GitHub refused to complete the check run:" >&2
+    # A check left in progress blocks a pull request that requires it, so a
+    # transient GitHub error gets a few retries before the failure is reported.
+    for attempt in 1 2 3; do
+        if github_api PATCH \
+                "/repos/${GITHUB_REPOSITORY}/check-runs/${GITHUB_CHECK_RUN_ID}" \
+                "$payload" > "$response"; then
+            return 0
+        fi
+        echo "GitHub refused to complete the check run (attempt ${attempt}/3):" >&2
         print_github_error "$response"
-        return 1
-    fi
+        if (( attempt < 3 )); then
+            sleep "${CHECK_RETRY_SECONDS:-10}"
+        fi
+    done
+    return 1
 }
 
 # Read-only probes plus one write probe, ordered so that the first failure
@@ -357,6 +399,78 @@ print(payload.get("commit", {}).get("author", {}).get("email") or "")
 PY
 }
 
+# Creates the coverage comment on the pull request, or updates the one a
+# previous run left, so a PR carries a single coverage comment. The comment is
+# found by the marker on its first line, among comments written by a bot.
+coverage_comment() {
+    require_env GITHUB_ACCESS_TOKEN GITHUB_REPOSITORY PR_ID GITHUB_COVERAGE_FILE
+    local comments payload response comment_id page
+    comments="$(mktemp)"
+    payload="$(mktemp)"
+    response="$(mktemp)"
+    trap "rm -f '$comments' '$payload' '$response'" EXIT
+
+    python3 - "$GITHUB_COVERAGE_FILE" "$payload" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    body = source.read()
+with open(sys.argv[2], "w", encoding="utf-8") as output:
+    json.dump({"body": body[:60000]}, output)
+PY
+
+    comment_id=""
+    for page in 1 2 3 4 5; do
+        github_api GET \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_ID}/comments?per_page=100&page=${page}" \
+            > "$comments" || {
+            echo "GitHub refused to list the pull request comments:" >&2
+            print_github_error "$comments"
+            return 1
+        }
+        comment_id="$(python3 - "$comments" <<'PY'
+import json
+import sys
+
+marker = "<!-- ontap-coverage-bot -->"
+with open(sys.argv[1], encoding="utf-8") as handle:
+    items = json.load(handle)
+for item in items:
+    if (item.get("user") or {}).get("type") == "Bot" and marker in (item.get("body") or ""):
+        print(item["id"])
+        break
+PY
+)"
+        if [[ -n "$comment_id" ]]; then
+            break
+        fi
+        # A full page means there may be more comments to search.
+        if [[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$comments")" -lt 100 ]]; then
+            break
+        fi
+    done
+
+    if [[ -n "$comment_id" ]]; then
+        github_api PATCH "/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+            "$payload" > "$response" || {
+            echo "GitHub refused to update the coverage comment:" >&2
+            print_github_error "$response"
+            return 1
+        }
+        echo "Updated coverage comment ${comment_id} on PR-${PR_ID}."
+    else
+        github_api POST "/repos/${GITHUB_REPOSITORY}/issues/${PR_ID}/comments" \
+            "$payload" > "$response" || {
+            echo "GitHub refused to create the coverage comment:" >&2
+            print_github_error "$response"
+            echo "    The App needs Pull requests or Issues: Read and write." >&2
+            return 1
+        }
+        echo "Created coverage comment on PR-${PR_ID}."
+    fi
+}
+
 case "${1:-}" in
     create)
         create_check
@@ -370,8 +484,11 @@ case "${1:-}" in
     diagnose)
         diagnose_app
         ;;
+    coverage-comment)
+        coverage_comment
+        ;;
     *)
-        echo "Usage: $0 {create|complete|commit-email|diagnose}" >&2
+        echo "Usage: $0 {create|complete|commit-email|diagnose|coverage-comment}" >&2
         exit 2
         ;;
 esac
