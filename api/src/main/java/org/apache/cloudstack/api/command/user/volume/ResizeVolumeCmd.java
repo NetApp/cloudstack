@@ -54,10 +54,10 @@ public class ResizeVolumeCmd extends BaseAsyncCmd implements UserCmd {
     @Parameter(name = ApiConstants.ID, entityType = VolumeResponse.class, required = true, type = CommandType.UUID, description = "The ID of the disk volume")
     private Long id;
 
-    @Parameter(name = ApiConstants.MIN_IOPS, type = CommandType.LONG, required = false, description = "New minimum number of IOPS")
+    @Parameter(name = ApiConstants.MIN_IOPS, type = CommandType.LONG, required = false, description = "New minimum number of IOPS", validations = {ApiArgValidator.PositiveNumber})
     private Long minIops;
 
-    @Parameter(name = ApiConstants.MAX_IOPS, type = CommandType.LONG, required = false, description = "New maximum number of IOPS")
+    @Parameter(name = ApiConstants.MAX_IOPS, type = CommandType.LONG, required = false, description = "New maximum number of IOPS", validations = {ApiArgValidator.PositiveNumber})
     private Long maxIops;
 
     @Parameter(name = ApiConstants.SIZE, type = CommandType.LONG, required = false, description = "New volume size in GB",validations = {ApiArgValidator.PositiveNumber})
