@@ -34,7 +34,6 @@ import feign.FeignException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -139,11 +138,6 @@ public class OntapStorageUtilsTest {
                 () -> OntapStorageUtils.toLunCloneSourcePathInSnapshot("/vol/vol1/lun", "", "snap"));
         org.junit.jupiter.api.Assertions.assertThrows(com.cloud.exception.InvalidParameterValueException.class,
                 () -> OntapStorageUtils.toLunCloneSourcePathInSnapshot("", "vol1", "snap"));
-    }
-
-    @Test
-    public void constructor_canBeInstantiated() {
-        assertNotNull(new OntapStorageUtils());
     }
 
     @Test

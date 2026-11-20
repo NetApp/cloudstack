@@ -74,7 +74,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -1614,7 +1613,8 @@ public class UnifiedNASStrategyTest {
     public void testSetOntapStorage_replacesStorage() {
         OntapStorage replacement = new OntapStorage("other", "secret", "10.0.0.1", "svm2", 1L, ProtocolType.NFS3);
         strategy.setOntapStorage(replacement);
-        assertDoesNotThrow(() -> strategy.getAuthHeader());
+        assertEquals(org.apache.cloudstack.storage.utils.OntapStorageUtils.generateAuthHeader("other", "secret"),
+                strategy.getAuthHeader());
     }
 
     @Test

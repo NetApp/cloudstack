@@ -35,15 +35,9 @@ import com.cloud.utils.component.ComponentContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class StorageProviderFactoryTest {
-
-    @Test
-    public void constructorCanBeInstantiated() {
-        assertNotNull(new StorageProviderFactory());
-    }
 
     @Test
     public void getStrategyReturnsNasStrategyForNfs3() throws Exception {

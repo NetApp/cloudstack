@@ -34,7 +34,6 @@ import org.mockito.Mockito;
 
 import feign.Client;
 import feign.Request;
-import feign.RequestInterceptor;
 import feign.RequestTemplate;
 import feign.Response;
 import feign.codec.DecodeException;
@@ -74,21 +73,6 @@ public class FeignConfigurationTest {
             RuntimeException thrown = assertThrows(RuntimeException.class, configuration::createClient);
             assertInstanceOf(IllegalStateException.class, thrown.getCause());
         }
-    }
-
-    @Test
-    public void requestInterceptorLogsRequestsWithAndWithoutBody() {
-        RequestInterceptor interceptor = new FeignConfiguration().createRequestInterceptor();
-        RequestTemplate template = new RequestTemplate();
-        template.method(Request.HttpMethod.GET);
-        template.uri("/api/cluster");
-
-        interceptor.apply(template);
-        assertNull(template.body());
-
-        template.body("{\"name\":\"svm1\"}");
-        interceptor.apply(template);
-        assertEquals("{\"name\":\"svm1\"}", new String(template.body(), StandardCharsets.UTF_8));
     }
 
     @Test

@@ -1800,10 +1800,13 @@ public class StorageStrategyTest {
 
     @Test
     public void testGetClusterInfo_nodeLookupFailure_returnsCluster() {
-        stubClusterGet();
+        Cluster cluster = stubClusterGet();
         when(clusterFeignClient.getClusterNodes(anyString(), anyMap())).thenThrow(new RuntimeException("nodes down"));
 
-        assertNotNull(storageStrategy.getClusterInfo());
+        Cluster result = storageStrategy.getClusterInfo();
+        assertSame(cluster, result);
+        assertNull(result.getModel());
+        assertNull(result.getPlatformType());
     }
 
     @Test
