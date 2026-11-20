@@ -20,7 +20,11 @@ package org.apache.cloudstack.storage.vmsnapshot;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -32,6 +36,7 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -40,9 +45,12 @@ import static org.mockito.Mockito.when;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.StrategyPriority;
 import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
@@ -65,13 +73,16 @@ import org.apache.logging.log4j.core.Appender;
 import org.apache.logging.log4j.core.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
+import org.apache.cloudstack.storage.utils.OntapStorageUtils;
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.FreezeThawVMAnswer;
 import com.cloud.agent.api.FreezeThawVMCommand;
@@ -1268,5 +1279,768 @@ class OntapVMSnapshotStrategyTest {
         flexVolSnapshots2.setRecords(Collections.singletonList(flexVolSnapshot2));
         when(snapshotFeignClient.getSnapshots(any(), eq("flexvol-uuid-2"), any()))
                 .thenReturn(flexVolSnapshots2);
+    }
+
+    private void setupTwoVolumesSameFlexVolForTakeSnapshot() {
+        setupSingleVolumeForTakeSnapshot();
+        VolumeObjectTO volumeTO1 = mock(VolumeObjectTO.class);
+        when(volumeTO1.getId()).thenReturn(VOLUME_ID_1);
+        when(volumeTO1.getSize()).thenReturn(10737418240L);
+        VolumeObjectTO volumeTO2 = mock(VolumeObjectTO.class);
+        when(volumeTO2.getId()).thenReturn(VOLUME_ID_2);
+        when(volumeTO2.getSize()).thenReturn(10737418240L);
+        when(vmSnapshotHelper.getVolumeTOList(VM_ID)).thenReturn(Arrays.asList(volumeTO1, volumeTO2));
+
+        VolumeVO volumeVO2 = mock(VolumeVO.class);
+        when(volumeVO2.getId()).thenReturn(VOLUME_ID_2);
+        when(volumeVO2.getPoolId()).thenReturn(POOL_ID_1);
+        when(volumeVO2.getPath()).thenReturn("volume-302.qcow2");
+        when(volumeVO2.getVmSnapshotChainSize()).thenReturn(0L);
+        when(volumeDao.findById(VOLUME_ID_2)).thenReturn(volumeVO2);
+
+        VolumeInfo volumeInfo2 = mock(VolumeInfo.class);
+        when(volumeInfo2.getId()).thenReturn(VOLUME_ID_2);
+        when(volumeDataFactory.getVolume(VOLUME_ID_2)).thenReturn(volumeInfo2);
+    }
+
+    private Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> singleFlexVolGroup() {
+        setupSingleVolumeForTakeSnapshot();
+        VolumeObjectTO volumeTO = mock(VolumeObjectTO.class);
+        when(volumeTO.getId()).thenReturn(VOLUME_ID_1);
+        return strategy.groupVolumesByFlexVol(Collections.singletonList(volumeTO));
+    }
+
+    private UserVmVO mockSnapshotUser(String instanceName) {
+        UserVmVO userVm = mock(UserVmVO.class);
+        when(userVm.getId()).thenReturn(VM_ID);
+        when(userVm.getInstanceName()).thenReturn(instanceName);
+        when(userVm.getGuestOSId()).thenReturn(GUEST_OS_ID);
+        when(userVm.getUuid()).thenReturn(VM_UUID);
+        return userVm;
+    }
+
+    private VMSnapshotVO mockDeleteOrRevertSnapshot() throws Exception {
+        VMSnapshotVO vmSnapshot = mock(VMSnapshotVO.class);
+        when(vmSnapshot.getId()).thenReturn(SNAPSHOT_ID);
+        when(vmSnapshot.getVmId()).thenReturn(VM_ID);
+        when(vmSnapshot.getName()).thenReturn("vm-snap-1");
+        when(vmSnapshot.getType()).thenReturn(VMSnapshot.Type.Disk);
+        when(vmSnapshot.getCreated()).thenReturn(new Date());
+        when(vmSnapshot.getDescription()).thenReturn("Test ONTAP VM Snapshot");
+        when(vmSnapshot.getCurrent()).thenReturn(Boolean.FALSE);
+
+        UserVmVO userVm = mockSnapshotUser(VM_INSTANCE_NAME);
+        when(userVmDao.findById(VM_ID)).thenReturn(userVm);
+        GuestOSVO guestOS = mock(GuestOSVO.class);
+        when(guestOS.getDisplayName()).thenReturn("CentOS 8");
+        when(guestOSDao.findById(GUEST_OS_ID)).thenReturn(guestOS);
+
+        VMSnapshotTO parentChain = mock(VMSnapshotTO.class);
+        when(vmSnapshotHelper.getSnapshotWithParents(vmSnapshot)).thenReturn(parentChain);
+        when(parentChain.getParent()).thenReturn(null);
+
+        VolumeObjectTO volumeTO = mock(VolumeObjectTO.class);
+        when(volumeTO.getSize()).thenReturn(1024L);
+        when(vmSnapshotHelper.getVolumeTOList(VM_ID)).thenReturn(Collections.singletonList(volumeTO));
+
+        doNothing().when(strategy).processAnswer(any(), any(), any(), any());
+        doNothing().when(strategy).publishUsageEvent(any(), any(), any(), any());
+        doNothing().when(strategy).publishUsageEvent(any(), any(), any(), anyLong(), anyLong());
+        doNothing().when(strategy).deleteDiskSnapshot(any());
+        doNothing().when(strategy).revertDiskSnapshot(any());
+        doReturn(storageStrategy).when(strategy).resolveStorageStrategy(any());
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(new HashMap<>());
+        return vmSnapshot;
+    }
+
+    private VMSnapshotDetailsVO flexDetail(long id, String value) {
+        VMSnapshotDetailsVO detail = mock(VMSnapshotDetailsVO.class);
+        when(detail.getId()).thenReturn(id);
+        when(detail.getValue()).thenReturn(value);
+        lenient().when(detail.getName()).thenReturn(OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT);
+        return detail;
+    }
+
+    private OntapResponse<ConsistencyGroupSnapshot> cgSnapshotResponse(String name, String uuid) {
+        OntapResponse<ConsistencyGroupSnapshot> response = new OntapResponse<>();
+        ConsistencyGroupSnapshot record = new ConsistencyGroupSnapshot();
+        record.setName(name);
+        record.setUuid(uuid);
+        response.setRecords(Collections.singletonList(record));
+        return response;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Additional coverage: selection, take, delete, revert, CG helpers
+    // ══════════════════════════════════════════════════════════════════════════
+
+    @Test
+    void testConfigure_returnsTrue() throws Exception {
+        org.apache.cloudstack.framework.config.dao.ConfigurationDao configurationDao =
+                mock(org.apache.cloudstack.framework.config.dao.ConfigurationDao.class);
+        when(configurationDao.getValue("vmsnapshot.create.wait")).thenReturn("1800");
+        strategy.configurationDao = configurationDao;
+
+        assertTrue(strategy.configure("ontap-vm-snapshot", Collections.emptyMap()));
+    }
+
+    @Test
+    void testCanHandle_AllocatedDiskAndMemory_AllVolumesOnOntap_ReturnsCantHandle() {
+        setupAllVolumesOnOntap();
+        VMSnapshotVO vmSnapshot = createMockVmSnapshot(VMSnapshot.State.Allocated, VMSnapshot.Type.DiskAndMemory);
+
+        assertEquals(StrategyPriority.CANT_HANDLE, strategy.canHandle(vmSnapshot));
+    }
+
+    @Test
+    void testCanHandle_VmStarting_ReturnsCantHandle() {
+        UserVmVO userVm = createMockUserVm(Hypervisor.HypervisorType.KVM, VirtualMachine.State.Starting);
+        when(userVmDao.findById(VM_ID)).thenReturn(userVm);
+        VMSnapshotVO vmSnapshot = createMockVmSnapshot(VMSnapshot.State.Allocated, VMSnapshot.Type.Disk);
+
+        assertEquals(StrategyPriority.CANT_HANDLE, strategy.canHandle(vmSnapshot));
+    }
+
+    @Test
+    void testCanHandle_NullVolumeList_ReturnsCantHandle() {
+        UserVmVO userVm = createMockUserVm(Hypervisor.HypervisorType.KVM, VirtualMachine.State.Running);
+        when(userVmDao.findById(VM_ID)).thenReturn(userVm);
+        when(volumeDao.findByInstance(VM_ID)).thenReturn(null);
+        VMSnapshotVO vmSnapshot = createMockVmSnapshot(VMSnapshot.State.Allocated, VMSnapshot.Type.Disk);
+
+        assertEquals(StrategyPriority.CANT_HANDLE, strategy.canHandle(vmSnapshot));
+    }
+
+    @Test
+    void testCanHandle_NonAllocated_LegacyDetailsPresentButVolumesLeftOntap_ReturnsCantHandle() {
+        UserVmVO userVm = createMockUserVm(Hypervisor.HypervisorType.KVM, VirtualMachine.State.Running);
+        when(userVmDao.findById(VM_ID)).thenReturn(userVm);
+        when(volumeDao.findByInstance(VM_ID)).thenReturn(Collections.emptyList());
+        VMSnapshotVO vmSnapshot = createMockVmSnapshot(VMSnapshot.State.Ready, VMSnapshot.Type.Disk);
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT)).thenReturn(null);
+        List<VMSnapshotDetailsVO> legacy = new ArrayList<>();
+        legacy.add(new VMSnapshotDetailsVO(SNAPSHOT_ID, "kvmStorageSnapshot", "123", true));
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot")).thenReturn(legacy);
+
+        assertEquals(StrategyPriority.CANT_HANDLE, strategy.canHandle(vmSnapshot));
+    }
+
+    @Test
+    void testGroupVolumesByFlexVol_NullPoolId_ThrowsException() {
+        VolumeObjectTO volumeTO = mock(VolumeObjectTO.class);
+        when(volumeTO.getId()).thenReturn(VOLUME_ID_1);
+        VolumeVO volume = mock(VolumeVO.class);
+        when(volume.getId()).thenReturn(VOLUME_ID_1);
+        when(volume.getPoolId()).thenReturn(null);
+        when(volumeDao.findById(VOLUME_ID_1)).thenReturn(volume);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.groupVolumesByFlexVol(Collections.singletonList(volumeTO)));
+        assertTrue(ex.getMessage().contains("no pool"));
+    }
+
+    @Test
+    void testGroupVolumesByFlexVol_BlankFlexVolUuid_ThrowsException() {
+        VolumeObjectTO volumeTO = mock(VolumeObjectTO.class);
+        when(volumeTO.getId()).thenReturn(VOLUME_ID_1);
+        VolumeVO volume = mock(VolumeVO.class);
+        when(volume.getId()).thenReturn(VOLUME_ID_1);
+        when(volume.getPoolId()).thenReturn(POOL_ID_1);
+        when(volumeDao.findById(VOLUME_ID_1)).thenReturn(volume);
+        Map<String, String> poolDetails = new HashMap<>();
+        poolDetails.put(OntapStorageConstants.VOLUME_UUID, "");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(poolDetails);
+
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.groupVolumesByFlexVol(Collections.singletonList(volumeTO)));
+    }
+
+    @Test
+    void testResolveStorageStrategy_delegatesToOntapStorageUtils() {
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.STORAGE_IP, "10.0.0.1");
+        try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+            utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(details)).thenReturn(storageStrategy);
+            assertSame(storageStrategy, strategy.resolveStorageStrategy(details));
+        }
+    }
+
+    @Test
+    void testBuildTemporaryConsistencyGroupName_usesSnapshotId() {
+        VMSnapshotVO vmSnapshot = mock(VMSnapshotVO.class);
+        when(vmSnapshot.getId()).thenReturn(SNAPSHOT_ID);
+        assertEquals(OntapStorageConstants.ONTAP_TEMP_CG_PREFIX + SNAPSHOT_ID,
+                strategy.buildTemporaryConsistencyGroupName(vmSnapshot));
+    }
+
+    @Test
+    void testTakeVMSnapshot_StoppedVmWithNullOptions_SkipsFreezeAndUsesChainSize() throws Exception {
+        VMSnapshotVO vmSnapshot = createTakeSnapshotVmSnapshot();
+        UserVmVO userVm = setupTakeSnapshotCommon(vmSnapshot);
+        when(userVm.getState()).thenReturn(VirtualMachine.State.Stopped);
+        when(vmSnapshot.getOptions()).thenReturn(null);
+        setupSingleVolumeForTakeSnapshot();
+        VolumeVO volume = volumeDao.findById(VOLUME_ID_1);
+        when(volume.getVmSnapshotChainSize()).thenReturn(5L);
+        setupSingleFlexVolFlowMocks(strategy.buildSnapshotName(vmSnapshot));
+
+        assertSame(vmSnapshot, strategy.takeVMSnapshot(vmSnapshot));
+
+        verify(agentMgr, never()).send(eq(HOST_ID), any(FreezeThawVMCommand.class));
+        verify(vmSnapshot).setParent(null);
+    }
+
+    @Test
+    void testTakeVMSnapshot_PersistFails_DedupesRollbackAndRemovesFlexVolDetail() throws Exception {
+        VMSnapshotVO vmSnapshot = createTakeSnapshotVmSnapshot();
+        setupTakeSnapshotCommon(vmSnapshot);
+        setupTwoVolumesSameFlexVolForTakeSnapshot();
+        setupSingleFlexVolFlowMocks(strategy.buildSnapshotName(vmSnapshot));
+        FreezeThawVMAnswer freezeAnswer = mock(FreezeThawVMAnswer.class);
+        when(freezeAnswer.getResult()).thenReturn(true);
+        FreezeThawVMAnswer thawAnswer = mock(FreezeThawVMAnswer.class);
+        when(thawAnswer.getResult()).thenReturn(true);
+        when(agentMgr.send(eq(HOST_ID), any(FreezeThawVMCommand.class)))
+                .thenReturn(freezeAnswer)
+                .thenReturn(thawAnswer);
+        doThrow(new CloudRuntimeException("snapshot persistence failed")).when(vmSnapshotDetailsDao)
+                .persist(any(VMSnapshotDetailsVO.class));
+        VMSnapshotDetailsVO flex = flexDetail(11L, "ignored");
+        VMSnapshotDetailsVO other = mock(VMSnapshotDetailsVO.class);
+        when(other.getId()).thenReturn(12L);
+        when(other.getName()).thenReturn("kvmStorageSnapshot");
+        when(vmSnapshotDetailsDao.listDetails(SNAPSHOT_ID)).thenReturn(Arrays.asList(flex, other));
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(any(), eq(VMSnapshot.Event.OperationFailed));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.takeVMSnapshot(vmSnapshot));
+
+        assertEquals("snapshot persistence failed", ex.getMessage());
+        verify(storageStrategy, times(1)).deleteFlexVolSnapshotForCloudStackVolume(eq("flexvol-uuid-1"), any(), any());
+        verify(vmSnapshotDetailsDao).remove(11L);
+        verify(vmSnapshotDetailsDao, never()).remove(12L);
+    }
+
+    @Test
+    void testTakeVMSnapshot_CleanupRetriesThawAndStateTransitionFails_PreservesOriginalError() throws Exception {
+        VMSnapshotVO vmSnapshot = createTakeSnapshotVmSnapshot();
+        setupTakeSnapshotCommon(vmSnapshot);
+        setupTwoVolumesSameFlexVolForTakeSnapshot();
+        setupSingleFlexVolFlowMocks(strategy.buildSnapshotName(vmSnapshot));
+        FreezeThawVMAnswer freezeAnswer = mock(FreezeThawVMAnswer.class);
+        when(freezeAnswer.getResult()).thenReturn(true);
+        when(agentMgr.send(eq(HOST_ID), any(FreezeThawVMCommand.class)))
+                .thenReturn(freezeAnswer)
+                .thenThrow(new AgentUnavailableException(HOST_ID))
+                .thenThrow(new OperationTimedoutException(null, 0, 0, 0, false));
+        doThrow(new CloudRuntimeException("snapshot persistence failed")).when(vmSnapshotDetailsDao)
+                .persist(any(VMSnapshotDetailsVO.class));
+        VMSnapshotDetailsVO flex = flexDetail(11L, "ignored");
+        when(vmSnapshotDetailsDao.listDetails(SNAPSHOT_ID)).thenReturn(Collections.singletonList(flex));
+        doThrow(new NoTransitionException("stuck")).when(vmSnapshotHelper)
+                .vmSnapshotStateTransitTo(any(), eq(VMSnapshot.Event.OperationFailed));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.takeVMSnapshot(vmSnapshot));
+
+        assertEquals("snapshot persistence failed", ex.getMessage());
+        verify(storageStrategy, times(1)).deleteFlexVolSnapshotForCloudStackVolume(eq("flexvol-uuid-1"), any(), any());
+        verify(agentMgr, times(3)).send(eq(HOST_ID), any(FreezeThawVMCommand.class));
+        verify(vmSnapshotDetailsDao).remove(11L);
+    }
+
+    @Test
+    void testCreateVmSnapshotsViaSingleFlexVol_nullJob_throws() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = singleFlexVolGroup();
+        setupSingleFlexVolFlowMocks("snap-name");
+        when(snapshotFeignClient.createSnapshot(any(), eq("flexvol-uuid-1"), any())).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.createVmSnapshotsViaSingleFlexVol(
+                createTakeSnapshotVmSnapshot(), mockSnapshotUser(VM_INSTANCE_NAME), groups, "snap-name", new ArrayList<>()));
+        assertTrue(ex.getMessage().contains("Failed to initiate"));
+    }
+
+    @Test
+    void testCreateVmSnapshotsViaSingleFlexVol_jobMissing_throws() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = singleFlexVolGroup();
+        setupSingleFlexVolFlowMocks("snap-name");
+        when(snapshotFeignClient.createSnapshot(any(), eq("flexvol-uuid-1"), any())).thenReturn(new JobResponse());
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.createVmSnapshotsViaSingleFlexVol(
+                createTakeSnapshotVmSnapshot(), mockSnapshotUser(VM_INSTANCE_NAME), groups, "snap-name", new ArrayList<>()));
+    }
+
+    @Test
+    void testCreateVmSnapshotsViaSingleFlexVol_jobPollFalse_throws() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = singleFlexVolGroup();
+        setupSingleFlexVolFlowMocks("snap-name");
+        when(storageStrategy.jobPollForSuccess(any(), anyInt(), anyInt())).thenReturn(Boolean.FALSE);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.createVmSnapshotsViaSingleFlexVol(
+                createTakeSnapshotVmSnapshot(), mockSnapshotUser(VM_INSTANCE_NAME), groups, "snap-name", new ArrayList<>()));
+        assertTrue(ex.getMessage().contains("job failed"));
+    }
+
+    @Test
+    void testCreateVmSnapshotsViaSingleFlexVol_snapshotLookupEmpty_throws() {
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups = singleFlexVolGroup();
+        setupSingleFlexVolFlowMocks("snap-name");
+        OntapResponse<FlexVolSnapshot> empty = new OntapResponse<>();
+        empty.setRecords(Collections.emptyList());
+        when(snapshotFeignClient.getSnapshots(any(), eq("flexvol-uuid-1"), any())).thenReturn(empty);
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.createVmSnapshotsViaSingleFlexVol(
+                createTakeSnapshotVmSnapshot(), mockSnapshotUser(VM_INSTANCE_NAME), groups, "snap-name", new ArrayList<>()));
+    }
+
+    @Test
+    void testResolveSnapshotUuid_nullOrEmptyResponsesThrow() {
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveSnapshotUuid(snapshotFeignClient, "auth", "flex", "snap"));
+        when(snapshotFeignClient.getSnapshots(any(), eq("flex"), any())).thenReturn(new OntapResponse<>());
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveSnapshotUuid(snapshotFeignClient, "auth", "flex", "snap"));
+        OntapResponse<FlexVolSnapshot> empty = new OntapResponse<>();
+        empty.setRecords(Collections.emptyList());
+        when(snapshotFeignClient.getSnapshots(any(), eq("flex"), any())).thenReturn(empty);
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveSnapshotUuid(snapshotFeignClient, "auth", "flex", "snap"));
+
+        OntapResponse<FlexVolSnapshot> found = new OntapResponse<>();
+        FlexVolSnapshot snapshot = new FlexVolSnapshot();
+        snapshot.setUuid("snap-uuid");
+        found.setRecords(Collections.singletonList(snapshot));
+        when(snapshotFeignClient.getSnapshots(any(), eq("flex"), any())).thenReturn(found);
+        assertEquals("snap-uuid", strategy.resolveSnapshotUuid(snapshotFeignClient, "auth", "flex", "snap"));
+    }
+
+    @Test
+    void testCreateVmSnapshotsViaTemporaryCg_createFailsBeforeUuid_skipsCleanup() {
+        setupMultiFlexVolForTakeSnapshot();
+        setupTemporaryCgFlowMocks("snap-name");
+        when(snapshotFeignClient.createConsistencyGroup(any(), any()))
+                .thenThrow(new CloudRuntimeException("cg create failed"));
+        Map<String, OntapVMSnapshotStrategy.FlexVolGroupInfo> groups =
+                strategy.groupVolumesByFlexVol(vmSnapshotHelper.getVolumeTOList(VM_ID));
+
+        assertThrows(CloudRuntimeException.class, () -> strategy.createVmSnapshotsViaTemporaryCg(
+                createTakeSnapshotVmSnapshot(), mockSnapshotUser(VM_INSTANCE_NAME), groups, "snap-name", new ArrayList<>()));
+        verify(snapshotFeignClient, never()).deleteConsistencyGroup(any(), any());
+    }
+
+    @Test
+    void testConsistencyGroupScopeFromPoolDetails_blankIdentityRejectedAndUuidTrimmed() {
+        Map<String, String> details = new HashMap<>();
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1));
+        details.put(OntapStorageConstants.STORAGE_IP, " ");
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1));
+        details.put(OntapStorageConstants.STORAGE_IP, " 10.1.1.1 ");
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1));
+        details.put(OntapStorageConstants.SVM_NAME, " ");
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1));
+
+        details.put(OntapStorageConstants.SVM_NAME, " vs0 ");
+        details.put(OntapStorageConstants.SVM_UUID, " ");
+        OntapVMSnapshotStrategy.ConsistencyGroupScope blankUuid =
+                strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1);
+        assertEquals("10.1.1.1", blankUuid.storageIp);
+        assertEquals("vs0", blankUuid.svmName);
+        assertNull(blankUuid.svmUuid);
+
+        details.put(OntapStorageConstants.SVM_UUID, "  svm-trim  ");
+        OntapVMSnapshotStrategy.ConsistencyGroupScope trimmed =
+                strategy.consistencyGroupScopeFromPoolDetails(details, POOL_ID_1);
+        assertEquals("svm-trim", trimmed.svmUuid);
+    }
+
+    @Test
+    void testConsistencyGroupScope_svmReferenceFilterAndToString() {
+        OntapVMSnapshotStrategy.ConsistencyGroupScope withUuid =
+                new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", "svm-1");
+        OntapVMSnapshotStrategy.ConsistencyGroupScope nameOnly =
+                new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", null);
+        OntapVMSnapshotStrategy.ConsistencyGroupScope blankUuid =
+                new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", "");
+
+        assertFalse(withUuid.matches(null));
+        assertTrue(withUuid.matches(new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "other", "svm-1")));
+        assertEquals("10.0.0.1|svm-1", withUuid.identityKey());
+        assertEquals("10.0.0.1|vs0", nameOnly.identityKey());
+        assertEquals("10.0.0.1|vs0", blankUuid.identityKey());
+        assertEquals("svm-1", withUuid.toOntapSvm().getUuid());
+        assertEquals("vs0", nameOnly.toOntapSvm().getName());
+        assertEquals("vs0", blankUuid.toOntapSvm().getName());
+        assertEquals("svm-1", withUuid.toOntapSvmReference().get("uuid"));
+        assertEquals("vs0", nameOnly.toOntapSvmReference().get("name"));
+
+        Map<String, Object> byUuid = new HashMap<>();
+        withUuid.applySvmQueryFilter(byUuid);
+        assertEquals("svm-1", byUuid.get("svm.uuid"));
+        Map<String, Object> byName = new HashMap<>();
+        nameOnly.applySvmQueryFilter(byName);
+        assertEquals("vs0", byName.get("svm.name"));
+        assertTrue(withUuid.toString().contains("svmUUID=svm-1"));
+        assertTrue(nameOnly.toString().contains("svmName=vs0"));
+        assertTrue(blankUuid.toString().contains("svmName=vs0"));
+        assertFalse(blankUuid.toString().contains("svmUUID"));
+    }
+
+    @Test
+    void testCreateTemporaryConsistencyGroup_nullScopeAndUnresolvedUuid() {
+        assertThrows(CloudRuntimeException.class, () -> strategy.createTemporaryConsistencyGroup(
+                snapshotFeignClient, storageStrategy, "auth", "cg-name", null, Set.of("flex-1")));
+
+        OntapVMSnapshotStrategy.ConsistencyGroupScope scope =
+                new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", "svm-1");
+        when(snapshotFeignClient.createConsistencyGroup(any(), any())).thenReturn(createJobResponse("job-cg"));
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(new OntapResponse<>());
+        assertThrows(CloudRuntimeException.class, () -> strategy.createTemporaryConsistencyGroup(
+                snapshotFeignClient, storageStrategy, "auth", "cg-name", scope, Set.of("flex-1")));
+
+        OntapResponse<ConsistencyGroup> nullRecord = new OntapResponse<>();
+        nullRecord.setRecords(Collections.singletonList(null));
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(nullRecord);
+        assertThrows(CloudRuntimeException.class, () -> strategy.createTemporaryConsistencyGroup(
+                snapshotFeignClient, storageStrategy, "auth", "cg-name", scope, Set.of("flex-1")));
+
+        OntapResponse<ConsistencyGroup> blankUuid = new OntapResponse<>();
+        ConsistencyGroup group = new ConsistencyGroup();
+        group.setUuid("");
+        blankUuid.setRecords(Collections.singletonList(group));
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(blankUuid);
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.createTemporaryConsistencyGroup(
+                snapshotFeignClient, storageStrategy, "auth", "cg-name", scope, Set.of("flex-1")));
+        assertTrue(ex.getMessage().contains("Unable to resolve"));
+        verify(storageStrategy, atLeastOnce()).pollJobIfPresent(any(), any());
+    }
+
+    @Test
+    void testResolveConsistencyGroupUuidByName_handlesMissingAndPresentRecords() {
+        OntapVMSnapshotStrategy.ConsistencyGroupScope scope =
+                new OntapVMSnapshotStrategy.ConsistencyGroupScope("10.0.0.1", "vs0", null);
+        assertNull(strategy.resolveConsistencyGroupUuidByName(snapshotFeignClient, "auth", "cg-name", scope));
+
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(new OntapResponse<>());
+        assertNull(strategy.resolveConsistencyGroupUuidByName(snapshotFeignClient, "auth", "cg-name", scope));
+
+        OntapResponse<ConsistencyGroup> empty = new OntapResponse<>();
+        empty.setRecords(Collections.emptyList());
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(empty);
+        assertNull(strategy.resolveConsistencyGroupUuidByName(snapshotFeignClient, "auth", "cg-name", scope));
+
+        OntapResponse<ConsistencyGroup> found = new OntapResponse<>();
+        ConsistencyGroup group = new ConsistencyGroup();
+        group.setUuid("cg-uuid");
+        found.setRecords(Collections.singletonList(group));
+        when(snapshotFeignClient.getConsistencyGroups(any(), any())).thenReturn(found);
+        assertEquals("cg-uuid", strategy.resolveConsistencyGroupUuidByName(snapshotFeignClient, "auth", "cg-name", scope));
+
+        ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+        verify(snapshotFeignClient, atLeastOnce()).getConsistencyGroups(eq("auth"), query.capture());
+        assertEquals("vs0", query.getValue().get("svm.name"));
+    }
+
+    @Test
+    void testStartConsistencyGroupSnapshot_nullJobMissingUuidAndExtractedUuid() {
+        when(snapshotFeignClient.createConsistencyGroupSnapshot(any(), eq("cg-1"), any()))
+                .thenReturn(createJobResponse("job-start"));
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenReturn(null);
+        assertNull(strategy.startConsistencyGroupSnapshot(snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+
+        Job undescribed = new Job();
+        undescribed.setDescription("completed without a snapshot path");
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenReturn(undescribed);
+        assertNull(strategy.startConsistencyGroupSnapshot(snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+
+        Job described = new Job();
+        described.setDescription("POST /api/application/consistency-groups/cg-1/snapshots/cg-snap-9");
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenReturn(described);
+        assertEquals("cg-snap-9",
+                strategy.startConsistencyGroupSnapshot(snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+    }
+
+    @Test
+    void testResolveStartedConsistencyGroupSnapshotUuid_prefersJobThenFallsBackToLookup() {
+        Job described = new Job();
+        described.setDescription("POST /api/application/consistency-groups/cg-1/snapshots/from-job");
+        when(snapshotFeignClient.createConsistencyGroupSnapshot(any(), eq("cg-1"), any()))
+                .thenReturn(createJobResponse("job-start"));
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenReturn(described);
+        assertEquals("from-job", strategy.resolveStartedConsistencyGroupSnapshotUuid(
+                snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+        verify(snapshotFeignClient, never()).getConsistencyGroupSnapshots(any(), any(), any());
+
+        when(storageStrategy.pollJobIfPresentAndGetCompletedJob(any(), any())).thenReturn(null);
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any()))
+                .thenReturn(cgSnapshotResponse("snap", "from-get"));
+        assertEquals("from-get", strategy.resolveStartedConsistencyGroupSnapshotUuid(
+                snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+    }
+
+    @Test
+    void testLookupConsistencyGroupSnapshotUuid_matchesFiltersAndFallbackList() {
+        assertNull(strategy.lookupConsistencyGroupSnapshotUuid(snapshotFeignClient, "auth", "cg-1", "snap"));
+
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any()))
+                .thenReturn(cgSnapshotResponse("snap", "direct"));
+        assertEquals("direct", strategy.lookupConsistencyGroupSnapshotUuid(snapshotFeignClient, "auth", "cg-1", "snap"));
+
+        OntapResponse<ConsistencyGroupSnapshot> mixed = new OntapResponse<>();
+        ConsistencyGroupSnapshot other = new ConsistencyGroupSnapshot();
+        other.setName("other");
+        other.setUuid("other-uuid");
+        ConsistencyGroupSnapshot blank = new ConsistencyGroupSnapshot();
+        blank.setName("snap");
+        blank.setUuid("");
+        ConsistencyGroupSnapshot good = new ConsistencyGroupSnapshot();
+        good.setName("snap");
+        good.setUuid("later-uuid");
+        mixed.setRecords(Arrays.asList(null, other, blank, good));
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any())).thenReturn(mixed);
+        assertEquals("later-uuid", strategy.lookupConsistencyGroupSnapshotUuid(snapshotFeignClient, "auth", "cg-1", "snap"));
+
+        OntapResponse<ConsistencyGroupSnapshot> empty = new OntapResponse<>();
+        empty.setRecords(Collections.emptyList());
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any()))
+                .thenReturn(empty, cgSnapshotResponse("snap", "from-list"));
+        assertEquals("from-list", strategy.lookupConsistencyGroupSnapshotUuid(snapshotFeignClient, "auth", "cg-1", "snap"));
+
+        OntapResponse<ConsistencyGroupSnapshot> missing = null;
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any())).thenReturn(missing, missing);
+        assertNull(strategy.lookupConsistencyGroupSnapshotUuid(snapshotFeignClient, "auth", "cg-1", "snap"));
+    }
+
+    @Test
+    void testResolveConsistencyGroupSnapshotUuid_succeedsOnFirstAndSecondAttempt() {
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any()))
+                .thenReturn(cgSnapshotResponse("snap", "immediate"));
+        assertEquals("immediate", strategy.resolveConsistencyGroupSnapshotUuid(
+                snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+
+        AtomicInteger calls = new AtomicInteger();
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any())).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() < 3) {
+                return new OntapResponse<ConsistencyGroupSnapshot>();
+            }
+            return cgSnapshotResponse("snap", "retried");
+        });
+        assertEquals("retried", strategy.resolveConsistencyGroupSnapshotUuid(
+                snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+    }
+
+    @Test
+    void testResolveConsistencyGroupSnapshotUuid_interruptedWhileWaiting() {
+        OntapResponse<ConsistencyGroupSnapshot> empty = new OntapResponse<>();
+        empty.setRecords(Collections.emptyList());
+        when(snapshotFeignClient.getConsistencyGroupSnapshots(any(), eq("cg-1"), any())).thenReturn(empty);
+        Thread.currentThread().interrupt();
+        try {
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.resolveConsistencyGroupSnapshotUuid(
+                    snapshotFeignClient, storageStrategy, "auth", "cg-1", "snap"));
+            assertTrue(ex.getMessage().contains("Interrupted"));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void testDeleteVMSnapshot_stateTransitionFails() throws Exception {
+        VMSnapshotVO vmSnapshot = mock(VMSnapshotVO.class);
+        when(vmSnapshot.getVmId()).thenReturn(VM_ID);
+        doThrow(new NoTransitionException("cannot expunge")).when(vmSnapshotHelper)
+                .vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.ExpungeRequested);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.deleteVMSnapshot(vmSnapshot));
+        assertEquals("cannot expunge", ex.getMessage());
+    }
+
+    @Test
+    void testDeleteVMSnapshot_noDetails_returnsTrue() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.ExpungeRequested);
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(Collections.emptyList());
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot")).thenReturn(Collections.emptyList());
+
+        assertTrue(strategy.deleteVMSnapshot(vmSnapshot));
+        verify(strategy, never()).deleteDiskSnapshot(any());
+        verify(storageStrategy, never()).deleteFlexVolSnapshotForCloudStackVolume(any(), any(), any());
+    }
+
+    @Test
+    void testDeleteVMSnapshot_flexAndLegacyDetails_deletesBoth() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.ExpungeRequested);
+        VMSnapshotDetailsVO first = flexDetail(1L, "flex-1::snap-1::name::file-1::401::NFS3");
+        VMSnapshotDetailsVO second = flexDetail(2L, "flex-1::snap-1::name::file-2::401::NFS3");
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(Arrays.asList(first, second));
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot"))
+                .thenReturn(Collections.singletonList(new VMSnapshotDetailsVO(SNAPSHOT_ID, "kvmStorageSnapshot", "9", true)));
+
+        assertTrue(strategy.deleteVMSnapshot(vmSnapshot));
+        verify(storageStrategy, times(1)).deleteFlexVolSnapshotForCloudStackVolume("flex-1", "snap-1", "name");
+        verify(vmSnapshotDetailsDao).remove(1L);
+        verify(vmSnapshotDetailsDao).remove(2L);
+        verify(strategy).deleteDiskSnapshot(vmSnapshot);
+    }
+
+    @Test
+    void testDeleteVMSnapshot_flexDeleteFailure_wrapsError() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.ExpungeRequested);
+        VMSnapshotDetailsVO failedDetail = flexDetail(1L, "flex-1::snap-1::name::file::401::NFS3");
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(Collections.singletonList(failedDetail));
+        doThrow(new IllegalStateException("ontap down")).when(storageStrategy)
+                .deleteFlexVolSnapshotForCloudStackVolume(any(), any(), any());
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.deleteVMSnapshot(vmSnapshot));
+        assertTrue(ex.getMessage().contains("Delete of ONTAP VM Snapshot"));
+        assertTrue(ex.getMessage().contains("ontap down"));
+        verify(vmSnapshotDetailsDao, never()).remove(anyLong());
+    }
+
+    @Test
+    void testDeleteFlexVolSnapshots_keepsFirstFailureAndSkipsDetailRemoval() {
+        VMSnapshotDetailsVO first = flexDetail(1L, "flex-1::snap-1::name::file-1::401::NFS3");
+        VMSnapshotDetailsVO second = flexDetail(2L, "flex-1::snap-2::name::file-2::401::NFS3");
+        doReturn(storageStrategy).when(strategy).resolveStorageStrategy(any());
+        doThrow(new CloudRuntimeException("first-failure"))
+                .doThrow(new IllegalStateException("second-failure"))
+                .when(storageStrategy).deleteFlexVolSnapshotForCloudStackVolume(any(), any(), any());
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.deleteFlexVolSnapshots(Arrays.asList(first, second)));
+        assertEquals("first-failure", ex.getMessage());
+        verify(vmSnapshotDetailsDao, never()).remove(anyLong());
+    }
+
+    @Test
+    void testDeleteFlexVolSnapshots_invalidDetail_throws() {
+        VMSnapshotDetailsVO detail = flexDetail(1L, "not-a-detail");
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.deleteFlexVolSnapshots(Collections.singletonList(detail)));
+    }
+
+    @Test
+    void testRevertVMSnapshot_stateTransitionFails() throws Exception {
+        VMSnapshotVO vmSnapshot = mock(VMSnapshotVO.class);
+        when(vmSnapshot.getVmId()).thenReturn(VM_ID);
+        doThrow(new NoTransitionException("cannot revert")).when(vmSnapshotHelper)
+                .vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.RevertRequested);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.revertVMSnapshot(vmSnapshot));
+        assertEquals("cannot revert", ex.getMessage());
+    }
+
+    @Test
+    void testRevertVMSnapshot_flexAndLegacy_returnsTrue() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.RevertRequested);
+        Map<String, String> poolDetails = new HashMap<>();
+        poolDetails.put(OntapStorageConstants.VOLUME_NAME, "fv-name");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(poolDetails);
+        VMSnapshotDetailsVO nfsDetail = flexDetail(1L, "flex-1::snap-1::snap-name::file.qcow2::401::NFS3");
+        VMSnapshotDetailsVO iscsiDetail = flexDetail(2L, "flex-1::snap-1::snap-name::/vol/vol1/lun_301::401::ISCSI");
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(Arrays.asList(nfsDetail, iscsiDetail));
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot"))
+                .thenReturn(Collections.singletonList(new VMSnapshotDetailsVO(SNAPSHOT_ID, "kvmStorageSnapshot", "9", true)));
+        when(storageStrategy.revertSnapshotForCloudStackVolume(any(), any(), any(), any(), any(), any()))
+                .thenReturn(createJobResponse("job-restore"));
+
+        assertTrue(strategy.revertVMSnapshot(vmSnapshot));
+        verify(storageStrategy).revertSnapshotForCloudStackVolume(
+                "snap-name", "flex-1", "snap-1", "file.qcow2", null, "fv-name");
+        verify(storageStrategy).revertSnapshotForCloudStackVolume(
+                "snap-name", "flex-1", "snap-1", "/vol/vol1/lun_301", null, "fv-name");
+        verify(storageStrategy, times(2)).executeCliSfsrRestore(any(), any());
+        verify(strategy).revertDiskSnapshot(vmSnapshot);
+    }
+
+    @Test
+    void testRevertFlexVolSnapshots_missingOrBlankFlexVolName_throws() {
+        doReturn(storageStrategy).when(strategy).resolveStorageStrategy(any());
+        VMSnapshotDetailsVO detail = flexDetail(1L, "flex-1::snap-1::snap-name::file.qcow2::401::NFS3");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(new HashMap<>());
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.revertFlexVolSnapshots(Collections.singletonList(detail)));
+
+        Map<String, String> blank = new HashMap<>();
+        blank.put(OntapStorageConstants.VOLUME_NAME, "");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(blank);
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.revertFlexVolSnapshots(Collections.singletonList(detail)));
+        assertTrue(ex.getMessage().contains("FlexVolume name"));
+    }
+
+    @Test
+    void testRevertVMSnapshot_restoreFailsAndOperationFailedTransitionFails() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.RevertRequested);
+        Map<String, String> poolDetails = new HashMap<>();
+        poolDetails.put(OntapStorageConstants.VOLUME_NAME, "fv-name");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(poolDetails);
+        VMSnapshotDetailsVO restoreDetail = flexDetail(1L, "flex-1::snap-1::snap-name::file.qcow2::401::NFS3");
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(Collections.singletonList(restoreDetail));
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot")).thenReturn(Collections.emptyList());
+        when(storageStrategy.revertSnapshotForCloudStackVolume(any(), any(), any(), any(), any(), any()))
+                .thenThrow(new CloudRuntimeException("restore failed"));
+        doThrow(new NoTransitionException("stuck")).when(vmSnapshotHelper)
+                .vmSnapshotStateTransitTo(any(), eq(VMSnapshot.Event.OperationFailed));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.revertVMSnapshot(vmSnapshot));
+        assertTrue(ex.getMessage().contains("vm-snap-1"));
+        verify(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.OperationFailed);
+    }
+
+    @Test
+    void testRevertVMSnapshot_restoreFailsAndOperationFailedSucceeds() throws Exception {
+        VMSnapshotVO vmSnapshot = mockDeleteOrRevertSnapshot();
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.RevertRequested);
+        Map<String, String> poolDetails = new HashMap<>();
+        poolDetails.put(OntapStorageConstants.VOLUME_NAME, "fv-name");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID_1)).thenReturn(poolDetails);
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, OntapStorageConstants.ONTAP_FLEXVOL_SNAPSHOT))
+                .thenReturn(null);
+        when(vmSnapshotDetailsDao.findDetails(SNAPSHOT_ID, "kvmStorageSnapshot"))
+                .thenReturn(Collections.singletonList(new VMSnapshotDetailsVO(SNAPSHOT_ID, "kvmStorageSnapshot", "9", true)));
+        doThrow(new CloudRuntimeException("legacy revert failed")).when(strategy).revertDiskSnapshot(any());
+        doReturn(true).when(vmSnapshotHelper).vmSnapshotStateTransitTo(any(), eq(VMSnapshot.Event.OperationFailed));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.revertVMSnapshot(vmSnapshot));
+        assertTrue(ex.getMessage().contains("vm-snap-1"));
+        verify(vmSnapshotHelper).vmSnapshotStateTransitTo(vmSnapshot, VMSnapshot.Event.OperationFailed);
+    }
+
+    @Test
+    void testResolveVolumePathOnOntap_missingAndEmptyPaths() {
+        VolumeDetailVO emptyLun = mock(VolumeDetailVO.class);
+        when(emptyLun.getValue()).thenReturn("");
+        when(volumeDetailsDao.findDetail(VOLUME_ID_1, OntapStorageConstants.LUN_DOT_NAME)).thenReturn(emptyLun);
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveVolumePathOnOntap(VOLUME_ID_1, "iscsi", new HashMap<>()));
+
+        VolumeDetailVO nullLun = mock(VolumeDetailVO.class);
+        when(nullLun.getValue()).thenReturn(null);
+        when(volumeDetailsDao.findDetail(VOLUME_ID_1, OntapStorageConstants.LUN_DOT_NAME)).thenReturn(nullLun);
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveVolumePathOnOntap(VOLUME_ID_1, "ISCSI", new HashMap<>()));
+
+        VolumeVO emptyPath = mock(VolumeVO.class);
+        when(emptyPath.getPath()).thenReturn("");
+        when(volumeDao.findById(VOLUME_ID_1)).thenReturn(emptyPath);
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveVolumePathOnOntap(VOLUME_ID_1, null, new HashMap<>()));
+
+        VolumeVO nullPath = mock(VolumeVO.class);
+        when(nullPath.getPath()).thenReturn(null);
+        when(volumeDao.findById(VOLUME_ID_1)).thenReturn(nullPath);
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.resolveVolumePathOnOntap(VOLUME_ID_1, "NFS3", new HashMap<>()));
     }
 }

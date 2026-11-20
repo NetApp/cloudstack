@@ -37,11 +37,13 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.JobFeignClient;
 import org.apache.cloudstack.storage.feign.client.NASFeignClient;
+import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.client.VolumeFeignClient;
 import org.apache.cloudstack.storage.feign.client.AggregateFeignClient;
 import org.apache.cloudstack.storage.feign.client.SvmFeignClient;
 import org.apache.cloudstack.storage.feign.client.NetworkFeignClient;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
+import org.apache.cloudstack.storage.feign.model.CliSnapshotRestoreRequest;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.ExportRule;
 import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
@@ -72,6 +74,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -1605,5 +1608,290 @@ public class UnifiedNASStrategyTest {
 
         assertTrue(exception.getMessage().contains("No such file or directory"));
         assertTrue(exception.getMessage().contains("deleted-volume.qcow2"));
+    }
+
+    @Test
+    public void testSetOntapStorage_replacesStorage() {
+        OntapStorage replacement = new OntapStorage("other", "secret", "10.0.0.1", "svm2", 1L, ProtocolType.NFS3);
+        strategy.setOntapStorage(replacement);
+        assertDoesNotThrow(() -> strategy.getAuthHeader());
+    }
+
+    @Test
+    public void testCreateCloudStackVolume_nullAnswer_throws() throws Exception {
+        CloudStackVolume cloudStackVolume = volumeReadyForHostCommand();
+        EndPoint endPoint = mock(EndPoint.class);
+        when(epSelector.select(any(VolumeObject.class))).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(CreateObjectCommand.class))).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.createCloudStackVolume(cloudStackVolume));
+        assertTrue(ex.getMessage().contains("Failed to create qcow2 on KVM host"));
+    }
+
+    @Test
+    public void testCreateCloudStackVolume_hostCommandThrows_returnsFailure() throws Exception {
+        CloudStackVolume cloudStackVolume = volumeReadyForHostCommand();
+        EndPoint endPoint = mock(EndPoint.class);
+        when(epSelector.select(any(VolumeObject.class))).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(CreateObjectCommand.class))).thenThrow(new IllegalStateException("agent down"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.createCloudStackVolume(cloudStackVolume));
+        assertTrue(ex.getMessage().contains("agent down"));
+    }
+
+    @Test
+    public void testCreateCloudStackVolume_unexpectedException_isWrapped() {
+        CloudStackVolume cloudStackVolume = mock(CloudStackVolume.class);
+        when(cloudStackVolume.getDatastoreId()).thenThrow(new IllegalStateException("metadata boom"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.createCloudStackVolume(cloudStackVolume));
+        assertTrue(ex.getCause() instanceof IllegalStateException);
+    }
+
+    @Test
+    public void testCreateCloudStackVolume_qosCleanupFailureStillRethrowsQosError() throws Exception {
+        CloudStackVolume cloudStackVolume = volumeReadyForHostCommand();
+        VolumeQosPolicy qosPolicy = new VolumeQosPolicy();
+        qosPolicy.setName("qos");
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setQosPolicy(qosPolicy);
+        when(cloudStackVolume.getFile()).thenReturn(fileInfo);
+        when(cloudStackVolume.getFlexVolumeUuid()).thenReturn("flex-uuid");
+        EndPoint endPoint = mock(EndPoint.class);
+        when(epSelector.select(any(VolumeObject.class))).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(CreateObjectCommand.class))).thenReturn(new Answer(null, true, "created"));
+        when(endPoint.sendMessage(any(DeleteCommand.class))).thenReturn(new Answer(null, false, "cleanup failed"));
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.getMessage()).thenReturn("qos rejected");
+        doThrow(feignException).when(nasFeignClient).updateFile(anyString(), anyString(), anyString(), any(FileInfo.class));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.createCloudStackVolume(cloudStackVolume));
+        assertTrue(ex.getMessage().contains("Failed to update NFS volume file"));
+        verify(endPoint).sendMessage(any(DeleteCommand.class));
+    }
+
+    @Test
+    public void testDeleteCloudStackVolume_hostCommandThrows_returnsFailure() throws Exception {
+        CloudStackVolume cloudStackVolume = volumeReadyForHostCommand();
+        EndPoint endPoint = mock(EndPoint.class);
+        when(epSelector.select(any(VolumeObject.class))).thenReturn(endPoint);
+        when(endPoint.sendMessage(any(DeleteCommand.class))).thenThrow(new IllegalStateException("agent down"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> strategy.deleteCloudStackVolume(cloudStackVolume));
+        assertTrue(ex.getMessage().contains("agent down"));
+    }
+
+    @Test
+    public void testGetCloudStackVolume_returnsFileWhenPresent() {
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setPath("file-uuid");
+        OntapResponse<FileInfo> response = new OntapResponse<>();
+        response.setRecords(List.of(fileInfo));
+        when(nasFeignClient.getFileResponse(anyString(), eq("flex-uuid"), eq("file-uuid"))).thenReturn(response);
+
+        Map<String, String> values = new HashMap<>();
+        values.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
+        values.put(OntapStorageConstants.FILE_PATH, "file-uuid");
+        CloudStackVolume result = strategy.getCloudStackVolume(values);
+
+        assertNotNull(result);
+        assertSame(fileInfo, result.getFile());
+        assertEquals("flex-uuid", result.getFlexVolumeUuid());
+    }
+
+    @Test
+    public void testGetFile_emptyFeignAndUnexpectedErrors_throw() {
+        Map<String, String> values = Map.of(OntapStorageConstants.VOLUME_UUID, "flex", OntapStorageConstants.FILE_PATH, "file");
+        OntapResponse<FileInfo> emptyRecords = new OntapResponse<>();
+        emptyRecords.setRecords(new ArrayList<>());
+        when(nasFeignClient.getFileResponse(anyString(), anyString(), anyString())).thenReturn(emptyRecords);
+        CloudRuntimeException empty = assertThrows(CloudRuntimeException.class, () -> strategy.getCloudStackVolume(values));
+        assertTrue(empty.getMessage().contains("not found"));
+
+        FeignException notFound = mock(FeignException.class);
+        when(notFound.status()).thenReturn(404);
+        when(notFound.getMessage()).thenReturn("missing");
+        doThrow(notFound).when(nasFeignClient).getFileResponse(anyString(), anyString(), anyString());
+        CloudRuntimeException feign = assertThrows(CloudRuntimeException.class, () -> strategy.getCloudStackVolume(values));
+        assertTrue(feign.getMessage().contains("File not found"));
+
+        doThrow(new IllegalStateException("decode")).when(nasFeignClient).getFileResponse(anyString(), anyString(), anyString());
+        CloudRuntimeException unexpected = assertThrows(CloudRuntimeException.class, () -> strategy.getCloudStackVolume(values));
+        assertTrue(unexpected.getMessage().contains("Failed to get the file"));
+    }
+
+    @Test
+    public void testDeleteFileByPath_successAndUnexpectedException() {
+        strategy.deleteFileByPath("flex", "file");
+        verify(nasFeignClient).deleteFile(anyString(), eq("flex"), eq("file"));
+
+        doThrow(new IllegalStateException("decode")).when(nasFeignClient).deleteFile(anyString(), eq("flex"), eq("file"));
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.deleteFileByPath("flex", "file"));
+        assertTrue(ex.getMessage().contains("Failed to delete file"));
+    }
+
+    @Test
+    public void testDeleteAccessGroup_non404Feign_throws() {
+        AccessGroup accessGroup = mock(AccessGroup.class);
+        when(accessGroup.getStoragePoolId()).thenReturn(1L);
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.EXPORT_POLICY_ID, "1");
+        details.put(OntapStorageConstants.EXPORT_POLICY_NAME, "policy");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+        FeignException feignException = mock(FeignException.class);
+        when(feignException.status()).thenReturn(500);
+        when(feignException.getMessage()).thenReturn("busy");
+        doThrow(feignException).when(nasFeignClient).deleteExportPolicyById(anyString(), eq("1"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.deleteAccessGroup(accessGroup));
+        assertTrue(ex.getMessage().contains("Failed to delete export policy"));
+    }
+
+    @Test
+    public void testCreateExportPolicy_feignOnCreateAndVerify_throw() {
+        AccessGroup accessGroup = exportPolicyAccessGroup();
+        FeignException createError = mock(FeignException.class);
+        when(createError.getMessage()).thenReturn("create failed");
+        doThrow(createError).when(nasFeignClient).createExportPolicy(anyString(), any(ExportPolicy.class));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(accessGroup));
+        assertTrue(ex.getMessage().contains("Failed to create export policy"));
+
+        doNothing().when(nasFeignClient).createExportPolicy(anyString(), any(ExportPolicy.class));
+        FeignException verifyError = mock(FeignException.class);
+        when(verifyError.getMessage()).thenReturn("lookup failed");
+        when(nasFeignClient.getExportPolicyResponse(anyString(), anyMap())).thenThrow(verifyError);
+        ex = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(accessGroup));
+        assertTrue(ex.getMessage().contains("verification failed"));
+    }
+
+    @Test
+    public void testAssignExportPolicy_nullJobAndJobClientError_throw() {
+        AccessGroup accessGroup = exportPolicyAccessGroup();
+        ExportPolicy created = mock(ExportPolicy.class);
+        when(created.getName()).thenReturn("cs-svm1-vol1");
+        when(created.getId()).thenReturn(java.math.BigInteger.ONE);
+        OntapResponse<ExportPolicy> policies = new OntapResponse<>();
+        policies.setRecords(List.of(created));
+        when(nasFeignClient.getExportPolicyResponse(anyString(), anyMap())).thenReturn(policies);
+        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(accessGroup));
+        assertTrue(ex.getMessage().contains("Failed to attach policy") || ex.getMessage().contains("Failed to update volume"));
+
+        JobResponse jobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-1");
+        jobResponse.setJob(job);
+        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(jobResponse);
+        Map<String, java.util.Collection<String>> headers = java.util.Collections.emptyMap();
+        feign.Request request = feign.Request.create(feign.Request.HttpMethod.GET, "http://test", headers, (byte[]) null, (java.nio.charset.Charset) null);
+        when(jobFeignClient.getJobByUUID(anyString(), eq("job-1")))
+                .thenThrow(new FeignException.FeignClientException(400, "bad job", request, null));
+        ex = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(accessGroup));
+        assertTrue(ex.getMessage().contains("Failed to fetch job status") || ex.getMessage().contains("Failed to update volume"));
+    }
+
+    @Test
+    public void testAssignExportPolicy_nullJobThenSuccess() {
+        AccessGroup accessGroup = exportPolicyAccessGroup();
+        ExportPolicy created = mock(ExportPolicy.class);
+        when(created.getName()).thenReturn("cs-svm1-vol1");
+        when(created.getId()).thenReturn(java.math.BigInteger.ONE);
+        OntapResponse<ExportPolicy> policies = new OntapResponse<>();
+        policies.setRecords(List.of(created));
+        when(nasFeignClient.getExportPolicyResponse(anyString(), anyMap())).thenReturn(policies);
+        JobResponse jobResponse = new JobResponse();
+        Job job = new Job();
+        job.setUuid("job-2");
+        jobResponse.setJob(job);
+        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(jobResponse);
+        Job success = new Job();
+        success.setState(OntapStorageConstants.JOB_SUCCESS);
+        when(jobFeignClient.getJobByUUID(anyString(), eq("job-2"))).thenReturn(null, success);
+
+        assertNotNull(strategy.createAccessGroup(accessGroup));
+        verify(jobFeignClient, times(2)).getJobByUUID(anyString(), eq("job-2"));
+    }
+
+    @Test
+    public void testCloneCloudStackVolume_unexpectedException_isWrapped() {
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.VOLUME_UUID, "flex");
+        details.put(OntapStorageConstants.VOLUME_NAME, "flex");
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+        FileInfo source = new FileInfo();
+        source.setPath("source");
+        CloudStackVolume request = new CloudStackVolume();
+        request.setDatastoreId("1");
+        request.setVolumeInfo(volumeObject);
+        request.setFile(source);
+        request.setDestinationPath("dest");
+        when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenThrow(new IllegalStateException("decode"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolume(request));
+        assertTrue(ex.getMessage().contains("Failed to clone file"));
+    }
+
+    @Test
+    public void testRevertSnapshotForCloudStackVolume_validatesAndRestores() throws Exception {
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.revertSnapshotForCloudStackVolume("", "flex-uuid", "snap-uuid", "file", null, "flex"));
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.revertSnapshotForCloudStackVolume("snap", "flex-uuid", "snap-uuid", "", null, "flex"));
+        assertThrows(CloudRuntimeException.class,
+                () -> strategy.revertSnapshotForCloudStackVolume("snap", "flex-uuid", "snap-uuid", "file", null, ""));
+
+        SnapshotFeignClient snapshotFeignClient = mock(SnapshotFeignClient.class);
+        Field field = StorageStrategy.class.getDeclaredField("snapshotFeignClient");
+        field.setAccessible(true);
+        field.set(strategy, snapshotFeignClient);
+        JobResponse jobResponse = new JobResponse();
+        when(snapshotFeignClient.restoreFileFromSnapshotCli(anyString(), any(CliSnapshotRestoreRequest.class))).thenReturn(jobResponse);
+
+        assertSame(jobResponse, strategy.revertSnapshotForCloudStackVolume(
+                "snap", "flex-uuid", "snap-uuid", "file-uuid", null, "flex"));
+        org.mockito.ArgumentCaptor<CliSnapshotRestoreRequest> captor = org.mockito.ArgumentCaptor.forClass(CliSnapshotRestoreRequest.class);
+        verify(snapshotFeignClient).restoreFileFromSnapshotCli(anyString(), captor.capture());
+        assertEquals("/file-uuid", captor.getValue().getPath());
+        assertEquals("svm1", captor.getValue().getVserver());
+
+        strategy.revertSnapshotForCloudStackVolume("snap", "flex-uuid", "snap-uuid", "/already", null, "flex");
+        verify(snapshotFeignClient, times(2)).restoreFileFromSnapshotCli(anyString(), captor.capture());
+        assertEquals("/already", captor.getValue().getPath());
+    }
+
+    private CloudStackVolume volumeReadyForHostCommand() {
+        CloudStackVolume cloudStackVolume = mock(CloudStackVolume.class);
+        VolumeObject volumeObject = mock(VolumeObject.class);
+        VolumeVO volumeVO = mock(VolumeVO.class);
+        when(cloudStackVolume.getDatastoreId()).thenReturn("1");
+        when(cloudStackVolume.getVolumeInfo()).thenReturn(volumeObject);
+        when(volumeObject.getId()).thenReturn(100L);
+        when(volumeObject.getUuid()).thenReturn("volume-uuid-123");
+        when(volumeObject.getTO()).thenReturn(new VolumeObjectTO());
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeDao.update(anyLong(), any(VolumeVO.class))).thenReturn(true);
+        return cloudStackVolume;
+    }
+
+    private AccessGroup exportPolicyAccessGroup() {
+        AccessGroup accessGroup = mock(AccessGroup.class);
+        HostVO host = mock(HostVO.class);
+        when(host.getStorageIpAddress()).thenReturn("10.0.0.1");
+        Map<String, String> details = new HashMap<>();
+        details.put(OntapStorageConstants.SVM_NAME, "svm1");
+        details.put(OntapStorageConstants.VOLUME_UUID, "vol-uuid");
+        details.put(OntapStorageConstants.VOLUME_NAME, "vol1");
+        when(accessGroup.getStoragePoolId()).thenReturn(1L);
+        when(accessGroup.getHostsToConnect()).thenReturn(List.of(host));
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+        return accessGroup;
     }
 }

@@ -209,6 +209,24 @@
                                 <goals>
                                     <goal>report</goal>
                                 </goals>
+                                <configuration>
+                                    <!-- Request/response beans with no behavior. Aggregate and Svm stay
+                                         in the report because they contain logic the unit tests already run. -->
+                                    <excludes>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/CliSnapshotRestoreRequest*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/ConsistencyGroupVolume*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/LunRestoreRequest*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/LunSpace*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/Nas*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/Policy*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/Qos*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/SnapshotFileRestoreRequest*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/Version*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/VolumeConcise*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/VolumeSpaceLogicalSpace*</exclude>
+                                        <exclude>org/apache/cloudstack/storage/feign/model/AntiRansomware*</exclude>
+                                    </excludes>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>

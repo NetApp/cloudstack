@@ -51,6 +51,8 @@ import org.apache.cloudstack.storage.service.model.AccessGroup;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.alert.AlertManager;
 import com.cloud.capacity.CapacityManager;
+import com.cloud.storage.StoragePoolAutomation;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
@@ -76,6 +78,7 @@ import com.cloud.storage.StoragePool;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreLifeCycle;
 import org.apache.cloudstack.storage.provider.StorageProviderFactory;
 import org.apache.cloudstack.storage.service.StorageStrategy;
+import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -113,6 +116,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
     @Mock
     private CapacityManager _capacityMgr;
+
+    @Mock
+    private StoragePoolAutomation _storagePoolAutomation;
+
+    @Mock
+    private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
 
     // Mock object that implements both DataStore and PrimaryDataStoreInfo
     // This is needed because attachCluster(DataStore) casts DataStore to PrimaryDataStoreInfo internally
@@ -1399,6 +1408,346 @@ public class OntapPrimaryDatastoreLifecycleTest {
             assertThrows(CloudRuntimeException.class,
                     () -> ontapPrimaryDatastoreLifecycle.updateStoragePool(storagePool, details));
             verify(storageStrategy, times(1)).updateStorageVolume(any(Volume.class));
+        }
+    }
+
+    @Test
+    public void testInitialize_persistsResolvedSvmUuid() {
+        when(storageStrategy.getResolvedSvmUuid()).thenReturn("svm-uuid-9");
+
+        Map<String, String> details = initializeAndCaptureDetails(buildDsInfosForProtocol("NFS3"));
+
+        assertEquals("svm-uuid-9", details.get(OntapStorageConstants.SVM_UUID));
+    }
+
+    @Test
+    public void testInitialize_blankSvmUuidIsNotPersisted() {
+        when(storageStrategy.getResolvedSvmUuid()).thenReturn("");
+
+        Map<String, String> details = initializeAndCaptureDetails(buildDsInfosForProtocol("NFS3"));
+
+        assertNull(details.get(OntapStorageConstants.SVM_UUID));
+    }
+
+    @Test
+    public void testInitialize_connectReturnsFalse_throws() {
+        when(storageStrategy.connect()).thenReturn(false);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> initializeWithFactory(buildDsInfosForProtocol("NFS3")));
+
+        assertTrue(ex.getMessage().contains("ONTAP details validation failed"));
+        verify(_dataStoreHelper, never()).createPrimaryDataStore(any());
+    }
+
+    @Test
+    public void testInitialize_chooseAggregateFailure_throws() {
+        when(storageStrategy.chooseAggregate(any(), any())).thenThrow(new RuntimeException("no aggregate"));
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> initializeWithFactory(buildDsInfosForProtocol("NFS3")));
+
+        assertTrue(ex.getMessage().contains("Failed to choose ONTAP aggregate"));
+    }
+
+    @Test
+    public void testInitialize_zoneScopeWithoutPodOrCluster() {
+        Map<String, Object> dsInfos = buildDsInfosForProtocol("NFS3");
+        dsInfos.remove("podId");
+        dsInfos.remove("clusterId");
+
+        initializeWithFactory(dsInfos);
+
+        verify(_clusterDao, never()).findById(anyLong());
+        verify(_dataStoreHelper).createPrimaryDataStore(any());
+    }
+
+    @Test
+    public void testInitialize_podWithoutCluster_throws() {
+        Map<String, Object> dsInfos = buildDsInfosForProtocol("NFS3");
+        dsInfos.put("podId", 1L);
+        dsInfos.put("clusterId", null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> ontapPrimaryDatastoreLifecycle.initialize(dsInfos));
+
+        assertTrue(ex.getMessage().contains("Cluster Id or Pod Id is null"));
+    }
+
+    @Test
+    public void testInitialize_emptyDetailValue_throws() {
+        Map<String, Object> dsInfos = buildDsInfosForProtocol("NFS3");
+        @SuppressWarnings("unchecked")
+        Map<String, String> details = (Map<String, String>) dsInfos.get("details");
+        details.put(OntapStorageConstants.USERNAME, "  ");
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> ontapPrimaryDatastoreLifecycle.initialize(dsInfos));
+
+        assertTrue(ex.getMessage().contains("empty detail"));
+    }
+
+    @Test
+    public void testAttachCluster_nullDataStore_throws() {
+        assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachCluster(null, clusterScope));
+    }
+
+    @Test
+    public void testAttachCluster_nullScope_throws() {
+        assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachCluster(dataStore, null));
+    }
+
+    @Test
+    public void testAttachCluster_storagePoolMissing_throws() {
+        when(storagePoolDao.findById(1L)).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachCluster(dataStore, clusterScope));
+
+        assertTrue(ex.getMessage().contains("Storage Pool not found"));
+    }
+
+    @Test
+    public void testAttachCluster_iscsiDoesNotCreateNfsExportPolicy() throws Exception {
+        poolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name());
+        HostVO iscsiHost = new HostVO("iscsi-host");
+        iscsiHost.setStorageUrl("iqn.1993-08.org.debian:01:host1");
+
+        when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any())).thenReturn(List.of(iscsiHost));
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
+        when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+            assertTrue(ontapPrimaryDatastoreLifecycle.attachCluster(dataStore, clusterScope));
+        }
+
+        verify(storageStrategy, never()).createAccessGroup(any());
+        verify(_storageMgr).connectHostToSharedPool(iscsiHost, 1L);
+    }
+
+    @Test
+    public void testAttachCluster_nfsUsesPrivateIpWhenStorageIpMissing() throws Exception {
+        HostVO privateOnly = new HostVO("private-only");
+        privateOnly.setStorageIpAddress(null);
+        privateOnly.setPrivateIpAddress(" 10.2.2.2 ");
+        List<HostVO> hosts = List.of(privateOnly);
+
+        when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any())).thenReturn(hosts);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(_dataStoreHelper.attachCluster(any(DataStore.class))).thenReturn(dataStore);
+        when(_storageMgr.connectHostToSharedPool(any(HostVO.class), anyLong())).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+            assertTrue(ontapPrimaryDatastoreLifecycle.attachCluster(dataStore, clusterScope));
+        }
+
+        verify(storageStrategy).createAccessGroup(any(AccessGroup.class));
+    }
+
+    @Test
+    public void testAttachCluster_accessGroupFailure_throws() {
+        when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any())).thenReturn(mockHosts);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        when(storageStrategy.createAccessGroup(any(AccessGroup.class))).thenThrow(new RuntimeException("export failed"));
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> ontapPrimaryDatastoreLifecycle.attachCluster(dataStore, clusterScope));
+            assertTrue(ex.getMessage().contains("Failed to create NFS access group"));
+        }
+
+        verify(_dataStoreHelper, never()).attachCluster(any());
+    }
+
+    @Test
+    public void testAttachZone_nullDataStore_throws() {
+        assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachZone(null, zoneScope, Hypervisor.HypervisorType.KVM));
+    }
+
+    @Test
+    public void testAttachZone_nullScope_throws() {
+        assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachZone(dataStore, null, Hypervisor.HypervisorType.KVM));
+    }
+
+    @Test
+    public void testAttachZone_storagePoolMissing_throws() {
+        when(storagePoolDao.findById(1L)).thenReturn(null);
+
+        CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                () -> ontapPrimaryDatastoreLifecycle.attachZone(dataStore, zoneScope, Hypervisor.HypervisorType.KVM));
+
+        assertTrue(ex.getMessage().contains("Storage Pool not found"));
+    }
+
+    @Test
+    public void testMaintain_successDelegatesToHelper() {
+        when(_storagePoolAutomation.maintain(dataStore)).thenReturn(true);
+        when(_dataStoreHelper.maintain(dataStore)).thenReturn(true);
+
+        assertTrue(ontapPrimaryDatastoreLifecycle.maintain(dataStore));
+        verify(_dataStoreHelper).maintain(dataStore);
+    }
+
+    @Test
+    public void testMaintain_automationRejects_returnsFalse() {
+        when(_storagePoolAutomation.maintain(dataStore)).thenReturn(false);
+
+        assertFalse(ontapPrimaryDatastoreLifecycle.maintain(dataStore));
+        verify(_dataStoreHelper, never()).maintain(dataStore);
+    }
+
+    @Test
+    public void testCancelMaintain_successDelegatesToAutomation() {
+        when(_dataStoreHelper.cancelMaintain(dataStore)).thenReturn(true);
+        when(_storagePoolAutomation.cancelMaintain(dataStore)).thenReturn(true);
+
+        assertTrue(ontapPrimaryDatastoreLifecycle.cancelMaintain(dataStore));
+        verify(_storagePoolAutomation).cancelMaintain(dataStore);
+    }
+
+    @Test
+    public void testCancelMaintain_helperRejects_returnsFalse() {
+        when(_dataStoreHelper.cancelMaintain(dataStore)).thenReturn(false);
+
+        assertFalse(ontapPrimaryDatastoreLifecycle.cancelMaintain(dataStore));
+        verify(_storagePoolAutomation, never()).cancelMaintain(dataStore);
+    }
+
+    @Test
+    public void testDeleteDataStore_poolAlreadyGone_returnsTrue() {
+        when(_storageMgr.getStoragePool(1L)).thenReturn(null);
+
+        assertTrue(ontapPrimaryDatastoreLifecycle.deleteDataStore(dataStore));
+        verify(_dataStoreHelper, never()).deletePrimaryDataStore(any());
+    }
+
+    @Test
+    public void testDeleteDataStore_missingDetails_deletesCloudStackEntityOnly() {
+        StoragePool storagePool = mock(StoragePool.class);
+        when(_storageMgr.getStoragePool(1L)).thenReturn(storagePool);
+        when(_datastoreDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+        when(_dataStoreHelper.deletePrimaryDataStore(dataStore)).thenReturn(true);
+
+        assertTrue(ontapPrimaryDatastoreLifecycle.deleteDataStore(dataStore));
+        verify(_dataStoreHelper).deletePrimaryDataStore(dataStore);
+    }
+
+    @Test
+    public void testDeleteDataStore_emptyDetails_deletesCloudStackEntityOnly() {
+        StoragePool storagePool = mock(StoragePool.class);
+        when(_storageMgr.getStoragePool(1L)).thenReturn(storagePool);
+        when(_datastoreDetailsDao.listDetailsKeyPairs(1L)).thenReturn(new HashMap<>());
+        when(_dataStoreHelper.deletePrimaryDataStore(dataStore)).thenReturn(true);
+
+        assertTrue(ontapPrimaryDatastoreLifecycle.deleteDataStore(dataStore));
+        verify(_dataStoreHelper).deletePrimaryDataStore(dataStore);
+    }
+
+    @Test
+    public void testDeleteDataStore_deletesVolumeAndAccessGroup() {
+        StoragePool storagePool = mock(StoragePool.class);
+        when(storagePool.getName()).thenReturn("test-pool");
+        when(_storageMgr.getStoragePool(1L)).thenReturn(storagePool);
+        Map<String, String> details = new HashMap<>(poolDetails);
+        details.put(OntapStorageConstants.VOLUME_UUID, "flex-uuid");
+        details.put(OntapStorageConstants.VOLUME_NAME, "flex-name");
+        when(_datastoreDetailsDao.listDetailsKeyPairs(1L)).thenReturn(details);
+        when(_dataStoreHelper.deletePrimaryDataStore(dataStore)).thenReturn(true);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+            assertTrue(ontapPrimaryDatastoreLifecycle.deleteDataStore(dataStore));
+        }
+
+        verify(storageStrategy).deleteStorageVolume(any(Volume.class));
+        verify(storageStrategy).deleteAccessGroup(any(AccessGroup.class));
+        verify(_dataStoreHelper).deletePrimaryDataStore(dataStore);
+    }
+
+    @Test
+    public void testMigrateToObjectStore_returnsFalse() {
+        assertFalse(ontapPrimaryDatastoreLifecycle.migrateToObjectStore(dataStore));
+    }
+
+    @Test
+    public void testEnableAndDisableStoragePool_delegateToHelper() {
+        ontapPrimaryDatastoreLifecycle.enableStoragePool(dataStore);
+        ontapPrimaryDatastoreLifecycle.disableStoragePool(dataStore);
+
+        verify(_dataStoreHelper).enable(dataStore);
+        verify(_dataStoreHelper).disable(dataStore);
+    }
+
+    @Test
+    public void testUpdateStoragePool_invalidIops_throws() {
+        StoragePool storagePool = mock(StoragePool.class);
+        Map<String, String> details = new HashMap<>();
+        details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, "not-a-number");
+
+        InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.updateStoragePool(storagePool, details));
+
+        assertTrue(ex.getMessage().contains("Invalid storage pool IOPS capacity"));
+    }
+
+    @Test
+    public void testUpdateStoragePool_nonPositiveIops_throws() {
+        StoragePool storagePool = mock(StoragePool.class);
+        Map<String, String> details = new HashMap<>();
+        details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, "0");
+
+        InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.updateStoragePool(storagePool, details));
+
+        assertTrue(ex.getMessage().contains("must be greater than 0"));
+    }
+
+    @Test
+    public void testUpdateStoragePool_poolMissingForIopsCheck_throws() {
+        StoragePool storagePool = mock(StoragePool.class);
+        when(storagePool.getId()).thenReturn(99L);
+        Map<String, String> details = new HashMap<>();
+        details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, "100");
+        when(storagePoolDao.findById(99L)).thenReturn(null);
+
+        InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                () -> ontapPrimaryDatastoreLifecycle.updateStoragePool(storagePool, details));
+
+        assertTrue(ex.getMessage().contains("Storage pool not found"));
+    }
+
+    @Test
+    public void testUpdateStoragePool_emptyVolumeUuid_throws() {
+        StoragePool storagePool = mock(StoragePool.class);
+        when(storagePool.getName()).thenReturn("test-pool");
+        Map<String, String> details = new HashMap<>();
+        details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, "3221225472");
+        details.put(OntapStorageConstants.VOLUME_UUID, "");
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = Mockito.mockStatic(OntapStorageUtils.class)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+            assertThrows(CloudRuntimeException.class,
+                    () -> ontapPrimaryDatastoreLifecycle.updateStoragePool(storagePool, details));
+        }
+    }
+
+    private void initializeWithFactory(Map<String, Object> dsInfos) {
+        try (MockedStatic<StorageProviderFactory> storageProviderFactory = Mockito.mockStatic(StorageProviderFactory.class)) {
+            storageProviderFactory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
+            ontapPrimaryDatastoreLifecycle.initialize(dsInfos);
         }
     }
 
