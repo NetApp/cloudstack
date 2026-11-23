@@ -393,11 +393,13 @@ public abstract class StorageStrategy {
         if (svmUuid == null) {
             throw new CloudRuntimeException("Cannot validate NFSv4.1 on SVM " + svmName + ": SVM UUID is null");
         }
+        // v4_numeric_ids is not an addressable field on every ONTAP version (see swagger for the
+        // target cluster). The plugin validates v41_enabled only; numeric-ids posture is an
+        // operator-side choice, documented in the design spec and surfaced via `vserver nfs show`.
         Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS,
                 OntapStorageConstants.NFS_SERVICE_FIELD_ENABLED
                         + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V41_ENABLED
-                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V4_ID_DOMAIN
-                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V4_NUMERIC_IDS);
+                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V4_ID_DOMAIN);
         NfsService nfsService;
         try {
             nfsService = nasFeignClient.getNfsService(authHeader, svmUuid, queryParams);
@@ -410,13 +412,8 @@ public abstract class StorageStrategy {
                     + " (protocol.v41_enabled=false). Enable it via PATCH /protocols/nfs/services/" + svmUuid + ".");
             throw new CloudRuntimeException("NFSv4.1 is not enabled on SVM " + svmName);
         }
-        logger.info("NFSv4.1 enabled on SVM {} (uuid={}); v4_numeric_ids={}, v4_id_domain={}",
-                svmName, svmUuid, nfsService.isV4NumericIds(), nfsService.getV4IdDomain());
-        if (!nfsService.isV4NumericIds()) {
-            logger.warn("SVM {} has v4_numeric_ids=false; verify that each KVM host's /etc/idmapd.conf Domain "
-                    + "matches v4_id_domain='{}' or files will land as nobody:nobody.",
-                    svmName, nfsService.getV4IdDomain());
-        }
+        logger.info("NFSv4.1 enabled on SVM {} (uuid={}); v4_id_domain={}",
+                svmName, svmUuid, nfsService.getV4IdDomain());
     }
 
     private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {

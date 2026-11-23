@@ -63,8 +63,6 @@ public class OntapStorageConstants {
     public static final String NFS_SERVICE_FIELD_V41_ENABLED = "protocol.v41_enabled";
     /** NFS service REST field: ID-mapping domain used when numeric-ids is off. */
     public static final String NFS_SERVICE_FIELD_V4_ID_DOMAIN = "protocol.v4_id_domain";
-    /** NFS service REST field: numeric-ids mode (bypasses idmapd). */
-    public static final String NFS_SERVICE_FIELD_V4_NUMERIC_IDS = "protocol.v4_numeric_ids";
     /** Export rule superuser/ro/rw auth value. */
     public static final String EXPORT_AUTH_SYS = "sys";
     /** Export rule anonymous-user fallback for NFSv4.1 pools (root). */
