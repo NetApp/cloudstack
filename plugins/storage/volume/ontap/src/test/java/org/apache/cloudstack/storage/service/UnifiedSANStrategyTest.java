@@ -729,7 +729,7 @@ class UnifiedSANStrategyTest {
             unifiedSANStrategy.enableLogicalAccess(values);
 
             // Verify: map is created and no follow-up lookup is made
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
             verify(sanFeignClient, never()).getLunMapResponse(any(), anyMap());
         }
     }
@@ -886,7 +886,7 @@ class UnifiedSANStrategyTest {
 
             // Verify: one existence lookup and one create, no follow-up lookup
             verify(sanFeignClient, times(1)).getLunMapResponse(eq(authHeader), anyMap());
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
         }
     }
 
@@ -2144,7 +2144,7 @@ class UnifiedSANStrategyTest {
             utilityMock.when(() -> OntapStorageUtils.generateAuthHeader("admin", "password"))
                     .thenReturn(authHeader);
 
-            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
                     .thenThrow(new RuntimeException("Failed to create LunMap"));
 
             assertThrows(CloudRuntimeException.class,
@@ -2225,13 +2225,13 @@ class UnifiedSANStrategyTest {
 
             // Single lookup returns empty (no existing mapping), then the map is created
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
-            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
                     .thenReturn(new OntapResponse<>());
 
             unifiedSANStrategy.ensureLunMapped(svmName, lunName, accessGroupName);
 
             verify(sanFeignClient, times(1)).getLunMapResponse(eq(authHeader), anyMap());
-            verify(sanFeignClient).createLunMap(eq(authHeader), eq(true), any(LunMap.class));
+            verify(sanFeignClient).createLunMap(eq(authHeader), eq(false), any(LunMap.class));
         }
     }
 
@@ -2249,7 +2249,7 @@ class UnifiedSANStrategyTest {
                     .thenReturn(authHeader);
 
             when(sanFeignClient.getLunMapResponse(eq(authHeader), anyMap())).thenReturn(emptyResponse);
-            when(sanFeignClient.createLunMap(eq(authHeader), eq(true), any(LunMap.class)))
+            when(sanFeignClient.createLunMap(eq(authHeader), eq(false), any(LunMap.class)))
                     .thenThrow(new RuntimeException("ONTAP rejected lun-map create"));
 
             assertThrows(CloudRuntimeException.class,

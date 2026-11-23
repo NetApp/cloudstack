@@ -1141,7 +1141,8 @@ public class OntapPrimaryDatastoreDriver implements PrimaryDataStoreDriver {
             copiedVolumeTO.setPath(copiedPath);
             copiedVolumeTO.setFormat(getImageFormat(destStoragePool));
         } catch (Exception e) {
-            errMsg = e.getMessage();
+            // A null message would be read as success below, so fall back to the exception description.
+            errMsg = e.getMessage() != null ? e.getMessage() : e.toString();
             if (storageStrategy != null && copiedVolume != null) {
                 try {
                     storageStrategy.deleteCloudStackVolume(copiedVolume);
