@@ -49,6 +49,7 @@ import org.apache.cloudstack.storage.feign.model.IpInterface;
 import org.apache.cloudstack.storage.feign.model.IscsiService;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.Nas;
+import org.apache.cloudstack.storage.feign.model.NfsService;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.Svm;
 import org.apache.cloudstack.storage.feign.model.Version;
@@ -303,16 +304,15 @@ public abstract class StorageStrategy {
         String authHeader = OntapStorageUtils.generateAuthHeader(storage.getUsername(), storage.getPassword());
         String svmName = storage.getSvmName();
         try {
-            // Call the SVM API to check if the SVM exists
+            // Call the SVM API to check if the SVM exists.
+            // Only enablement summary + aggregates/state live here; v4.x detail (v41_enabled,
+            // v4_id_domain, pNFS) is on /api/protocols/nfs/services/{svm.uuid} and is queried
+            // separately when the pool protocol is NFSv4.1.
             Svm svm = new Svm();
             logger.info("Fetching the SVM details...");
-            // Request both the top-level nfs.enabled flag and the nested v41 flag so a single
-            // SVM GET gates NFSv3 and NFSv4.1 pool creation without a second REST round-trip.
             Map<String, Object> queryParams = Map.of(OntapStorageConstants.NAME, svmName, OntapStorageConstants.FIELDS, OntapStorageConstants.AGGREGATES +
                     OntapStorageConstants.COMMA + OntapStorageConstants.STATE +
                     OntapStorageConstants.COMMA + OntapStorageConstants.NFS_ENABLED +
-                    OntapStorageConstants.COMMA + OntapStorageConstants.SVM_FIELD_NFS_V41_ENABLED +
-                    OntapStorageConstants.COMMA + OntapStorageConstants.SVM_FIELD_NFS_V4_ID_DOMAIN +
                     OntapStorageConstants.COMMA + OntapStorageConstants.ISCSI_ENABLED);
             OntapResponse<Svm> svms = svmFeignClient.getSvmResponse(queryParams, authHeader);
             if (svms != null && svms.getRecords() != null && !svms.getRecords().isEmpty()) {
@@ -335,11 +335,7 @@ public abstract class StorageStrategy {
                     logger.error("NFS protocol is not enabled on SVM " + svmName);
                     throw new CloudRuntimeException("NFS protocol is not enabled on SVM " + svmName);
                 }
-                if (!svm.getNfsV41Enabled()) {
-                    logger.error("NFSv4.1 is not enabled on SVM " + svmName
-                            + " (nfs.protocol.v41_enabled=false). Enable it via PATCH /protocols/nfs/services/{uuid}.");
-                    throw new CloudRuntimeException("NFSv4.1 is not enabled on SVM " + svmName);
-                }
+                validateNfs41OnSvm(authHeader, svmName, svm.getUuid());
             } else if (Objects.equals(storage.getProtocol(), ProtocolType.ISCSI) && !svm.getIscsiEnabled()) {
                 logger.error("ISCSI protocol is not enabled on SVM " + svmName);
                 throw new CloudRuntimeException("ISCSI protocol is not enabled on SVM " + svmName);
@@ -382,6 +378,45 @@ public abstract class StorageStrategy {
 
     public void setAggregates(List<Aggregate> aggregates) {
         this.aggregates = aggregates;
+    }
+
+    /**
+     * Validates that NFSv4.1 is enabled on the SVM's NFS service. The v4.x enablement flag
+     * is NOT addressable on {@code /api/svm/svms}; it lives on
+     * {@code /api/protocols/nfs/services/{svm.uuid}}, so this is a second REST hop made
+     * only when the pool protocol is NFSv4.1.
+     *
+     * <p>Also surfaces the ID-mapping posture (numeric-ids on/off, v4_id_domain) in logs
+     * so support can read it back without a round-trip to ONTAP.</p>
+     */
+    private void validateNfs41OnSvm(String authHeader, String svmName, String svmUuid) {
+        if (svmUuid == null) {
+            throw new CloudRuntimeException("Cannot validate NFSv4.1 on SVM " + svmName + ": SVM UUID is null");
+        }
+        Map<String, Object> queryParams = Map.of(OntapStorageConstants.FIELDS,
+                OntapStorageConstants.NFS_SERVICE_FIELD_ENABLED
+                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V41_ENABLED
+                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V4_ID_DOMAIN
+                        + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_SERVICE_FIELD_V4_NUMERIC_IDS);
+        NfsService nfsService;
+        try {
+            nfsService = nasFeignClient.getNfsService(authHeader, svmUuid, queryParams);
+        } catch (FeignException e) {
+            logger.error("Failed to fetch NFS service for SVM " + svmName + " (uuid=" + svmUuid + "): " + e.getMessage(), e);
+            throw new CloudRuntimeException("Failed to fetch NFS service for SVM " + svmName + ": " + e.getMessage(), e);
+        }
+        if (nfsService == null || !nfsService.isV41Enabled()) {
+            logger.error("NFSv4.1 is not enabled on SVM " + svmName
+                    + " (protocol.v41_enabled=false). Enable it via PATCH /protocols/nfs/services/" + svmUuid + ".");
+            throw new CloudRuntimeException("NFSv4.1 is not enabled on SVM " + svmName);
+        }
+        logger.info("NFSv4.1 enabled on SVM {} (uuid={}); v4_numeric_ids={}, v4_id_domain={}",
+                svmName, svmUuid, nfsService.isV4NumericIds(), nfsService.getV4IdDomain());
+        if (!nfsService.isV4NumericIds()) {
+            logger.warn("SVM {} has v4_numeric_ids=false; verify that each KVM host's /etc/idmapd.conf Domain "
+                    + "matches v4_id_domain='{}' or files will land as nobody:nobody.",
+                    svmName, nfsService.getV4IdDomain());
+        }
     }
 
     private void validateAndSelectAggregatesForVolumeCreation(String authHeader, String svmName, List<Aggregate> aggrs) {

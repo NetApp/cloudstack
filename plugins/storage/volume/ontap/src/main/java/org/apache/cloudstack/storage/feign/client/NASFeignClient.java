@@ -23,6 +23,7 @@ import feign.QueryMap;
 import org.apache.cloudstack.storage.feign.model.ExportPolicy;
 import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
+import org.apache.cloudstack.storage.feign.model.NfsService;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import feign.Headers;
@@ -94,4 +95,12 @@ public interface NASFeignClient {
     OntapResponse<ExportPolicy> updateExportPolicy(@Param("authHeader") String authHeader,
                                                    @Param("id") String id,
                                                    ExportPolicy request);
+
+    // NFS Service Operations — v4.x enablement / ID mapping config lives here,
+    // NOT on /api/svm/svms (which only exposes nfs.enabled).
+    @RequestLine("GET /api/protocols/nfs/services/{svmUuid}")
+    @Headers({"Authorization: {authHeader}"})
+    NfsService getNfsService(@Param("authHeader") String authHeader,
+                             @Param("svmUuid") String svmUuid,
+                             @QueryMap Map<String, Object> queryMap);
 }
