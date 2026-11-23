@@ -20,7 +20,6 @@
 package org.apache.cloudstack.storage.service;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -363,8 +362,12 @@ public class UnifiedSANStrategy extends SANStrategy {
         Lun.Copy copy = new Lun.Copy();
         copy.setSource(source);
 
+        String svmName = destDetails.get(OntapStorageConstants.SVM_NAME);
+        if (StringUtils.isBlank(svmName)) {
+            throw new CloudRuntimeException("Destination storage pool has no ONTAP SVM name");
+        }
         Svm svm = new Svm();
-        svm.setName(destDetails.get(OntapStorageConstants.SVM_NAME));
+        svm.setName(svmName);
         Lun lun = new Lun();
         lun.setSvm(svm);
         lun.setName(OntapStorageUtils.getLunName(destStoragePool.getName(), destLunName));
@@ -856,9 +859,8 @@ public class UnifiedSANStrategy extends SANStrategy {
     }
 
     @Override
-    public String enableLogicalAccess(Map<String, String> values) {
+    public void enableLogicalAccess(Map<String, String> values) {
         logger.trace("enableLogicalAccess : Creating LunMap with values {} ", values);
-        String lunNumber = null;
         if (values == null) {
             logger.error("enableLogicalAccess: LunMap creation failed. Invalid request values: null");
             throw new CloudRuntimeException("Failed to create LunMap, invalid request");
@@ -898,13 +900,11 @@ public class UnifiedSANStrategy extends SANStrategy {
                     throw feignEx;
                 }
             }
-            logger.trace("enableLogicalAccess: LunMap created for Lun: {} and igroup: {}", lunName, igroupName);
-            lunNumber = "";
+            logger.trace("enableLogicalAccess: LunMap ensured for Lun: {} and igroup: {}", lunName, igroupName);
         } catch (Exception e) {
             logger.error("Exception occurred while creating LunMap", e);
             throw new CloudRuntimeException("Failed to create LunMap: " + e.getMessage());
         }
-        return lunNumber;
     }
 
     public void disableLogicalAccess(Map<String, String> values) {
@@ -936,10 +936,9 @@ public class UnifiedSANStrategy extends SANStrategy {
         }
     }
 
-    // GET-only helper: fetch LUN-map and return logical unit number if it exists; otherwise return null
+    // GET-only helper: returns true if the LUN-map exists; otherwise false
     @Override
-    public String getLogicalAccess(Map<String, String> values) {
-        String lunNumber = null;
+    public boolean getLogicalAccess(Map<String, String> values) {
         logger.trace("getLogicalAccess : Fetching LunMap with values {} ", values);
         if (values == null) {
             logger.error("getLogicalAccess: Invalid request values: null");
@@ -958,46 +957,31 @@ public class UnifiedSANStrategy extends SANStrategy {
                     Map.of(
                             OntapStorageConstants.SVM_DOT_NAME, svmName,
                             OntapStorageConstants.LUN_DOT_NAME, lunName,
-                            OntapStorageConstants.IGROUP_DOT_NAME, igroupName,
-                            OntapStorageConstants.FIELDS, OntapStorageConstants.LOGICAL_UNIT_NUMBER
+                            OntapStorageConstants.IGROUP_DOT_NAME, igroupName
                     ));
-            if (lunMapResponse != null && lunMapResponse.getRecords() != null && !lunMapResponse.getRecords().isEmpty()) {
-               Integer lunLogicalUnitNum =  lunMapResponse.getRecords().get(0).getLogicalUnitNumber();
-               lunNumber = lunLogicalUnitNum != null ? lunLogicalUnitNum.toString() : null;
-            }
+            return lunMapResponse != null && lunMapResponse.getRecords() != null && !lunMapResponse.getRecords().isEmpty();
         } catch (Exception e) {
             logger.warn("getLogicalAccess: LunMap not found for Lun: {} and igroup: {} ({}).", lunName, igroupName, e.getMessage());
+            return false;
         }
-        return lunNumber;
     }
 
     @Override
-    public String ensureLunMapped(String svmName, String lunName, String accessGroupName) {
+    public void ensureLunMapped(String svmName, String lunName, String accessGroupName) {
         logger.trace("ensureLunMapped: Ensuring LUN [{}] is mapped to igroup [{}] on SVM [{}]", lunName, accessGroupName, svmName);
 
-        // Check existing map first
-        Map<String, String> getMap = Map.of(
+        Map<String, String> mapRequest = Map.of(
                 OntapStorageConstants.LUN_DOT_NAME, lunName,
                 OntapStorageConstants.SVM_DOT_NAME, svmName,
                 OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName
         );
-        String lunNumber = getLogicalAccess(getMap);
-        if (lunNumber != null) {
-            logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}] with LUN number [{}]", lunName, accessGroupName, lunNumber);
-            return lunNumber;
+        if (getLogicalAccess(mapRequest)) {
+            logger.info("ensureLunMapped: Existing LunMap found for LUN [{}] in igroup [{}]", lunName, accessGroupName);
+            return;
         }
 
-        // Create if not exists
-        Map<String, String> enableMap = new HashMap<>();
-        enableMap.put(OntapStorageConstants.LUN_DOT_NAME, lunName);
-        enableMap.put(OntapStorageConstants.SVM_DOT_NAME, svmName);
-        enableMap.put(OntapStorageConstants.IGROUP_DOT_NAME, accessGroupName);
-        String response = enableLogicalAccess(enableMap);
-        if (response == null ) {
-            throw new CloudRuntimeException("Failed to map LUN [" + lunName + "] to iGroup [" + accessGroupName + "]");
-        }
-        logger.trace("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}] with LUN number [{}]", lunName, accessGroupName, response);
-        return response;
+        enableLogicalAccess(mapRequest);
+        logger.trace("ensureLunMapped: Successfully mapped LUN [{}] to igroup [{}]", lunName, accessGroupName);
     }
 
     /**

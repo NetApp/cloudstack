@@ -326,6 +326,45 @@ class OntapPrimaryDatastoreDriverTest {
     }
 
     @Test
+    void copyAsyncExceptionWithoutMessageCompletesCallbackWithFailure() {
+        VolumeInfo srcVolume = mock(VolumeInfo.class);
+        VolumeInfo destVolume = mock(VolumeInfo.class);
+        StoragePoolVO srcPool = mock(StoragePoolVO.class);
+        StoragePoolVO destPool = mock(StoragePoolVO.class);
+        Map<String, String> srcDetails = Map.of(
+                OntapStorageConstants.PROTOCOL, ProtocolType.ISCSI.name(),
+                OntapStorageConstants.STORAGE_IP, "10.0.0.1",
+                OntapStorageConstants.SVM_NAME, "svm1");
+        Map<String, String> destDetails = new HashMap<>(srcDetails);
+
+        when(srcVolume.getState()).thenReturn(Volume.State.Migrating);
+        when(srcVolume.getHypervisorType()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(srcVolume.getPoolId()).thenReturn(1L);
+        when(destVolume.getPoolId()).thenReturn(2L);
+        when(storagePoolDao.findById(1L)).thenReturn(srcPool);
+        when(storagePoolDao.findById(2L)).thenReturn(destPool);
+        when(srcPool.getId()).thenReturn(1L);
+        when(destPool.getId()).thenReturn(2L);
+        when(srcPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(destPool.getStorageProviderName()).thenReturn(DataStoreProvider.ONTAP_PLUGIN_NAME);
+        when(srcPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(destPool.getPoolType()).thenReturn(Storage.StoragePoolType.OntapiSCSI);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(srcDetails);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(2L)).thenReturn(destDetails);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(destDetails))
+                    .thenThrow(new RuntimeException());
+
+            driver.copyAsync(srcVolume, destVolume, copyCallback);
+
+            verify(copyCallback).complete(argThat(result -> result != null
+                    && result.isFailed()
+                    && result.getResult().contains(RuntimeException.class.getName())));
+        }
+    }
+
+    @Test
     void testCreateAsync_NullDataObject_ThrowsException() {
         assertThrows(InvalidParameterValueException.class,
             () -> driver.createAsync(dataStore, null, createCallback));
@@ -744,7 +783,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("7");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             // Execute
@@ -795,7 +834,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("1");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             boolean result = driver.grantAccess(volumeInfo, host, dataStore);
@@ -845,7 +884,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(null);
             when(sanStrategy.createAccessGroup(any())).thenReturn(createdAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             // Execute
@@ -892,7 +931,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
@@ -935,7 +974,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("2");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
@@ -964,6 +1003,30 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertTrue(driver.grantAccess(volumeInfo, host, dataStore));
             verify(nasStrategy, never()).updateAccessGroup(any());
+        }
+    }
+
+    @Test
+    void testGrantAccess_NFSAttachingUnattached_DoesNotUpdateExportPolicy() throws Exception {
+        storagePoolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
+        when(dataStore.getId()).thenReturn(1L);
+        when(volumeInfo.getType()).thenReturn(VOLUME);
+        when(volumeInfo.getId()).thenReturn(100L);
+        when(storagePoolDao.findById(1L)).thenReturn(storagePool);
+        when(storagePool.getId()).thenReturn(1L);
+        when(storagePool.getScope()).thenReturn(ScopeType.CLUSTER);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(storagePoolDetails);
+        when(volumeDao.findById(100L)).thenReturn(volumeVO);
+        when(volumeVO.getUuid()).thenReturn("vol-uuid");
+        when(volumeVO.getState()).thenReturn(Volume.State.Attaching);
+
+        try (MockedStatic<OntapStorageUtils> utilityMock = mockStatic(OntapStorageUtils.class, CALLS_REAL_METHODS)) {
+            utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails))
+                    .thenReturn(nasStrategy);
+
+            assertTrue(driver.grantAccess(volumeInfo, host, dataStore));
+            verify(nasStrategy, never()).updateAccessGroup(any());
+            verify(storageManager, never()).connectHostToSharedPool(any(), anyLong());
         }
     }
 
@@ -1063,7 +1126,7 @@ class OntapPrimaryDatastoreDriverTest {
                     .thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, hostVO, dataStore));
@@ -2037,7 +2100,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getIgroupName(anyString(), anyString())).thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            doNothing().when(sanStrategy).ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"));
             when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(templateInfo, host, primaryDataStore));
@@ -2093,7 +2156,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getIgroupName(anyString(), anyString())).thenReturn("igroup1");
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            doNothing().when(sanStrategy).ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"));
             when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
             when(sanStrategy.getCloudStackVolume(argThat(map ->
                     map != null && "/vol/vol1/cs_tmpl_50".equals(map.get("name")))))
@@ -3392,7 +3455,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             when(sanStrategy.getAccessGroup(any())).thenReturn(null);
             when(sanStrategy.createAccessGroup(any())).thenReturn(createdAccessGroup);
-            when(sanStrategy.ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"))).thenReturn("3");
+            doNothing().when(sanStrategy).ensureLunMapped(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"), eq("igroup1"));
             when(sanStrategy.getLunSerialNumber(eq("svm1"), eq("/vol/vol1/cs_tmpl_50"))).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(templateInfo, hostVo, primaryDataStore));
@@ -4267,7 +4330,7 @@ class OntapPrimaryDatastoreDriverTest {
             utilityMock.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(storagePoolDetails)).thenReturn(sanStrategy);
             utilityMock.when(() -> OntapStorageUtils.getIgroupName(anyString(), anyString())).thenReturn("igroup1");
             when(sanStrategy.getAccessGroup(any())).thenReturn(existingAccessGroup);
-            when(sanStrategy.ensureLunMapped(anyString(), anyString(), anyString())).thenReturn("0");
+            doNothing().when(sanStrategy).ensureLunMapped(anyString(), anyString(), anyString());
             when(sanStrategy.getLunSerialNumber(anyString(), anyString())).thenReturn(LUN_SERIAL_NUMBER);
 
             assertTrue(driver.grantAccess(volumeInfo, host, dataStore));

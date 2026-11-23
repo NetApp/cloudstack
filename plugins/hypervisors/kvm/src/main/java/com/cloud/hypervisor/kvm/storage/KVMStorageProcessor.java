@@ -3457,8 +3457,6 @@ public class KVMStorageProcessor implements StorageProcessor {
                 if (!storagePoolMgr.connectPhysicalDisk(destPrimaryStore.getPoolType(), destPrimaryStore.getUuid(), destVolumePath, destDetails)) {
                     logger.warn("Failed to connect dest volume {}, in storage pool {}", destVol, destPrimaryStore);
                 }
-            }
-            if (destPrimaryStore.isManaged()) {
                 destVolumeName = StringUtils.defaultIfBlank(
                         derivePath(destPrimaryStore, destData, destDetails), destVolumePath);
             } else {

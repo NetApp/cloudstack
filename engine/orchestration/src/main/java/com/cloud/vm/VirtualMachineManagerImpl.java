@@ -3564,6 +3564,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
             return false;
         }
 
+        // Same rule as OntapDataMotionStrategy.isSupportedOntapMigrationPoolPair; keep both copies in sync.
         Map<String, String> currentDetails = _storagePoolDao.getDetails(currentPool.getId());
         Map<String, String> targetDetails = _storagePoolDao.getDetails(targetPool.getId());
         if (currentDetails == null || targetDetails == null) {
