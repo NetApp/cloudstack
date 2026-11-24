@@ -440,6 +440,13 @@ public class OntapHostListenerTest {
 
             assertTrue(listener.hostConnect(HOST_ID, POOL_ID));
         }
+
+        ArgumentCaptor<AccessGroup> group = ArgumentCaptor.forClass(AccessGroup.class);
+        verify(strategy).updateAccessGroup(group.capture());
+        assertEquals(POOL_ID, group.getValue().getStoragePoolId());
+        assertEquals(List.of(host), group.getValue().getHostsToConnect());
+        assertEquals(AccessGroup.HostRuleAction.ADD, group.getValue().getHostRuleAction());
+        assertEquals("192.168.0.5", host.getPrivateIpAddress());
     }
 
     @Test
@@ -454,6 +461,11 @@ public class OntapHostListenerTest {
             assertFalse(listener.hostConnect(HOST_ID, POOL_ID));
         }
 
+        ArgumentCaptor<AccessGroup> group = ArgumentCaptor.forClass(AccessGroup.class);
+        verify(strategy).updateAccessGroup(group.capture());
+        assertEquals(POOL_ID, group.getValue().getStoragePoolId());
+        assertEquals(List.of(host), group.getValue().getHostsToConnect());
+        assertEquals(AccessGroup.HostRuleAction.ADD, group.getValue().getHostRuleAction());
         verifyNoInteractions(agentMgr);
     }
 
