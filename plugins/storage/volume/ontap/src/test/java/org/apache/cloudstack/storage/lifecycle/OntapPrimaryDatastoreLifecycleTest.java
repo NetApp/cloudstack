@@ -79,6 +79,17 @@ import org.apache.cloudstack.storage.service.StorageStrategy;
 import org.apache.cloudstack.storage.volume.datastore.PrimaryDataStoreHelper;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.junit.jupiter.api.Nested;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verifyNoInteractions;
+import java.util.Collections;
+import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDetailsDao;
+import com.cloud.storage.StoragePoolAutomation;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import java.util.Arrays;
 
 
 @ExtendWith(MockitoExtension.class)
@@ -1402,4 +1413,848 @@ public class OntapPrimaryDatastoreLifecycleTest {
         }
     }
 
+
+    /**
+     * Covers the maintenance, deletion, capacity-validation and passthrough operations of
+     * {@link OntapPrimaryDatastoreLifecycle} that {@link OntapPrimaryDatastoreLifecycleTest} does not reach.
+     */
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    @Nested
+    class OntapPrimaryDatastoreLifecycleOperationsTest {
+
+        private static final long POOL_ID = 77L;
+
+        @InjectMocks
+        private OntapPrimaryDatastoreLifecycle lifecycle;
+
+        @Mock private StorageManager _storageMgr;
+        @Mock private PrimaryDataStoreHelper _dataStoreHelper;
+        @Mock private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
+        @Mock private StoragePoolAutomation _storagePoolAutomation;
+        @Mock private PrimaryDataStoreDao storagePoolDao;
+        @Mock private AlertManager _alertMgr;
+        @Mock private CapacityManager _capacityMgr;
+        @Mock private StorageStrategy storageStrategy;
+        @Mock private StoragePool storagePool;
+
+        private DataStore store;
+
+        @BeforeEach
+        void setUp() {
+            store = mock(DataStore.class, withSettings().extraInterfaces(PrimaryDataStoreInfo.class));
+            when(store.getId()).thenReturn(POOL_ID);
+            when(storagePool.getId()).thenReturn(POOL_ID);
+            when(storagePool.getName()).thenReturn("ontap-pool");
+            when(_storageMgr.getStoragePool(POOL_ID)).thenReturn(storagePool);
+        }
+
+        private Map<String, String> fullDetails() {
+            Map<String, String> details = new HashMap<>();
+            details.put(OntapStorageConstants.VOLUME_UUID, "vol-uuid");
+            details.put(OntapStorageConstants.VOLUME_NAME, "vol-name");
+            return details;
+        }
+
+        // ------------------------------------------------------------------ maintenance
+
+        @Test
+        void maintain_marksPoolInMaintenance_onlyWhenAutomationSucceeds() {
+            when(_storagePoolAutomation.maintain(store)).thenReturn(true);
+            when(_dataStoreHelper.maintain(store)).thenReturn(true);
+
+            assertTrue(lifecycle.maintain(store));
+            verify(_dataStoreHelper).maintain(store);
+        }
+
+        @Test
+        void maintain_returnsHelperResult_whenAutomationSucceedsButHelperFails() {
+            when(_storagePoolAutomation.maintain(store)).thenReturn(true);
+            when(_dataStoreHelper.maintain(store)).thenReturn(false);
+
+            assertFalse(lifecycle.maintain(store));
+        }
+
+        @Test
+        void maintain_doesNotTouchPoolState_whenAutomationFails() {
+            when(_storagePoolAutomation.maintain(store)).thenReturn(false);
+
+            assertFalse(lifecycle.maintain(store));
+            verify(_dataStoreHelper, never()).maintain(store);
+        }
+
+        @Test
+        void cancelMaintain_runsAutomationOnlyAfterHelperSucceeds() {
+            when(_dataStoreHelper.cancelMaintain(store)).thenReturn(true);
+            when(_storagePoolAutomation.cancelMaintain(store)).thenReturn(true);
+
+            assertTrue(lifecycle.cancelMaintain(store));
+            verify(_storagePoolAutomation).cancelMaintain(store);
+        }
+
+        @Test
+        void cancelMaintain_returnsAutomationResult_whenAutomationFails() {
+            when(_dataStoreHelper.cancelMaintain(store)).thenReturn(true);
+            when(_storagePoolAutomation.cancelMaintain(store)).thenReturn(false);
+
+            assertFalse(lifecycle.cancelMaintain(store));
+        }
+
+        @Test
+        void cancelMaintain_skipsAutomation_whenHelperFails() {
+            when(_dataStoreHelper.cancelMaintain(store)).thenReturn(false);
+
+            assertFalse(lifecycle.cancelMaintain(store));
+            verifyNoInteractions(_storagePoolAutomation);
+        }
+
+        // ------------------------------------------------------------------ simple delegations
+
+        @Test
+        void enableAndDisable_delegateToDataStoreHelper() {
+            lifecycle.enableStoragePool(store);
+            lifecycle.disableStoragePool(store);
+
+            verify(_dataStoreHelper).enable(store);
+            verify(_dataStoreHelper).disable(store);
+        }
+
+        @Test
+        void migrateToObjectStore_isNotSupported() {
+            assertFalse(lifecycle.migrateToObjectStore(store));
+        }
+
+        @Test
+        void scopeChanges_areNoOps() {
+            ClusterScope clusterScope = mock(ClusterScope.class);
+
+            lifecycle.changeStoragePoolScopeToZone(store, clusterScope, Hypervisor.HypervisorType.KVM);
+            lifecycle.changeStoragePoolScopeToCluster(store, clusterScope, Hypervisor.HypervisorType.KVM);
+
+            verifyNoInteractions(_dataStoreHelper, _storagePoolAutomation, _datastoreDetailsDao);
+        }
+
+        // ------------------------------------------------------------------ deleteDataStore
+
+        @Test
+        void deleteDataStore_succeedsWithoutTouchingOntap_whenPoolAlreadyGone() {
+            when(_storageMgr.getStoragePool(POOL_ID)).thenReturn(null);
+
+            assertTrue(lifecycle.deleteDataStore(store));
+
+            verify(_dataStoreHelper, never()).deletePrimaryDataStore(any());
+            verifyNoInteractions(_datastoreDetailsDao);
+        }
+
+        @Test
+        void deleteDataStore_onlyRemovesCloudStackEntity_whenPoolHasNoDetails() {
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(Collections.emptyMap());
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+
+            assertTrue(lifecycle.deleteDataStore(store));
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(null);
+            assertTrue(lifecycle.deleteDataStore(store));
+        }
+
+        @Test
+        void deleteDataStore_removesOntapVolumeAndAccessGroupBeforeCloudStackEntity() {
+            Map<String, String> details = fullDetails();
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(details);
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                assertTrue(lifecycle.deleteDataStore(store));
+            }
+
+            ArgumentCaptor<Volume> volume = ArgumentCaptor.forClass(Volume.class);
+            verify(storageStrategy).deleteStorageVolume(volume.capture());
+            assertEquals("vol-uuid", volume.getValue().getUuid());
+            assertEquals("vol-name", volume.getValue().getName());
+            ArgumentCaptor<AccessGroup> group = ArgumentCaptor.forClass(AccessGroup.class);
+            verify(storageStrategy).deleteAccessGroup(group.capture());
+            assertEquals(POOL_ID, group.getValue().getStoragePoolId());
+            verify((PrimaryDataStoreInfo) store).setDetails(details);
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+        }
+
+        @Test
+        void deleteDataStore_skipsVolumeDeletion_butStillCleansUp_whenVolumeIdentityMissing() {
+            Map<String, String> details = new HashMap<>();
+            details.put(OntapStorageConstants.VOLUME_NAME, "vol-name");
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(details);
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                assertTrue(lifecycle.deleteDataStore(store));
+            }
+
+            verify(storageStrategy, never()).deleteStorageVolume(any(Volume.class));
+            verify(storageStrategy).deleteAccessGroup(any(AccessGroup.class));
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+        }
+
+        @Test
+        void deleteDataStore_continuesWithAccessGroupAndEntity_whenOntapVolumeDeletionFails() {
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(fullDetails());
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+            doThrow(new CloudRuntimeException("volume busy")).when(storageStrategy).deleteStorageVolume(any(Volume.class));
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                assertTrue(lifecycle.deleteDataStore(store));
+            }
+
+            verify(storageStrategy).deleteAccessGroup(any(AccessGroup.class));
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+        }
+
+        @Test
+        void deleteDataStore_stillRemovesCloudStackEntity_whenAccessGroupCleanupFails() {
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(fullDetails());
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+            doThrow(new CloudRuntimeException("igroup in use")).when(storageStrategy).deleteAccessGroup(any(AccessGroup.class));
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                assertTrue(lifecycle.deleteDataStore(store));
+            }
+
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+        }
+
+        @Test
+        void deleteDataStore_stillRemovesCloudStackEntity_whenOntapIsUnreachable() {
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(fullDetails());
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(true);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap()))
+                        .thenThrow(new CloudRuntimeException("cannot connect"));
+
+                assertTrue(lifecycle.deleteDataStore(store));
+            }
+
+            verifyNoInteractions(storageStrategy);
+            verify(_dataStoreHelper).deletePrimaryDataStore(store);
+        }
+
+        @Test
+        void deleteDataStore_reportsFailure_whenCloudStackEntityCannotBeDeleted() {
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(Collections.emptyMap());
+            when(_dataStoreHelper.deletePrimaryDataStore(store)).thenReturn(false);
+
+            assertFalse(lifecycle.deleteDataStore(store));
+        }
+
+        // ------------------------------------------------------------------ updateStoragePool: IOPS validation
+
+        private Map<String, String> iopsUpdate(String iops) {
+            Map<String, String> details = new HashMap<>();
+            details.put(PrimaryDataStoreLifeCycle.CAPACITY_IOPS, iops);
+            return details;
+        }
+
+        @Test
+        void updateStoragePool_rejectsNonNumericIops() {
+            InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                    () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("lots")));
+
+            assertTrue(ex.getMessage().contains("Invalid storage pool IOPS capacity"), ex.getMessage());
+        }
+
+        @Test
+        void updateStoragePool_rejectsZeroOrNegativeIops() {
+            assertThrows(InvalidParameterValueException.class, () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("0")));
+            assertThrows(InvalidParameterValueException.class, () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("-10")));
+            verifyNoInteractions(storagePoolDao);
+        }
+
+        @Test
+        void updateStoragePool_rejectsIopsForUnknownPool() {
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(null);
+
+            InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                    () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("1000")));
+
+            assertTrue(ex.getMessage().contains("Storage pool not found"), ex.getMessage());
+        }
+
+        @Test
+        void updateStoragePool_rejectsIopsBelowAllocatedIops() {
+            StoragePoolVO poolVO = mock(StoragePoolVO.class);
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(poolVO);
+            when(_capacityMgr.getUsedIops(poolVO)).thenReturn(5000L);
+
+            InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
+                    () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("4999")));
+
+            assertTrue(ex.getMessage().contains("5000 IOPS are already allocated"), ex.getMessage());
+        }
+
+        @Test
+        void updateStoragePool_acceptsIopsEqualToAllocated_andSkipsResizeWithoutCapacityChange() {
+            StoragePoolVO poolVO = mock(StoragePoolVO.class);
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(poolVO);
+            when(_capacityMgr.getUsedIops(poolVO)).thenReturn(5000L);
+
+            lifecycle.updateStoragePool(storagePool, iopsUpdate("5000"));
+
+            verify(_capacityMgr).getUsedIops(poolVO);
+            verify(storagePool, never()).getCapacityBytes();
+        }
+
+        @Test
+        void updateStoragePool_doesNothing_whenNoRelevantDetailsChange() {
+            lifecycle.updateStoragePool(storagePool, new HashMap<>());
+
+            verifyNoInteractions(storagePoolDao, _capacityMgr);
+            verify(storagePool, never()).getCapacityBytes();
+        }
+
+        @Test
+        void updateStoragePool_failsToResize_whenFlexVolUuidMissing() {
+            Map<String, String> details = new HashMap<>();
+            details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, "1073741824");
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                        () -> lifecycle.updateStoragePool(storagePool, details));
+
+                assertTrue(ex.getMessage().contains("Volume UUID or name not found"), ex.getMessage());
+            }
+            verify(storageStrategy, never()).updateStorageVolume(any(Volume.class));
+        }
+
+        @Test
+        void updateStoragePool_resizesFlexVol_toRequestedCapacity() {
+            Map<String, String> details = fullDetails();
+            details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, "2147483648");
+            when(storagePool.getCapacityBytes()).thenReturn(1073741824L);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                lifecycle.updateStoragePool(storagePool, details);
+            }
+
+            ArgumentCaptor<Volume> volume = ArgumentCaptor.forClass(Volume.class);
+            verify(storageStrategy).updateStorageVolume(volume.capture());
+            assertEquals("vol-uuid", volume.getValue().getUuid());
+            assertEquals("vol-name", volume.getValue().getName());
+            assertEquals(2147483648L, volume.getValue().getSize());
+        }
+
+        @Test
+        void updateStoragePool_wrapsResizeFailure() {
+            Map<String, String> details = fullDetails();
+            details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, "2147483648");
+            doThrow(new CloudRuntimeException("resize rejected")).when(storageStrategy).updateStorageVolume(any(Volume.class));
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(anyMap())).thenReturn(storageStrategy);
+
+                CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                        () -> lifecycle.updateStoragePool(storagePool, details));
+
+                assertTrue(ex.getMessage().contains("ontap-pool"), ex.getMessage());
+                assertTrue(ex.getMessage().contains("resize rejected"), ex.getMessage());
+            }
+        }
+
+        @Test
+        void updateStoragePool_rejectsNonNumericCapacity() {
+            Map<String, String> details = fullDetails();
+            details.put(PrimaryDataStoreLifeCycle.CAPACITY_BYTES, "big");
+            when(storagePool.getCapacityBytes()).thenReturn(1L);
+
+            assertThrows(NumberFormatException.class, () -> lifecycle.updateStoragePool(storagePool, details));
+        }
+    }
+
+    /**
+     * Input validation, zone-wide creation, protocol-specific host selection and delete edge cases of
+     * {@link OntapPrimaryDatastoreLifecycle}, complementing {@link OntapPrimaryDatastoreLifecycleTest}.
+     */
+    @ExtendWith(MockitoExtension.class)
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    @Nested
+    class OntapPrimaryDatastoreLifecycleScopeTest {
+
+        private static final long POOL_ID = 1L;
+
+        @InjectMocks
+        private OntapPrimaryDatastoreLifecycle lifecycle;
+
+        @Mock private ClusterDao _clusterDao;
+        @Mock private StorageStrategy storageStrategy;
+        @Mock private PrimaryDataStoreHelper _dataStoreHelper;
+        @Mock private ResourceManager _resourceMgr;
+        @Mock private StorageManager _storageMgr;
+        @Mock private StoragePoolDetailsDao storagePoolDetailsDao;
+        @Mock private PrimaryDataStoreDetailsDao _datastoreDetailsDao;
+        @Mock private PrimaryDataStoreDao storagePoolDao;
+        @Mock private AlertManager _alertMgr;
+        @Mock private ClusterScope clusterScope;
+        @Mock private ZoneScope zoneScope;
+        @Mock private StoragePool storagePool;
+
+        private DataStore dataStore;
+        private Map<String, String> poolDetails;
+
+        @BeforeEach
+        void setUp() {
+            dataStore = mock(DataStore.class, withSettings().extraInterfaces(PrimaryDataStoreInfo.class));
+            when(dataStore.getId()).thenReturn(POOL_ID);
+            when(((PrimaryDataStoreInfo) dataStore).getClusterId()).thenReturn(1L);
+
+            ClusterVO clusterVO = new ClusterVO(1L, 1L, "clusterName");
+            clusterVO.setHypervisorType("KVM");
+            when(_clusterDao.findById(1L)).thenReturn(clusterVO);
+
+            when(storageStrategy.connect()).thenReturn(true);
+            Aggregate aggregate = new Aggregate();
+            aggregate.setName("aggr1");
+            aggregate.setUuid("aggr-uuid-1");
+            when(storageStrategy.chooseAggregate(any(), any())).thenReturn(aggregate);
+            when(storageStrategy.getNetworkInterface(any())).thenReturn(Map.of(OntapStorageConstants.DATA_LIF, "10.1.1.1"));
+            Volume volume = new Volume();
+            volume.setUuid("vol-uuid");
+            volume.setName("vol-name");
+            when(storageStrategy.createStorageVolume(any(), any(), any())).thenReturn(volume);
+
+            StoragePoolVO poolVO = new StoragePoolVO();
+            poolVO.setId(POOL_ID);
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(poolVO);
+            when(zoneScope.getScopeId()).thenReturn(1L);
+
+            poolDetails = new HashMap<>();
+            poolDetails.put(OntapStorageConstants.USERNAME, "admin");
+            poolDetails.put(OntapStorageConstants.PASSWORD, "password");
+            poolDetails.put(OntapStorageConstants.SVM_NAME, "svm1");
+            poolDetails.put(OntapStorageConstants.PROTOCOL, "NFS3");
+            poolDetails.put(OntapStorageConstants.STORAGE_IP, "10.0.0.1");
+            when(storagePoolDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(poolDetails);
+        }
+
+        // ---------------------------------------------------------------- initialize
+
+        private Map<String, Object> dsInfos() {
+            Map<String, String> details = new HashMap<>();
+            details.put(OntapStorageConstants.USERNAME, "user");
+            details.put(OntapStorageConstants.PASSWORD, "pass");
+            details.put(OntapStorageConstants.STORAGE_IP, "10.10.10.10");
+            details.put(OntapStorageConstants.SVM_NAME, "vs0");
+            details.put(OntapStorageConstants.PROTOCOL, "NFS3");
+
+            Map<String, Object> infos = new HashMap<>();
+            infos.put("zoneId", 1L);
+            infos.put("podId", 1L);
+            infos.put("clusterId", 1L);
+            infos.put("name", "pool1");
+            infos.put("providerName", "NetApp ONTAP");
+            infos.put("capacityBytes", 1073741824L);
+            infos.put("managed", true);
+            infos.put("tags", "tag");
+            infos.put("isTagARule", false);
+            infos.put("details", details);
+            return infos;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, String> detailsOf(Map<String, Object> infos) {
+            return (Map<String, String>) infos.get("details");
+        }
+
+        private void initialize(Map<String, Object> infos) {
+            try (MockedStatic<StorageProviderFactory> factory = mockStatic(StorageProviderFactory.class)) {
+                factory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
+                lifecycle.initialize(infos);
+            }
+        }
+
+        private PrimaryDataStoreParameters initializeAndCaptureParameters(Map<String, Object> infos) {
+            initialize(infos);
+            ArgumentCaptor<PrimaryDataStoreParameters> captor = ArgumentCaptor.forClass(PrimaryDataStoreParameters.class);
+            verify(_dataStoreHelper).createPrimaryDataStore(captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        void initializeFailsWhenOntapConnectionIsRejected() {
+            when(storageStrategy.connect()).thenReturn(false);
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> initialize(dsInfos()));
+
+            assertTrue(thrown.getMessage().contains("details validation failed"), thrown.getMessage());
+            verify(_dataStoreHelper, never()).createPrimaryDataStore(any());
+        }
+
+        @Test
+        void initializeWrapsAggregateSelectionFailure() {
+            when(storageStrategy.chooseAggregate(any(), any())).thenThrow(new RuntimeException("no aggregate has space"));
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> initialize(dsInfos()));
+
+            assertTrue(thrown.getMessage().contains("Failed to choose ONTAP aggregate for pool: pool1"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("no aggregate has space"), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRecordsResolvedSvmUuidOnlyWhenKnown() {
+            when(storageStrategy.getResolvedSvmUuid()).thenReturn("svm-uuid-1");
+            PrimaryDataStoreParameters withUuid = initializeAndCaptureParameters(dsInfos());
+            assertEquals("svm-uuid-1", withUuid.getDetails().get(OntapStorageConstants.SVM_UUID));
+        }
+
+        @Test
+        void initializeSkipsSvmUuidWhenResolvedValueIsNullOrEmpty() {
+            when(storageStrategy.getResolvedSvmUuid()).thenReturn(null);
+            assertNull(initializeAndCaptureParameters(dsInfos()).getDetails().get(OntapStorageConstants.SVM_UUID));
+        }
+
+        @Test
+        void initializeSkipsSvmUuidWhenResolvedValueIsEmpty() {
+            when(storageStrategy.getResolvedSvmUuid()).thenReturn("");
+            assertNull(initializeAndCaptureParameters(dsInfos()).getDetails().get(OntapStorageConstants.SVM_UUID));
+        }
+
+        @Test
+        void initializeCreatesZoneWideStorageWhenNoPodOrCluster() {
+            Map<String, Object> infos = dsInfos();
+            infos.put("podId", null);
+            infos.put("clusterId", null);
+
+            PrimaryDataStoreParameters parameters = initializeAndCaptureParameters(infos);
+
+            assertNull(parameters.getClusterId());
+            assertNull(parameters.getPodId());
+            assertEquals(Long.valueOf(1L), parameters.getZoneId());
+            assertNull(parameters.getHypervisorType());
+        }
+
+        @Test
+        void initializeFailsWhenClusterDoesNotExist() {
+            Map<String, Object> infos = dsInfos();
+            infos.put("clusterId", 99L);
+
+            NullPointerException thrown = assertThrows(NullPointerException.class, () -> initialize(infos));
+
+            assertTrue(thrown.getMessage().contains("Unable to locate the specified cluster"), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRejectsMissingCapacity() {
+            Map<String, Object> infos = dsInfos();
+            infos.remove("capacityBytes");
+
+            InvalidParameterValueException thrown = assertThrows(InvalidParameterValueException.class, () -> initialize(infos));
+
+            assertTrue(thrown.getMessage().contains("capacity is required"), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRejectsPodWithoutClusterAndClusterWithoutPod() {
+            Map<String, Object> podOnly = dsInfos();
+            podOnly.put("clusterId", null);
+            assertThrows(CloudRuntimeException.class, () -> initialize(podOnly));
+
+            Map<String, Object> clusterOnly = dsInfos();
+            clusterOnly.put("podId", null);
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> initialize(clusterOnly));
+            assertTrue(thrown.getMessage().contains("Cluster Id or Pod Id is null"), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRejectsBlankDetailValue() {
+            Map<String, Object> infos = dsInfos();
+            detailsOf(infos).put(OntapStorageConstants.USERNAME, " ");
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> initialize(infos));
+
+            assertTrue(thrown.getMessage().contains("empty detail: " + OntapStorageConstants.USERNAME), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRejectsZoneIdMissingWhenPodAndClusterAreAlsoMissing() {
+            Map<String, Object> infos = dsInfos();
+            infos.put("podId", null);
+            infos.put("clusterId", null);
+            infos.put("zoneId", null);
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> initialize(infos));
+
+            assertTrue(thrown.getMessage().contains("all null"), thrown.getMessage());
+        }
+
+        // ---------------------------------------------------------------- argument checks on attach
+
+        @Test
+        void attachClusterRejectsMissingArgumentsAndUnknownPool() {
+            assertThrows(InvalidParameterValueException.class, () -> lifecycle.attachCluster(null, clusterScope));
+            assertThrows(InvalidParameterValueException.class, () -> lifecycle.attachCluster(dataStore, null));
+
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(null);
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> lifecycle.attachCluster(dataStore, clusterScope));
+            assertTrue(thrown.getMessage().contains("Storage Pool not found"), thrown.getMessage());
+        }
+
+        @Test
+        void attachZoneRejectsMissingArgumentsAndUnknownPool() {
+            assertThrows(InvalidParameterValueException.class,
+                    () -> lifecycle.attachZone(null, zoneScope, Hypervisor.HypervisorType.KVM));
+            assertThrows(InvalidParameterValueException.class,
+                    () -> lifecycle.attachZone(dataStore, null, Hypervisor.HypervisorType.KVM));
+
+            when(storagePoolDao.findById(POOL_ID)).thenReturn(null);
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                    () -> lifecycle.attachZone(dataStore, zoneScope, Hypervisor.HypervisorType.KVM));
+            assertTrue(thrown.getMessage().contains("Storage Pool not found"), thrown.getMessage());
+        }
+
+        @Test
+        void attachHostIsNotSupported() {
+            assertFalse(lifecycle.attachHost(dataStore, null, null));
+        }
+
+        // ---------------------------------------------------------------- host selection per protocol
+
+        private HostVO host(String storageUrl, String storageIp, String privateIp) {
+            HostVO host = mock(HostVO.class);
+            when(host.getStorageUrl()).thenReturn(storageUrl);
+            when(host.getStorageIpAddress()).thenReturn(storageIp);
+            when(host.getPrivateIpAddress()).thenReturn(privateIp);
+            return host;
+        }
+
+        private boolean attachClusterWith(List<HostVO> hosts) throws Exception {
+            when(_resourceMgr.getEligibleUpAndEnabledHostsInClusterForStorageConnection(any())).thenReturn(hosts);
+            when(_storageMgr.connectHostToSharedPool(any(), anyLong())).thenReturn(true);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+                return lifecycle.attachCluster(dataStore, clusterScope);
+            }
+        }
+
+        private AccessGroup captureAccessGroup() {
+            ArgumentCaptor<AccessGroup> captor = ArgumentCaptor.forClass(AccessGroup.class);
+            verify(storageStrategy).createAccessGroup(captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        void attachClusterWithIscsiSkipsExportPolicyAndStillConnectsEveryHost() throws Exception {
+            poolDetails.put(OntapStorageConstants.PROTOCOL, "ISCSI");
+            List<HostVO> hosts = Arrays.asList(
+                    host("iqn.1994-05.com.redhat:a", null, "10.0.0.5"),
+                    host(null, null, "10.0.0.6"),
+                    host("   ", null, "10.0.0.7"),
+                    host("nfs://not-an-iqn", null, "10.0.0.8"),
+                    null);
+
+            assertTrue(attachClusterWith(hosts));
+
+            verify(storageStrategy, never()).createAccessGroup(any());
+            verify(_storageMgr, times(5)).connectHostToSharedPool(any(), anyLong());
+            verify(_dataStoreHelper).attachCluster(dataStore);
+        }
+
+        @Test
+        void attachClusterWithNfsUsesStorageIpThenPrivateIpAndSkipsHostsWithoutAddress() throws Exception {
+            List<HostVO> hosts = Arrays.asList(
+                    host(null, " 192.168.0.5 ", "10.0.0.5"),
+                    host(null, null, "10.0.0.6"),
+                    host(null, "", null),
+                    host(null, " ", " "),
+                    null);
+
+            assertTrue(attachClusterWith(hosts));
+
+            AccessGroup group = captureAccessGroup();
+            assertEquals(5, group.getHostsToConnect().size());
+            assertSame(clusterScope, group.getScope());
+            assertEquals(POOL_ID, group.getStoragePoolId());
+        }
+
+        @Test
+        void attachClusterWithNfsSkipsExportPolicyWhenNoHostHasAnAddress() throws Exception {
+            List<HostVO> hosts = new ArrayList<>();
+            hosts.add(host(null, null, null));
+
+            assertTrue(attachClusterWith(hosts));
+
+            verify(storageStrategy, never()).createAccessGroup(any());
+        }
+
+        @Test
+        void attachClusterFailsWhenExportPolicyCannotBeCreated() throws Exception {
+            when(storageStrategy.createAccessGroup(any())).thenThrow(new RuntimeException("export policy rejected"));
+            List<HostVO> hosts = new ArrayList<>();
+            hosts.add(host(null, "10.0.0.5", null));
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> attachClusterWith(hosts));
+
+            assertTrue(thrown.getMessage().contains("Failed to create NFS access group"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("export policy rejected"), thrown.getMessage());
+            verify(_dataStoreHelper, never()).attachCluster(any());
+        }
+
+        @Test
+        void attachZoneWithIscsiConnectsHostsAndReportsConnectFailure() throws Exception {
+            poolDetails.put(OntapStorageConstants.PROTOCOL, "ISCSI");
+            List<HostVO> hosts = new ArrayList<>();
+            hosts.add(host("iqn.1994-05.com.redhat:a", null, "10.0.0.5"));
+            when(_resourceMgr.getEligibleUpAndEnabledHostsInZoneForStorageConnection(any(), anyLong(), any())).thenReturn(hosts);
+            when(_storageMgr.connectHostToSharedPool(any(), anyLong())).thenReturn(true);
+
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+                assertTrue(lifecycle.attachZone(dataStore, zoneScope, Hypervisor.HypervisorType.KVM));
+                verify(storageStrategy, never()).createAccessGroup(any());
+
+                when(_storageMgr.connectHostToSharedPool(any(), anyLong())).thenThrow(new RuntimeException("connect failed"));
+                assertFalse(lifecycle.attachZone(dataStore, zoneScope, Hypervisor.HypervisorType.KVM));
+            }
+        }
+
+        // ---------------------------------------------------------------- deleteDataStore volume identity
+
+        @Test
+        void deleteDataStoreSkipsOntapVolumeDeleteWhenIdentityIsIncomplete() {
+            when(_storageMgr.getStoragePool(POOL_ID)).thenReturn(storagePool);
+            when(storagePool.getName()).thenReturn("ontap-pool");
+
+            String[][] identities = {{null, "name"}, {"", "name"}, {"uuid", null}, {"uuid", ""}};
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+                for (String[] identity : identities) {
+                    Map<String, String> details = new HashMap<>();
+                    details.put(OntapStorageConstants.PROTOCOL, "NFS3");
+                    if (identity[0] != null) {
+                        details.put(OntapStorageConstants.VOLUME_UUID, identity[0]);
+                    }
+                    if (identity[1] != null) {
+                        details.put(OntapStorageConstants.VOLUME_NAME, identity[1]);
+                    }
+                    when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(details);
+                    when(_dataStoreHelper.deletePrimaryDataStore(dataStore)).thenReturn(true);
+
+                    assertTrue(lifecycle.deleteDataStore(dataStore));
+                }
+            }
+
+            verify(storageStrategy, never()).deleteStorageVolume(any());
+            verify(storageStrategy, times(identities.length)).deleteAccessGroup(any());
+        }
+
+        // ------------------------------------------------- initialize: pool parameters and boundaries
+
+        @Test
+        void initializeBuildsNfsPoolParametersFromTheRequestAndReturnsTheCreatedStore() {
+            DataStore created = mock(DataStore.class);
+            when(_dataStoreHelper.createPrimaryDataStore(any())).thenReturn(created);
+            Map<String, Object> infos = dsInfos();
+            infos.put("isTagARule", true);
+            infos.put("capacityIops", 3000L);
+            DataStore returned;
+            try (MockedStatic<StorageProviderFactory> factory = mockStatic(StorageProviderFactory.class)) {
+                factory.when(() -> StorageProviderFactory.getStrategy(any())).thenReturn(storageStrategy);
+                returned = lifecycle.initialize(infos);
+            }
+            ArgumentCaptor<PrimaryDataStoreParameters> captor = ArgumentCaptor.forClass(PrimaryDataStoreParameters.class);
+            verify(_dataStoreHelper).createPrimaryDataStore(captor.capture());
+            PrimaryDataStoreParameters p = captor.getValue();
+
+            assertSame(created, returned);
+            assertEquals(Hypervisor.HypervisorType.KVM, p.getHypervisorType());
+            assertEquals("10.1.1.1", p.getHost());
+            assertEquals(OntapStorageConstants.NFS3_PORT, p.getPort());
+            assertEquals("/pool1", p.getPath());
+            assertEquals(com.cloud.storage.Storage.StoragePoolType.NetworkFilesystem, p.getType());
+            assertEquals("tag", p.getTags());
+            assertEquals(Boolean.TRUE, p.isTagARule());
+            assertNotNull(p.getUuid());
+            assertEquals(java.util.UUID.fromString(p.getUuid()).toString(), p.getUuid());
+            assertEquals(Long.valueOf(1L), p.getZoneId());
+            assertEquals(Long.valueOf(1L), p.getPodId());
+            assertEquals(Long.valueOf(1L), p.getClusterId());
+            assertEquals("pool1", p.getName());
+            assertEquals("NetApp ONTAP", p.getProviderName());
+            assertTrue(p.isManaged());
+            assertEquals(1073741824L, p.getCapacityBytes());
+            assertEquals(Long.valueOf(3000L), p.getCapacityIops());
+            assertEquals(0L, p.getUsedBytes());
+            assertEquals("1073741824", p.getDetails().get(OntapStorageConstants.SIZE));
+            assertEquals("vol-uuid", p.getDetails().get(OntapStorageConstants.VOLUME_UUID));
+            assertEquals("vol-name", p.getDetails().get(OntapStorageConstants.VOLUME_NAME));
+        }
+
+        @Test
+        void initializeBuildsIscsiPoolParametersWithTheOntapTargetPath() {
+            when(storageStrategy.getStoragePath()).thenReturn("iqn.1992-08.com.netapp:sn.abc");
+            Map<String, Object> infos = dsInfos();
+            detailsOf(infos).put(OntapStorageConstants.PROTOCOL, "ISCSI");
+
+            PrimaryDataStoreParameters p = initializeAndCaptureParameters(infos);
+
+            assertEquals(com.cloud.storage.Storage.StoragePoolType.OntapiSCSI, p.getType());
+            assertEquals("iqn.1992-08.com.netapp:sn.abc", p.getPath());
+            assertEquals(OntapStorageConstants.ISCSI_PORT, p.getPort());
+            assertEquals("10.1.1.1", p.getHost());
+        }
+
+        @Test
+        void initializeAcceptsExactlyTheMinimumCapacityAndRejectsOneByteLess() {
+            long min = 20971520L;
+            Map<String, Object> atMin = dsInfos();
+            atMin.put("capacityBytes", min);
+            assertEquals(min, initializeAndCaptureParameters(atMin).getCapacityBytes());
+
+            Map<String, Object> below = dsInfos();
+            below.put("capacityBytes", min - 1);
+            InvalidParameterValueException thrown = assertThrows(InvalidParameterValueException.class, () -> initialize(below));
+            assertTrue(thrown.getMessage().contains("below the ONTAP minimum"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains(String.valueOf(min - 1)), thrown.getMessage());
+        }
+
+        @Test
+        void initializeRejectsZeroCapacityWithTheRequiredMessage() {
+            Map<String, Object> zero = dsInfos();
+            zero.put("capacityBytes", 0L);
+
+            InvalidParameterValueException thrown = assertThrows(InvalidParameterValueException.class, () -> initialize(zero));
+
+            assertTrue(thrown.getMessage().contains("capacity is required"), thrown.getMessage());
+        }
+
+        @Test
+        void initializeAcceptsOneIopsAndRejectsZero() {
+            Map<String, Object> one = dsInfos();
+            one.put("capacityIops", 1L);
+            assertEquals(Long.valueOf(1L), initializeAndCaptureParameters(one).getCapacityIops());
+
+            Map<String, Object> zero = dsInfos();
+            zero.put("capacityIops", 0L);
+            assertThrows(InvalidParameterValueException.class, () -> initialize(zero));
+        }
+
+        @Test
+        void deleteDataStoreReportsFailureWhenOntapCleanupSucceedsButCloudStackDeleteFails() {
+            when(_storageMgr.getStoragePool(POOL_ID)).thenReturn(storagePool);
+            when(storagePool.getName()).thenReturn("ontap-pool");
+            Map<String, String> details = new HashMap<>();
+            details.put(OntapStorageConstants.PROTOCOL, "NFS3");
+            details.put(OntapStorageConstants.VOLUME_UUID, "vol-uuid");
+            details.put(OntapStorageConstants.VOLUME_NAME, "vol-name");
+            when(_datastoreDetailsDao.listDetailsKeyPairs(POOL_ID)).thenReturn(details);
+            when(_dataStoreHelper.deletePrimaryDataStore(dataStore)).thenReturn(false);
+            try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+                utils.when(() -> OntapStorageUtils.getStrategyByStoragePoolDetails(any())).thenReturn(storageStrategy);
+
+                assertFalse(lifecycle.deleteDataStore(dataStore));
+            }
+            verify(storageStrategy).deleteStorageVolume(any());
+        }
+    }
 }

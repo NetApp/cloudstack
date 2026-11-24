@@ -25,22 +25,26 @@ import java.util.Map;
 
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.Scope;
+import org.apache.cloudstack.engine.subsystem.api.storage.TemplateInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.feign.client.SANFeignClient;
+import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
 import org.apache.cloudstack.storage.feign.model.Igroup;
 import org.apache.cloudstack.storage.feign.model.Initiator;
 import org.apache.cloudstack.storage.feign.model.Lun;
 import org.apache.cloudstack.storage.feign.model.LunMap;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
 import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
+import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
 import org.apache.cloudstack.storage.service.model.AccessGroup;
 import org.apache.cloudstack.storage.service.model.CloudStackVolume;
 import org.apache.cloudstack.storage.service.model.ProtocolType;
 import org.apache.cloudstack.storage.utils.OntapStorageConstants;
 import org.apache.cloudstack.storage.utils.OntapStorageUtils;
+import org.apache.cloudstack.storage.volume.VolumeObject;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -56,28 +60,39 @@ import org.mockito.ArgumentCaptor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
+import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.HostVO;
+import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.utils.exception.CloudRuntimeException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import feign.FeignException;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class UnifiedSANStrategyTest {
 
     @Mock
@@ -100,6 +115,11 @@ class UnifiedSANStrategyTest {
 
     @Mock
     private VolumeDetailsDao volumeDetailsDao;
+
+    @Mock
+    private SnapshotFeignClient snapshotFeignClient;
+
+    private static final String LUN_UUID = "lun-uuid";
 
     private UnifiedSANStrategy unifiedSANStrategy;
     private String authHeader;
@@ -137,6 +157,7 @@ class UnifiedSANStrategyTest {
             java.lang.reflect.Field volumeDetailsDaoField = UnifiedSANStrategy.class.getDeclaredField("volumeDetailsDao");
             volumeDetailsDaoField.setAccessible(true);
             volumeDetailsDaoField.set(unifiedSANStrategy, volumeDetailsDao);
+            unifiedSANStrategy.snapshotFeignClient = snapshotFeignClient;
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -2831,5 +2852,1260 @@ class UnifiedSANStrategyTest {
             assertNotNull(lunCaptor.getValue().getQosPolicy());
             assertEquals("cs_100_to200_iops_svm1", lunCaptor.getValue().getQosPolicy().getName());
         }
+    }
+
+    /** A real FeignException (mocks have no stack trace, which breaks logging of the cause). */
+    private static FeignException feignException(int status, String body) {
+        feign.Request request = feign.Request.create(feign.Request.HttpMethod.GET, "http://ontap/api",
+                new HashMap<>(), null, java.nio.charset.StandardCharsets.UTF_8, null);
+        feign.Response response = feign.Response.builder().status(status).reason("reason").request(request)
+                .headers(new HashMap<>()).body(body, java.nio.charset.StandardCharsets.UTF_8).build();
+        return FeignException.errorStatus("ontapCall", response);
+    }
+
+    private static Lun lun(String name, String uuid) {
+        Lun lun = new Lun();
+        lun.setName(name);
+        lun.setUuid(uuid);
+        return lun;
+    }
+
+    private static CloudStackVolume lunVolume(Lun lun) {
+        CloudStackVolume volume = new CloudStackVolume();
+        volume.setLun(lun);
+        return volume;
+    }
+
+    private static Lun cloneRequestLun() {
+        Lun.Source source = new Lun.Source();
+        source.setName("/vol/v/src");
+        Lun.Clone clone = new Lun.Clone();
+        clone.setSource(source);
+        Lun lun = lun("/vol/v/dst", null);
+        lun.setClone(clone);
+        return lun;
+    }
+
+    private static Igroup igroup(String uuid, String name) throws Exception {
+        return new ObjectMapper().readValue("{\"uuid\":\"" + uuid + "\",\"name\":\"" + name + "\"}", Igroup.class);
+    }
+
+    private static HostVO host(String uuid, String storageUrl) {
+        HostVO host = mock(HostVO.class);
+        when(host.getUuid()).thenReturn(uuid);
+        when(host.getStorageUrl()).thenReturn(storageUrl);
+        return host;
+    }
+
+    private static AccessGroup accessGroup(HostVO... hosts) {
+        AccessGroup group = new AccessGroup();
+        group.setStoragePoolId(5L);
+        group.setHostsToConnect(new ArrayList<>(java.util.Arrays.asList(hosts)));
+        return group;
+    }
+
+    private void poolDetails(String svmName, String protocol) {
+        Map<String, String> details = new HashMap<>();
+        if (svmName != null) {
+            details.put(OntapStorageConstants.SVM_NAME, svmName);
+        }
+        details.put(OntapStorageConstants.PROTOCOL, protocol);
+        when(storagePoolDetailsDao.listDetailsKeyPairs(5L)).thenReturn(details);
+    }
+
+    private static Lun withCopyProgress(Lun lun, Integer percent, String state) {
+        Lun.Progress progress = new Lun.Progress();
+        progress.setPercentComplete(percent);
+        progress.setState(state);
+        Lun.Source source = new Lun.Source();
+        source.setProgress(progress);
+        Lun.Copy copy = new Lun.Copy();
+        copy.setSource(source);
+        lun.setCopy(copy);
+        return lun;
+    }
+
+    // -------------------------------------------------------- createCloudStackVolume
+
+    @Test
+    public void createVolumeRejectsMissingRequestOrLun() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(new CloudStackVolume()));
+        verify(sanFeignClient, never()).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void createVolumeFailsWhenOntapReturnsNoRecords() {
+        CloudStackVolume request = lunVolume(lun("/vol/v/l", null));
+
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(null);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(request));
+
+        OntapResponse<Lun> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(nullRecords);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(request));
+
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        CloudRuntimeException empty = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(request));
+        assertTrue(empty.getMessage().contains("Failed to create Lun: /vol/v/l"), empty.getMessage());
+    }
+
+    @Test
+    public void createVolumeRejectsIncompleteLunFromOntap() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenReturn(new OntapResponse<>(List.of(lun("/vol/v/l", null))));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createCloudStackVolume(lunVolume(lun("/vol/v/l", null))));
+
+        assertTrue(thrown.getMessage().contains("incomplete LUN"), thrown.getMessage());
+    }
+
+    @Test
+    public void createVolumeWrapsFeignAndUnexpectedErrors() {
+        CloudStackVolume request = lunVolume(lun("/vol/v/l", null));
+        FeignException feign = feignException(500, "ontap down");
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feign);
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(request));
+        assertSame(feign, feignFailure.getCause());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).createLun(anyString(), anyBoolean(), any(Lun.class));
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createCloudStackVolume(request));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    // -------------------------------------------------------- createTemplateCache
+
+    private StoragePoolVO pool() {
+        StoragePoolVO pool = mock(StoragePoolVO.class);
+        when(pool.getId()).thenReturn(5L);
+        when(pool.getName()).thenReturn("flexvol");
+        when(pool.getHypervisor()).thenReturn(HypervisorType.KVM);
+        return pool;
+    }
+
+    private static TemplateInfo template() {
+        TemplateInfo template = mock(TemplateInfo.class);
+        when(template.getId()).thenReturn(42L);
+        return template;
+    }
+
+    private static Map<String, String> svmDetails() {
+        return Map.of(OntapStorageConstants.SVM_NAME, "svm1");
+    }
+
+    @Test
+    public void createTemplateCacheRejectsUnknownTemplateSize() {
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 0L));
+
+        assertTrue(thrown.getMessage().contains("Unknown virtual size for template [42]"), thrown.getMessage());
+        verify(sanFeignClient, never()).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void createTemplateCacheCreatesLunSizedToTheTemplate() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenReturn(new OntapResponse<>(List.of(lun("/vol/flexvol/template_42", "created-uuid"))));
+
+        CloudStackVolume created = unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 1024L);
+
+        assertEquals("created-uuid", created.getLun().getUuid());
+        verify(sanFeignClient).createLun(anyString(), eq(true), argThat(request ->
+                request.getSpace().getSize() == 1024L && "svm1".equals(request.getSvm().getName())));
+    }
+
+    @Test
+    public void createTemplateCacheRemovesLeftoverLunFoundOnOntapAfterCreateFailure() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feignException(500, "timeout"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(lun("/vol/flexvol/template_42", "leftover-uuid"))));
+
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 1024L));
+
+        verify(sanFeignClient).deleteLun(anyString(), eq("leftover-uuid"), anyMap());
+    }
+
+    @Test
+    public void createTemplateCacheDoesNotDeleteAnythingWhenNoLeftoverLunExists() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feignException(500, "timeout"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 1024L));
+
+        verify(sanFeignClient, never()).deleteLun(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    public void createTemplateCacheKeepsOriginalErrorWhenCleanupFails() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feignException(500, "timeout"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap()))
+                .thenReturn(new OntapResponse<>(List.of(lun("/vol/flexvol/template_42", "leftover-uuid"))));
+        doThrow(feignException(500, "cannot delete")).when(sanFeignClient).deleteLun(anyString(), anyString(), anyMap());
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 1024L));
+
+        assertTrue(thrown.getMessage().contains("Failed to create Lun"), thrown.getMessage());
+    }
+
+    @Test
+    public void createTemplateCacheWrapsUnexpectedErrorsAndCleansUp() {
+        UnifiedSANStrategy spied = spy(unifiedSANStrategy);
+        // A result without a LUN makes the success logging fail with a NullPointerException.
+        doReturn(new CloudStackVolume()).when(spied).createCloudStackVolume(any(CloudStackVolume.class));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(null);
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> spied.createTemplateCache(pool(), template(), svmDetails(), 1024L));
+
+        assertTrue(thrown.getMessage().contains("Failed to create template cache LUN for template [42]"), thrown.getMessage());
+        assertTrue(thrown.getCause() instanceof NullPointerException);
+    }
+
+    // -------------------------------------------------------- updateCloudStackVolume
+
+    @Test
+    public void updateVolumeRejectsRequestsWithoutLunUuid() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.updateCloudStackVolume(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.updateCloudStackVolume(new CloudStackVolume()));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.updateCloudStackVolume(lunVolume(lun("l", null))));
+    }
+
+    @Test
+    public void updateVolumeWithoutQosPolicyDoesNothing() {
+        CloudStackVolume request = lunVolume(lun("l", LUN_UUID));
+
+        assertSame(request, unifiedSANStrategy.updateCloudStackVolume(request));
+        verify(sanFeignClient, never()).updateLun(anyString(), anyString(), any(Lun.class));
+    }
+
+    @Test
+    public void updateVolumeAppliesQosPolicyAndWrapsFailures() {
+        Lun withQos = lun("l", LUN_UUID);
+        VolumeQosPolicy qos = new VolumeQosPolicy();
+        qos.setName("qos-1");
+        withQos.setQosPolicy(qos);
+        CloudStackVolume request = lunVolume(withQos);
+
+        assertSame(request, unifiedSANStrategy.updateCloudStackVolume(request));
+        verify(sanFeignClient).updateLun(anyString(), eq(LUN_UUID), argThat(update -> update.getQosPolicy() == qos));
+
+        when(sanFeignClient.updateLun(anyString(), anyString(), any(Lun.class))).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.updateCloudStackVolume(request));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to update LUN"), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).updateLun(anyString(), anyString(), any(Lun.class));
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.updateCloudStackVolume(request));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    // -------------------------------------------------------- cloneCloudStackVolume
+
+    @Test
+    public void cloneRejectsInvalidRequests() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(new CloudStackVolume()));
+
+        CloudStackVolume noClone = lunVolume(lun("/vol/v/dst", null));
+        CloudRuntimeException noCloneEx = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(noClone));
+        assertTrue(noCloneEx.getMessage().contains("no clone source"), noCloneEx.getMessage());
+
+        Lun emptyClone = lun("/vol/v/dst", null);
+        emptyClone.setClone(new Lun.Clone());
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(lunVolume(emptyClone)));
+        verify(sanFeignClient, never()).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void cloneFailsWhenOntapReturnsNothingOrAnIncompleteLun() {
+        CloudStackVolume request = lunVolume(cloneRequestLun());
+
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(null);
+        CloudRuntimeException missing = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        assertTrue(missing.getMessage().contains("Failed to clone Lun: /vol/v/dst"), missing.getMessage());
+
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        CloudRuntimeException empty = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        assertTrue(empty.getMessage().contains("Failed to clone Lun: /vol/v/dst"), empty.getMessage());
+
+        // A create record with a uuid and no name is not rejected immediately. Clone then reads that uuid back.
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenReturn(new OntapResponse<>(List.of(lun(null, "uuid"))));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenThrow(feignException(500, "get failed"));
+        CloudRuntimeException unread = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        assertTrue(unread.getMessage().contains("Failed to fetch cloned Lun"), unread.getMessage());
+    }
+
+    @Test
+    public void cloneWrapsFeignAndUnexpectedErrors() {
+        CloudStackVolume request = lunVolume(cloneRequestLun());
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to clone Lun: "), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).createLun(anyString(), anyBoolean(), any(Lun.class));
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.cloneCloudStackVolume(request));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    // -------------------------------------------------------- copyCloudStackVolume
+
+    private CloudStackVolume copy(int timeoutSeconds, String srcLunName, String destVolumeName) {
+        VolumeInfo src = mock(VolumeInfo.class);
+        VolumeInfo dest = mock(VolumeInfo.class);
+        StoragePoolVO destPool = mock(StoragePoolVO.class);
+        when(src.getId()).thenReturn(11L);
+        when(dest.getName()).thenReturn(destVolumeName);
+        when(destPool.getName()).thenReturn("dest");
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_UUID, "source-uuid", false));
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_NAME))
+                .thenReturn(srcLunName == null ? null : new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_NAME, srcLunName, false));
+        return unifiedSANStrategy.copyCloudStackVolume(src, dest, destPool, Map.of(OntapStorageConstants.SVM_NAME, "svm1"), timeoutSeconds);
+    }
+
+    private static Lun createdCopy() {
+        return lun("/vol/dest/lun", "copied-uuid");
+    }
+
+    @Test
+    public void copyWithoutSourceLunNameStillCopiesBySourceUuid() {
+        Lun created = createdCopy();
+        withCopyProgress(created, 100, null);
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(new OntapResponse<>(List.of(created)));
+        when(sanFeignClient.getLunByUUID(anyString(), eq("copied-uuid"), anyMap())).thenReturn(created);
+
+        CloudStackVolume result = copy(10, null, "lun");
+
+        assertSame(created, result.getLun());
+        verify(sanFeignClient).createLun(anyString(), eq(true), argThat(request ->
+                "source-uuid".equals(request.getCopy().getSource().getUuid()) && request.getCopy().getSource().getName() == null));
+    }
+
+    @Test
+    public void copyRejectsInvalidDestinationLunName() {
+        InvalidParameterValueException thrown = assertThrows(InvalidParameterValueException.class, () -> copy(10, null, "1 bad name!"));
+
+        assertTrue(thrown.getMessage().contains("Invalid dataObject name"), thrown.getMessage());
+        verify(sanFeignClient, never()).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyFailsWhenSourceVolumeHasNoLunUuid() {
+        VolumeInfo src = mock(VolumeInfo.class);
+        when(src.getId()).thenReturn(11L);
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_UUID, "  ", false));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.copyCloudStackVolume(
+                src, mock(VolumeInfo.class), mock(StoragePoolVO.class), svmDetails(), 5));
+
+        assertTrue(thrown.getMessage().contains("has no ONTAP LUN UUID"), thrown.getMessage());
+    }
+
+    @Test
+    public void copyFailsWhenOntapReturnsNoRecords() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(null);
+        CloudRuntimeException noResponse = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+        assertTrue(noResponse.getMessage().contains("Failed to copy Lun"), noResponse.getMessage());
+
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+    }
+
+    @Test
+    public void copyFailsFastOnNonRetryableCreateError() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenThrow(feignException(400, "bad request"));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+
+        assertTrue(thrown.getMessage().startsWith("Failed to copy Lun: "), thrown.getMessage());
+        verify(sanFeignClient).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyGivesUpWhenSourceStaysBusyPastTheDeadline() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"));
+
+        assertThrows(CloudRuntimeException.class, () -> copy(0, "src", "lun"));
+
+        verify(sanFeignClient).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyRetriesWhenSourceIsBusyAndThenSucceeds() {
+        Lun created = withCopyProgress(createdCopy(), 100, null);
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"))
+                .thenReturn(new OntapResponse<>(List.of(created)));
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+
+        CloudStackVolume result = copy(30, "src", "lun");
+
+        assertSame(created, result.getLun());
+        verify(sanFeignClient, org.mockito.Mockito.times(2)).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyResumesExistingCopyWhenOntapReportsItAlreadyStarted() {
+        Lun existing = withCopyProgress(createdCopy(), 100, null);
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"))
+                .thenThrow(feignException(409, "{\"code\":\"7018919\"}"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(existing)));
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(existing);
+
+        CloudStackVolume result = copy(30, "src", "lun");
+
+        assertSame(existing, result.getLun());
+    }
+
+    @Test
+    public void copyKeepsRetryingWhenAlreadyStartedCopyCannotBeFound() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"))
+                .thenThrow(feignException(409, "{\"code\":\"7018919\"}"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(null);
+
+        // A 1s deadline lets exactly one retry sleep happen before giving up on the conflict.
+        assertThrows(CloudRuntimeException.class, () -> copy(1, "src", "lun"));
+
+        verify(sanFeignClient, org.mockito.Mockito.times(2)).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyStopsWhenInterruptedWhileWaitingToRetryCreate() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"));
+        Thread.currentThread().interrupt();
+        try {
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(30, "src", "lun"));
+
+            assertTrue(thrown.getMessage().contains("Interrupted while retrying ONTAP LUN copy"), thrown.getMessage());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    private void createReturns(Lun created) {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class))).thenReturn(new OntapResponse<>(List.of(created)));
+    }
+
+    @Test
+    public void copyFailsAndRemovesPartialLunWhenOntapReportsCopyFailure() {
+        for (String state : new String[] {"failed", "FAILURE", "Error"}) {
+            Lun created = withCopyProgress(createdCopy(), 40, state);
+            createReturns(created);
+            when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+
+            assertTrue(thrown.getMessage().contains("ONTAP LUN copy failed"), thrown.getMessage());
+        }
+        verify(sanFeignClient, org.mockito.Mockito.times(3)).deleteLun(anyString(), eq("copied-uuid"), anyMap());
+    }
+
+    @Test
+    public void copyTimesOutWhileProgressIsIncomplete() {
+        Lun created = withCopyProgress(createdCopy(), 50, "running");
+        createReturns(created);
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(0, "src", "lun"));
+
+        assertTrue(thrown.getMessage().contains("Timed out waiting for ONTAP LUN copy"), thrown.getMessage());
+        verify(sanFeignClient).deleteLun(anyString(), eq("copied-uuid"), anyMap());
+    }
+
+    @Test
+    public void copyKeepsGoingWhenCleanupOfPartialLunFails() {
+        Lun created = withCopyProgress(createdCopy(), 50, "running");
+        createReturns(created);
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+        doThrow(feignException(500, "cannot delete")).when(sanFeignClient).deleteLun(anyString(), anyString(), anyMap());
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(0, "src", "lun"));
+
+        assertTrue(thrown.getMessage().contains("Timed out waiting"), thrown.getMessage());
+    }
+
+    @Test
+    public void copyStopsWhenInterruptedWhileWaitingForProgress() {
+        Lun created = withCopyProgress(createdCopy(), 50, "running");
+        createReturns(created);
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+        Thread.currentThread().interrupt();
+        try {
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(30, "src", "lun"));
+
+            assertTrue(thrown.getMessage().contains("Interrupted while waiting for ONTAP LUN copy"), thrown.getMessage());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    public void copyFailsWhenCopyStatusCannotBeRead() {
+        createReturns(createdCopy());
+
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(null);
+        CloudRuntimeException nullStatus = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+        assertTrue(nullStatus.getMessage().contains("Unable to retrieve ONTAP LUN copy status"), nullStatus.getMessage());
+
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException serverError = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+        assertTrue(serverError.getMessage().startsWith("Failed to copy Lun: "), serverError.getMessage());
+    }
+
+    @Test
+    public void copyFailsWhenOntapNeverExposesCopyDetailsWithinGracePeriod() {
+        unifiedSANStrategy.lunCopyStatusGraceMs = 0L;
+        createReturns(createdCopy());
+
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenThrow(feignException(404, "not yet"));
+        CloudRuntimeException notFound = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+        assertTrue(notFound.getMessage().contains("did not return copy details"), notFound.getMessage());
+        assertNotNull(notFound.getCause());
+
+        doReturn(createdCopy()).when(sanFeignClient).getLunByUUID(anyString(), anyString(), anyMap());
+        CloudRuntimeException noCopyObject = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+        assertTrue(noCopyObject.getMessage().contains("did not return copy details"), noCopyObject.getMessage());
+        assertNull(noCopyObject.getCause());
+    }
+
+    // -------------------------------------------------------- resizeCloudStackVolume (extra)
+
+    @Test
+    public void resizeResolvesLunUuidFromVolumeDetailsAndKeepsExistingQos() {
+        VolumeObject volumeInfo = mock(VolumeObject.class);
+        when(volumeInfo.getId()).thenReturn(77L);
+        when(volumeDetailsDao.findDetail(77L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(77L, OntapStorageConstants.LUN_DOT_UUID, "resolved-uuid", false));
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+
+        unifiedSANStrategy.resizeCloudStackVolume(request, 4096L);
+
+        assertEquals("resolved-uuid", request.getLun().getUuid());
+        verify(sanFeignClient).updateLun(anyString(), eq("resolved-uuid"), argThat(patch -> patch.getSpace().getSize() == 4096L));
+    }
+
+    @Test
+    public void resizeFailsWhenLunUuidCannotBeResolved() {
+        VolumeObject volumeInfo = mock(VolumeObject.class);
+        when(volumeInfo.getId()).thenReturn(77L);
+        CloudStackVolume request = new CloudStackVolume();
+        request.setVolumeInfo(volumeInfo);
+
+        when(volumeDetailsDao.findDetail(77L, OntapStorageConstants.LUN_DOT_UUID)).thenReturn(null);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 4096L));
+
+        when(volumeDetailsDao.findDetail(77L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(77L, OntapStorageConstants.LUN_DOT_UUID, "", false));
+        CloudRuntimeException blank = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 4096L));
+        assertTrue(blank.getMessage().contains("LUN UUID not found"), blank.getMessage());
+    }
+
+    @Test
+    public void resizeReportsMissingLunAndOtherFailuresDistinctly() {
+        VolumeObject volumeInfo = mock(VolumeObject.class);
+        CloudStackVolume request = lunVolume(lun("l", LUN_UUID));
+        request.setVolumeInfo(volumeInfo);
+
+        when(sanFeignClient.updateLun(anyString(), anyString(), any(Lun.class))).thenThrow(feignException(404, "gone"));
+        CloudRuntimeException gone = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 4096L));
+        assertTrue(gone.getMessage().contains("no longer exists on ONTAP"), gone.getMessage());
+
+        doThrow(feignException(500, "ontap down")).when(sanFeignClient).updateLun(anyString(), anyString(), any(Lun.class));
+        CloudRuntimeException failed = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 4096L));
+        assertTrue(failed.getMessage().contains("Failed to resize LUN"), failed.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).updateLun(anyString(), anyString(), any(Lun.class));
+        CloudRuntimeException unexpected = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.resizeCloudStackVolume(request, 4096L));
+        assertTrue(unexpected.getMessage().contains("Unexpected error while resizing LUN"), unexpected.getMessage());
+    }
+
+    // -------------------------------------------------------- getCloudStackVolume / serial number
+
+    @Test
+    public void getVolumeRejectsInvalidLookups() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getCloudStackVolume(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getCloudStackVolume(Map.of()));
+        for (Map<String, String> values : List.of(
+                Map.of(OntapStorageConstants.NAME, "lun"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "", OntapStorageConstants.NAME, "lun"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, ""))) {
+            assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getCloudStackVolume(values));
+        }
+    }
+
+    @Test
+    public void getVolumeReturnsNullWhenLunIsNotFound() {
+        Map<String, String> lookup = Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, "lun");
+
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(null);
+        assertNull(unifiedSANStrategy.getCloudStackVolume(lookup));
+
+        OntapResponse<Lun> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        assertNull(unifiedSANStrategy.getCloudStackVolume(lookup));
+
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        assertNull(unifiedSANStrategy.getCloudStackVolume(lookup));
+
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenThrow(feignException(404, "gone"));
+        assertNull(unifiedSANStrategy.getCloudStackVolume(lookup));
+    }
+
+    @Test
+    public void getVolumeWrapsOtherErrors() {
+        Map<String, String> lookup = Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, "lun");
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getCloudStackVolume(lookup));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to fetch Lun poolDetails"), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).getLunResponse(anyString(), anyMap());
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getCloudStackVolume(lookup));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    @Test
+    public void getLunSerialNumberReadsSerialFromOntap() throws Exception {
+        Lun lun = new ObjectMapper().readValue("{\"name\":\"lun\",\"serial_number\":\"serial-1\"}", Lun.class);
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(lun)));
+
+        assertEquals("serial-1", unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+    }
+
+    @Test
+    public void getLunSerialNumberRejectsInvalidNames() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber(null, "lun"));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber("", "lun"));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber("svm1", null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber("svm1", ""));
+    }
+
+    @Test
+    public void getLunSerialNumberReturnsNullWhenLunIsMissing() {
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(null);
+        assertNull(unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+
+        OntapResponse<Lun> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        assertNull(unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        assertNull(unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenThrow(feignException(404, "gone"));
+        assertNull(unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+    }
+
+    @Test
+    public void getLunSerialNumberWrapsOtherErrors() {
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to fetch LUN serial number"), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).getLunResponse(anyString(), anyMap());
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLunSerialNumber("svm1", "lun"));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    // -------------------------------------------------------- createAccessGroup
+
+    @Test
+    public void createAccessGroupRejectsInvalidRequests() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createAccessGroup(null));
+
+        AccessGroup noPool = accessGroup(host("h1", "iqn.1"));
+        noPool.setStoragePoolId(null);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createAccessGroup(noPool));
+
+        AccessGroup nullHosts = accessGroup();
+        nullHosts.setHostsToConnect(null);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createAccessGroup(nullHosts));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createAccessGroup(accessGroup()));
+        verify(sanFeignClient, never()).createIgroup(anyString(), anyBoolean(), any(Igroup.class));
+    }
+
+    @Test
+    public void createAccessGroupRejectsHostsWithoutIscsiInitiator() {
+        poolDetails("svm1", "ISCSI");
+        for (String storageUrl : new String[] {null, "", "   ", "nfs-host"}) {
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                    () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", storageUrl))));
+            assertTrue(thrown.getMessage().contains("support the protocol"), thrown.getMessage());
+        }
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.createAccessGroup(accessGroup((HostVO) null)));
+        verify(sanFeignClient, never()).createIgroup(anyString(), anyBoolean(), any(Igroup.class));
+    }
+
+    @Test
+    public void createAccessGroupWithoutSvmNameStillCreatesIgroup() throws Exception {
+        poolDetails(null, "ISCSI");
+        Igroup created = igroup("ig-1", "cs_h1_null");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenReturn(new OntapResponse<>(List.of(created)));
+
+        AccessGroup result = unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1994-05.com.example:host1")));
+
+        assertSame(created, result.getIgroup());
+        verify(sanFeignClient).createIgroup(anyString(), eq(true), argThat(request -> request.getSvm() == null));
+    }
+
+    @Test
+    public void createAccessGroupFailsWhenOntapReturnsNoIgroup() {
+        poolDetails("svm1", "ISCSI");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenReturn(new OntapResponse<>(new ArrayList<>()));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1"))));
+
+        assertTrue(thrown.getMessage().contains("Failed to create Igroup"), thrown.getMessage());
+    }
+
+    @Test
+    public void createAccessGroupReusesIgroupThatAlreadyExists() throws Exception {
+        poolDetails("svm1", "ISCSI");
+        Igroup existing = igroup("ig-1", "existing");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenThrow(feignException(409, "duplicate"));
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(existing)));
+
+        AccessGroup result = unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        assertSame(existing, result.getIgroup());
+    }
+
+    @Test
+    public void createAccessGroupReportsConflictWhenExistingIgroupCannotBeFetched() {
+        poolDetails("svm1", "ISCSI");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenThrow(feignException(409, "duplicate igroup"));
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(null);
+        CloudRuntimeException withBody = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1"))));
+        assertTrue(withBody.getMessage().contains("already exists but was not returned"), withBody.getMessage());
+        assertTrue(withBody.getMessage().contains("duplicate igroup"), withBody.getMessage());
+
+        doThrow(feignException(409, "")).when(sanFeignClient).createIgroup(anyString(), anyBoolean(), any(Igroup.class));
+        OntapResponse<Igroup> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        CloudRuntimeException blankBody = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1"))));
+        assertTrue(blankBody.getMessage().contains("already exists but was not returned"), blankBody.getMessage());
+    }
+
+    @Test
+    public void createAccessGroupWrapsOtherOntapErrors() {
+        poolDetails("svm1", "ISCSI");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenThrow(feignException(500, "ontap down"));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1"))));
+
+        assertTrue(thrown.getMessage().startsWith("Failed to create Igroup: "), thrown.getMessage());
+    }
+
+    // -------------------------------------------------------- deleteAccessGroup
+
+    @Test
+    public void deleteAccessGroupRejectsInvalidRequests() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.deleteAccessGroup(null));
+        AccessGroup noPool = accessGroup(host("h1", "iqn.1"));
+        noPool.setStoragePoolId(null);
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.deleteAccessGroup(noPool));
+    }
+
+    @Test
+    public void deleteAccessGroupWithoutHostsDoesNothing() {
+        AccessGroup group = accessGroup();
+        group.setHostsToConnect(null);
+
+        unifiedSANStrategy.deleteAccessGroup(group);
+        unifiedSANStrategy.deleteAccessGroup(accessGroup());
+
+        verify(sanFeignClient, never()).getIgroupResponse(anyString(), anyMap());
+    }
+
+    @Test
+    public void deleteAccessGroupDeletesIgroupByUuid() throws Exception {
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(igroup("ig-1", "g"))));
+
+        unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        verify(sanFeignClient).deleteIgroup(anyString(), eq("ig-1"));
+    }
+
+    @Test
+    public void deleteAccessGroupIsNoOpWhenIgroupIsAlreadyGone() {
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(null);
+        unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        OntapResponse<Igroup> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        verify(sanFeignClient, never()).deleteIgroup(anyString(), anyString());
+    }
+
+    @Test
+    public void deleteAccessGroupToleratesIgroupDisappearingDuringDelete() throws Exception {
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(igroup("ig-1", "g"))));
+        doThrow(feignException(404, "gone")).when(sanFeignClient).deleteIgroup(anyString(), anyString());
+
+        unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        verify(sanFeignClient).deleteIgroup(anyString(), eq("ig-1"));
+    }
+
+    @Test
+    public void deleteAccessGroupFailsOnOtherErrorsAndMissingUuid() throws Exception {
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(igroup("ig-1", "g"))));
+        doThrow(feignException(500, "ontap down")).when(sanFeignClient).deleteIgroup(anyString(), anyString());
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1"))));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to delete iGroup"), feignFailure.getMessage());
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(igroup("", "g"))));
+        CloudRuntimeException noUuid = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.deleteAccessGroup(accessGroup(host("h1", "iqn.1"))));
+        assertTrue(noUuid.getMessage().contains("iGroup UUID is null or empty"), noUuid.getMessage());
+    }
+
+    // -------------------------------------------------------- unsupported / getAccessGroup
+
+    @Test
+    public void updateAccessGroupIsNotSupportedForIscsi() {
+        assertNull(unifiedSANStrategy.updateAccessGroup(new AccessGroup()));
+    }
+
+    @Test
+    public void getAccessGroupRejectsInvalidLookups() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getAccessGroup(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getAccessGroup(Map.of()));
+        for (Map<String, String> values : List.of(
+                Map.of(OntapStorageConstants.NAME, "g"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "", OntapStorageConstants.NAME, "g"),
+                Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, ""))) {
+            assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getAccessGroup(values));
+        }
+    }
+
+    @Test
+    public void getAccessGroupReturnsNullWhenIgroupIsNotFound() {
+        Map<String, String> lookup = Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, "g");
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(null);
+        assertNull(unifiedSANStrategy.getAccessGroup(lookup));
+
+        OntapResponse<Igroup> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        assertNull(unifiedSANStrategy.getAccessGroup(lookup));
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        assertNull(unifiedSANStrategy.getAccessGroup(lookup));
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenThrow(feignException(404, "gone"));
+        assertNull(unifiedSANStrategy.getAccessGroup(lookup));
+    }
+
+    @Test
+    public void getAccessGroupReturnsIgroupAndWrapsOtherErrors() throws Exception {
+        Map<String, String> lookup = Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.NAME, "g");
+        Igroup found = igroup("ig-1", "g");
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(found)));
+        assertSame(found, unifiedSANStrategy.getAccessGroup(lookup).getIgroup());
+
+        when(sanFeignClient.getIgroupResponse(anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getAccessGroup(lookup));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to fetch Igroup poolDetails"), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).getIgroupResponse(anyString(), anyMap());
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getAccessGroup(lookup));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    // -------------------------------------------------------- LUN mapping
+
+    private static Map<String, String> mapValues() {
+        return Map.of(OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.LUN_DOT_NAME, "lun",
+                OntapStorageConstants.IGROUP_DOT_NAME, "g");
+    }
+
+    @Test
+    public void enableLogicalAccessRejectsInvalidValues() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(Map.of()));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "", OntapStorageConstants.LUN_DOT_NAME, "lun", OntapStorageConstants.IGROUP_DOT_NAME, "g")));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.LUN_DOT_NAME, "", OntapStorageConstants.IGROUP_DOT_NAME, "g")));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.LUN_DOT_NAME, "lun", OntapStorageConstants.IGROUP_DOT_NAME, "")));
+    }
+
+    @Test
+    public void enableLogicalAccessAcceptsAlreadyMappedLunAndFailsOnOtherErrors() {
+        assertEquals("", unifiedSANStrategy.enableLogicalAccess(mapValues()));
+
+        when(sanFeignClient.createLunMap(anyString(), anyBoolean(), any(LunMap.class)))
+                .thenThrow(new IllegalStateException("LUN already mapped to this group"));
+        assertEquals("", unifiedSANStrategy.enableLogicalAccess(mapValues()));
+
+        doThrow(new IllegalStateException("ontap down")).when(sanFeignClient).createLunMap(anyString(), anyBoolean(), any(LunMap.class));
+        CloudRuntimeException failed = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(mapValues()));
+        assertTrue(failed.getMessage().contains("ontap down"), failed.getMessage());
+
+        doThrow(new IllegalStateException((String) null)).when(sanFeignClient).createLunMap(anyString(), anyBoolean(), any(LunMap.class));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.enableLogicalAccess(mapValues()));
+    }
+
+    @Test
+    public void disableLogicalAccessValidatesInputAndHandlesErrors() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(Map.of()));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(Map.of(
+                OntapStorageConstants.LUN_DOT_UUID, "", OntapStorageConstants.IGROUP_DOT_UUID, "ig")));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(Map.of(
+                OntapStorageConstants.LUN_DOT_UUID, "lun", OntapStorageConstants.IGROUP_DOT_UUID, "")));
+
+        Map<String, String> values = Map.of(OntapStorageConstants.LUN_DOT_UUID, "lun-1", OntapStorageConstants.IGROUP_DOT_UUID, "ig-1");
+        unifiedSANStrategy.disableLogicalAccess(values);
+        verify(sanFeignClient).deleteLunMap(anyString(), eq("lun-1"), eq("ig-1"));
+
+        doThrow(feignException(404, "gone")).when(sanFeignClient).deleteLunMap(anyString(), anyString(), anyString());
+        unifiedSANStrategy.disableLogicalAccess(values);
+
+        doThrow(feignException(500, "ontap down")).when(sanFeignClient).deleteLunMap(anyString(), anyString(), anyString());
+        CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(values));
+        assertTrue(feignFailure.getMessage().startsWith("Failed to delete LunMap"), feignFailure.getMessage());
+
+        doThrow(new IllegalStateException("boom")).when(sanFeignClient).deleteLunMap(anyString(), anyString(), anyString());
+        CloudRuntimeException generic = assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.disableLogicalAccess(values));
+        assertTrue(generic.getMessage().contains("boom"), generic.getMessage());
+    }
+
+    @Test
+    public void getLogicalAccessValidatesInput() {
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLogicalAccess(null));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLogicalAccess(Map.of()));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "", OntapStorageConstants.LUN_DOT_NAME, "lun", OntapStorageConstants.IGROUP_DOT_NAME, "g")));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.LUN_DOT_NAME, "", OntapStorageConstants.IGROUP_DOT_NAME, "g")));
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.getLogicalAccess(Map.of(
+                OntapStorageConstants.SVM_DOT_NAME, "svm1", OntapStorageConstants.LUN_DOT_NAME, "lun", OntapStorageConstants.IGROUP_DOT_NAME, "")));
+    }
+
+    @Test
+    public void getLogicalAccessReturnsLunNumberOrNull() {
+        LunMap withNumber = new LunMap();
+        withNumber.setLogicalUnitNumber(3);
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(withNumber)));
+        assertEquals("3", unifiedSANStrategy.getLogicalAccess(mapValues()));
+
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(new LunMap())));
+        assertNull(unifiedSANStrategy.getLogicalAccess(mapValues()));
+
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(null);
+        assertNull(unifiedSANStrategy.getLogicalAccess(mapValues()));
+
+        OntapResponse<LunMap> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(nullRecords);
+        assertNull(unifiedSANStrategy.getLogicalAccess(mapValues()));
+
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(new ArrayList<>()));
+        assertNull(unifiedSANStrategy.getLogicalAccess(mapValues()));
+
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+        assertNull(unifiedSANStrategy.getLogicalAccess(mapValues()));
+    }
+
+    @Test
+    public void ensureLunMappedReusesExistingMapOrCreatesOne() {
+        LunMap existing = new LunMap();
+        existing.setLogicalUnitNumber(5);
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(existing)));
+        assertEquals("5", unifiedSANStrategy.ensureLunMapped("svm1", "lun", "g"));
+        verify(sanFeignClient, never()).createLunMap(anyString(), anyBoolean(), any(LunMap.class));
+
+        when(sanFeignClient.getLunMapResponse(anyString(), anyMap())).thenReturn(null);
+        assertEquals("", unifiedSANStrategy.ensureLunMapped("svm1", "lun", "g"));
+        verify(sanFeignClient).createLunMap(anyString(), eq(false), any(LunMap.class));
+    }
+
+    @Test
+    public void ensureLunMappedFailsWhenMappingReturnsNothing() {
+        UnifiedSANStrategy spied = spy(unifiedSANStrategy);
+        doReturn(null).when(spied).getLogicalAccess(anyMap());
+        doReturn(null).when(spied).enableLogicalAccess(anyMap());
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> spied.ensureLunMapped("svm1", "lun", "g"));
+
+        assertTrue(thrown.getMessage().contains("Failed to map LUN [lun] to iGroup [g]"), thrown.getMessage());
+    }
+
+    // -------------------------------------------------------- revertSnapshotForCloudStackVolume
+
+    @Test
+    public void revertSnapshotCallsCliRestoreWithNormalisedLunPath() {
+        JobResponse expected = new JobResponse();
+        when(snapshotFeignClient.restoreFileFromSnapshotCli(anyString(), any())).thenReturn(expected);
+
+        assertSame(expected, unifiedSANStrategy.revertSnapshotForCloudStackVolume("snap", "flex-uuid", "snap-uuid", "vol/lun1", LUN_UUID, "flexvol"));
+        verify(snapshotFeignClient).restoreFileFromSnapshotCli(anyString(), argThat(request ->
+                "/vol/lun1".equals(request.getPath()) && "svm1".equals(request.getVserver())
+                        && "flexvol".equals(request.getVolume()) && "snap".equals(request.getSnapshot())));
+
+        unifiedSANStrategy.revertSnapshotForCloudStackVolume("snap", "flex-uuid", "snap-uuid", "/vol/lun2", LUN_UUID, "flexvol");
+        verify(snapshotFeignClient).restoreFileFromSnapshotCli(anyString(), argThat(request -> "/vol/lun2".equals(request.getPath())));
+    }
+
+    @Test
+    public void revertSnapshotRejectsMissingArguments() {
+        for (String[] args : new String[][] {
+                {null, "flexvol", "lun"}, {"", "flexvol", "lun"},
+                {"snap", null, "lun"}, {"snap", "", "lun"},
+                {"snap", "flexvol", null}, {"snap", "flexvol", ""}}) {
+            assertThrows(CloudRuntimeException.class, () ->
+                    unifiedSANStrategy.revertSnapshotForCloudStackVolume(args[0], "flex-uuid", "snap-uuid", args[2], LUN_UUID, args[1]));
+        }
+        verify(snapshotFeignClient, never()).restoreFileFromSnapshotCli(anyString(), any());
+    }
+
+    @Test
+    public void deleteVolumeIgnoresMissingLunButFailsOnOtherErrors() {
+        CloudStackVolume request = lunVolume(lun("/vol/v/l", LUN_UUID));
+        doThrow(feignException(404, "gone")).when(sanFeignClient).deleteLun(anyString(), anyString(), anyMap());
+        unifiedSANStrategy.deleteCloudStackVolume(request);
+
+        doThrow(feignException(500, "ontap down")).when(sanFeignClient).deleteLun(anyString(), anyString(), anyMap());
+        assertThrows(CloudRuntimeException.class, () -> unifiedSANStrategy.deleteCloudStackVolume(request));
+        assertFalse(request.getLun().getUuid().isEmpty());
+    }
+
+    // ===================================================================================
+    // Assertions on the exact requests the SAN strategy sends to ONTAP
+    // ===================================================================================
+
+    private static <T> org.mockito.ArgumentCaptor<T> captor(Class<T> type) {
+        return org.mockito.ArgumentCaptor.forClass(type);
+    }
+
+    @Test
+    public void createAccessGroupSendsIgroupWithSvmOsTypeInitiatorProtocolAndDeleteOnUnmap() throws Exception {
+        poolDetails("svm1", "ISCSI");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class)))
+                .thenReturn(new OntapResponse<>(List.of(igroup("ig-1", "cs_h1_svm1"))));
+
+        unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1994-05.com.example:host1")));
+
+        org.mockito.ArgumentCaptor<Igroup> request = captor(Igroup.class);
+        verify(sanFeignClient).createIgroup(anyString(), eq(true), request.capture());
+        Igroup sent = request.getValue();
+        assertEquals("svm1", sent.getSvm().getName());
+        assertEquals(Igroup.OsTypeEnum.Linux, sent.getOsType());
+        assertEquals("cs_h1_svm1", sent.getName());
+        assertEquals(1, sent.getInitiators().size());
+        assertEquals("iqn.1994-05.com.example:host1", sent.getInitiators().get(0).getName());
+        assertEquals(Boolean.TRUE, sent.isDeleteOnUnmap());
+        assertEquals(Igroup.ProtocolEnum.iscsi, sent.getProtocol());
+    }
+
+    @Test
+    public void createAccessGroupOmitsSvmWhenPoolHasEmptySvmName() throws Exception {
+        poolDetails("", "ISCSI");
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class)))
+                .thenReturn(new OntapResponse<>(List.of(igroup("ig-1", "cs_h1_"))));
+
+        unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1")));
+
+        verify(sanFeignClient).createIgroup(anyString(), eq(true), argThat(request -> request.getSvm() == null));
+    }
+
+    @Test
+    public void createAccessGroupFailsWhenOntapReturnsNullRecords() {
+        poolDetails("svm1", "ISCSI");
+        OntapResponse<Igroup> nullRecords = new OntapResponse<>();
+        nullRecords.setRecords(null);
+        when(sanFeignClient.createIgroup(anyString(), anyBoolean(), any(Igroup.class))).thenReturn(nullRecords);
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> unifiedSANStrategy.createAccessGroup(accessGroup(host("h1", "iqn.1"))));
+
+        assertTrue(thrown.getMessage().contains("Failed to create Igroup"), thrown.getMessage());
+    }
+
+    @Test
+    public void enableLogicalAccessSendsLunMapWithSvmLunAndIgroupNames() {
+        unifiedSANStrategy.enableLogicalAccess(mapValues());
+
+        org.mockito.ArgumentCaptor<LunMap> request = captor(LunMap.class);
+        verify(sanFeignClient).createLunMap(anyString(), eq(false), request.capture());
+        Map<String, String> expected = mapValues();
+        assertEquals(expected.get(OntapStorageConstants.SVM_DOT_NAME), request.getValue().getSvm().getName());
+        assertEquals(expected.get(OntapStorageConstants.LUN_DOT_NAME), request.getValue().getLun().getName());
+        assertEquals(expected.get(OntapStorageConstants.IGROUP_DOT_NAME), request.getValue().getIgroup().getName());
+    }
+
+    @Test
+    public void createTemplateCacheSendsLunNamedAfterPoolAndTemplateWithLinuxOsType() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenReturn(new OntapResponse<>(List.of(lun("/vol/flexvol/template_42", "created-uuid"))));
+
+        unifiedSANStrategy.createTemplateCache(pool(), template(), svmDetails(), 1024L);
+
+        org.mockito.ArgumentCaptor<Lun> request = captor(Lun.class);
+        verify(sanFeignClient).createLun(anyString(), eq(true), request.capture());
+        assertEquals("/vol/flexvol/" + OntapStorageConstants.TEMPLATE_LUN_PREFIX + "42", request.getValue().getName());
+        assertEquals(Lun.OsTypeEnum.LINUX, request.getValue().getOsType());
+        assertEquals(1024L, request.getValue().getSpace().getSize());
+    }
+
+    @Test
+    public void deleteVolumePollsTheDeleteJobNamingTheLun() {
+        UnifiedSANStrategy spied = spy(unifiedSANStrategy);
+        JobResponse job = new JobResponse();
+        when(sanFeignClient.deleteLun(anyString(), eq("lun-1"), anyMap())).thenReturn(job);
+
+        spied.deleteCloudStackVolume(lunVolume(lun("/vol/v/l", "lun-1")));
+
+        verify(spied).pollJobIfPresent(job, "delete Lun [/vol/v/l]");
+        org.mockito.ArgumentCaptor<Map<String, Object>> query = org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(sanFeignClient).deleteLun(anyString(), eq("lun-1"), query.capture());
+        assertEquals("true", query.getValue().get("allow_delete_while_mapped"));
+    }
+
+    @Test
+    public void updateVolumePollsTheUpdateJobAndSendsOnlyTheQosPolicy() {
+        UnifiedSANStrategy spied = spy(unifiedSANStrategy);
+        JobResponse job = new JobResponse();
+        when(sanFeignClient.updateLun(anyString(), eq("lun-1"), any(Lun.class))).thenReturn(job);
+        Lun target = lun("/vol/v/l", "lun-1");
+        org.apache.cloudstack.storage.feign.model.VolumeQosPolicy policy = new org.apache.cloudstack.storage.feign.model.VolumeQosPolicy();
+        policy.setName("qos-1");
+        target.setQosPolicy(policy);
+
+        spied.updateCloudStackVolume(lunVolume(target));
+
+        verify(spied).pollJobIfPresent(job, "update LUN [lun-1]");
+        verify(sanFeignClient).updateLun(anyString(), eq("lun-1"), argThat(patch ->
+                patch.getQosPolicy() == policy && patch.getName() == null && patch.getSpace() == null));
+    }
+
+    @Test
+    public void resizePollsTheResizeJobAndSendsTheNewSize() {
+        UnifiedSANStrategy spied = spy(unifiedSANStrategy);
+        JobResponse job = new JobResponse();
+        when(sanFeignClient.updateLun(anyString(), eq("lun-1"), any(Lun.class))).thenReturn(job);
+        VolumeInfo volumeInfo = mock(VolumeInfo.class);
+        when(volumeInfo.getId()).thenReturn(10L);
+        CloudStackVolume volume = lunVolume(lun("/vol/v/l", "lun-1"));
+        volume.setVolumeInfo(volumeInfo);
+
+        spied.resizeCloudStackVolume(volume, 4096L);
+
+        verify(spied).pollJobIfPresent(job, "resize Lun [lun-1]");
+        verify(sanFeignClient).updateLun(anyString(), eq("lun-1"), argThat(patch ->
+                patch.getSpace().getSize() == 4096L && patch.getQosPolicy() == null));
+    }
+
+    @Test
+    public void copyRejectsAnIncompleteLunReturnedByOntap() {
+        createReturns(lun("/vol/dest/lun", null));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+
+        assertTrue(thrown.getMessage().contains("incomplete LUN"), thrown.getMessage());
+        verify(sanFeignClient, never()).getLunByUUID(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    public void copyRemovesPartialLunWhenOntapStatusCallFails() {
+        createReturns(createdCopy());
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenThrow(feignException(500, "ontap down"));
+
+        assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+
+        verify(sanFeignClient).deleteLun(anyString(), eq("copied-uuid"), anyMap());
+    }
+
+    @Test
+    public void copyDoesNotResumeWhenConflictIsNotTheAlreadyStartedCopy() {
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"))
+                .thenThrow(feignException(409, "{\"code\":\"1234567\"}"));
+
+        assertThrows(RuntimeException.class, () -> copy(30, "src", "lun"));
+
+        verify(sanFeignClient, never()).getLunResponse(anyString(), anyMap());
+        verify(sanFeignClient, org.mockito.Mockito.times(2)).createLun(anyString(), anyBoolean(), any(Lun.class));
+    }
+
+    @Test
+    public void copyLooksUpAnAlreadyStartedCopyInTheDestinationSvm() {
+        Lun existing = withCopyProgress(createdCopy(), 100, null);
+        when(sanFeignClient.createLun(anyString(), anyBoolean(), any(Lun.class)))
+                .thenThrow(feignException(500, "{\"code\":\"5375060\"}"))
+                .thenThrow(feignException(409, "{\"code\":\"7018919\"}"));
+        when(sanFeignClient.getLunResponse(anyString(), anyMap())).thenReturn(new OntapResponse<>(List.of(existing)));
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(existing);
+        VolumeInfo src = mock(VolumeInfo.class);
+        VolumeInfo dest = mock(VolumeInfo.class);
+        StoragePoolVO destPool = mock(StoragePoolVO.class);
+        when(src.getId()).thenReturn(11L);
+        when(dest.getName()).thenReturn("lun");
+        when(destPool.getName()).thenReturn("dest");
+        when(volumeDetailsDao.findDetail(11L, OntapStorageConstants.LUN_DOT_UUID))
+                .thenReturn(new VolumeDetailVO(11L, OntapStorageConstants.LUN_DOT_UUID, "source-uuid", false));
+
+        unifiedSANStrategy.copyCloudStackVolume(src, dest, destPool, Map.of(OntapStorageConstants.SVM_NAME, "other-svm"), 30);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Map<String, Object>> query = org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(sanFeignClient).getLunResponse(anyString(), query.capture());
+        assertEquals("other-svm", query.getValue().get(OntapStorageConstants.SVM_DOT_NAME));
+        assertEquals("/vol/dest/lun", query.getValue().get(OntapStorageConstants.NAME));
+    }
+
+    @Test
+    public void copyKeepsInterruptFlagAfterBeingInterruptedWhileWaitingForProgress() {
+        Lun created = withCopyProgress(createdCopy(), 50, "running");
+        createReturns(created);
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenReturn(created);
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(CloudRuntimeException.class, () -> copy(30, "src", "lun"));
+
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    public void copyReportsTheGracePeriodInSecondsWhenCopyDetailsNeverAppear() {
+        unifiedSANStrategy.lunCopyStatusGraceMs = 1000L;
+        createReturns(createdCopy());
+        when(sanFeignClient.getLunByUUID(anyString(), anyString(), anyMap())).thenThrow(feignException(404, "not yet"));
+
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> copy(10, "src", "lun"));
+
+        assertTrue(thrown.getMessage().contains("within 1s"), thrown.getMessage());
     }
 }
