@@ -36,12 +36,14 @@ import java.util.List;
 import java.util.Map;
 
 public class IscsiStorageCleanupMonitor implements Runnable{
-    protected Logger logger = LogManager.getLogger(getClass());
+    protected static final Logger LOGGER = LogManager.getLogger(IscsiStorageCleanupMonitor.class);
+    protected Logger logger = LOGGER;
     private static final int CLEANUP_INTERVAL_SEC = 60; // check every X seconds
-    private static final String ISCSI_PATH_PREFIX = "/dev/disk/by-path";
-    private static final String KEYWORD_ISCSI = "iscsi";
-    private static final String KEYWORD_IQN = "iqn";
-    private static final String REGEX_PART = "\\S+part\\d+$";
+    static final String ISCSI_PATH_PREFIX = "/dev/disk/by-path";
+    static final String KEYWORD_ISCSI = "iscsi";
+    static final String KEYWORD_IQN = "iqn";
+    static final String REGEX_PART = "\\S+part\\d+$";
+    static final String DEV_PREFIX = "/dev";
 
     private IscsiAdmStorageAdaptor iscsiStorageAdaptor;
 
@@ -51,6 +53,45 @@ public class IscsiStorageCleanupMonitor implements Runnable{
         diskStatusMap = new HashMap<>();
         logger.debug("Initialize cleanup thread");
         iscsiStorageAdaptor = new IscsiAdmStorageAdaptor();
+    }
+
+    /**
+     * True if {@code path} is an iSCSI by-path symlink for a whole LUN (not a partition entry).
+     * udev creates a sibling {@code -partN} by-path entry for every partition on a LUN; because
+     * {@code iscsiadm --logout} is session-scoped, acting on a partition entry would tear down
+     * the whole LUN's session. The monitor must operate only on whole-disk entries.
+     *
+     * Visible for testing.
+     */
+    static boolean isIscsiDisk(String path) {
+        return path != null
+                && path.startsWith(ISCSI_PATH_PREFIX)
+                && path.contains(KEYWORD_ISCSI)
+                && path.contains(KEYWORD_IQN)
+                && !path.matches(REGEX_PART);
+    }
+
+    /**
+     * Resolves a {@code /dev/disk/by-*} symlink (or any path under {@code /dev}) to its
+     * underlying kernel device absolute path (e.g. {@code /dev/sdb}). Returns {@code null}
+     * when the input is null, the symlink is dangling, the file is missing, or the real
+     * path is not under {@code /dev} (which filters out file-backed VM disks).
+     *
+     * Visible for testing.
+     */
+    static String resolveToKernelDevice(String path) {
+        if (path == null) {
+            return null;
+        }
+        try {
+            Path real = Paths.get(path).toRealPath();
+            if (real.startsWith(DEV_PREFIX)) {
+                return real.toString();
+            }
+        } catch (IOException e) {
+            LOGGER.debug("Could not resolve [{}] to a kernel device: {}", path, e.getMessage());
+        }
+        return null;
     }
 
 
@@ -83,18 +124,6 @@ public class IscsiStorageCleanupMonitor implements Runnable{
             }
         }
 
-        private boolean isIscsiDisk(String path) {
-            // Exclude partition symlinks (-partN). udev creates a by-path entry per
-            // partition when the LUN has a partition table. iscsiadm --logout is
-            // session-scoped, so cleaning up a partition entry would tear down the
-            // whole LUN's session. The whole-disk by-path entry (no -partN suffix)
-            // is what the monitor should operate on.
-            return path.startsWith(ISCSI_PATH_PREFIX)
-                    && path.contains(KEYWORD_ISCSI)
-                    && path.contains(KEYWORD_IQN)
-                    && !path.matches(REGEX_PART);
-        }
-
         /**
          * for each volume if the volume is path is of type iscsi, add to diskstatusmap and set status to false.
          * @param iscsiVolumes
@@ -102,7 +131,7 @@ public class IscsiStorageCleanupMonitor implements Runnable{
         private void initializeDiskStatusMap(File[] iscsiVolumes){
             diskStatusMap.clear();
             for( File v : iscsiVolumes) {
-                if (isIscsiDisk(v.getAbsolutePath())) {
+                if (IscsiStorageCleanupMonitor.isIscsiDisk(v.getAbsolutePath())) {
                     logger.debug("found iscsi disk by cleanup thread, marking inactive: " + v.getAbsolutePath());
                     diskStatusMap.put(v.getAbsolutePath(), false);
                 }
@@ -123,7 +152,7 @@ public class IscsiStorageCleanupMonitor implements Runnable{
             // any symlink form.
             Map<String, String> kernelDeviceToByPath = new HashMap<>();
             for (String byPath : diskStatusMap.keySet()) {
-                String kernelDevice = resolveToKernelDevice(byPath);
+                String kernelDevice = IscsiStorageCleanupMonitor.resolveToKernelDevice(byPath);
                 if (kernelDevice != null) {
                     kernelDeviceToByPath.put(kernelDevice, byPath);
                 }
@@ -145,7 +174,7 @@ public class IscsiStorageCleanupMonitor implements Runnable{
                         if (diskPath == null || diskPath.matches(REGEX_PART)) {
                             continue;
                         }
-                        String kernelDevice = resolveToKernelDevice(diskPath);
+                        String kernelDevice = IscsiStorageCleanupMonitor.resolveToKernelDevice(diskPath);
                         if (kernelDevice == null) {
                             continue;
                         }
@@ -160,23 +189,6 @@ public class IscsiStorageCleanupMonitor implements Runnable{
                 logger.warn("[ignored] Error trying to cleanup ", e);
             }
 
-        }
-
-        /**
-         * Resolves a /dev/disk/by-* symlink (or any path under /dev) to its underlying
-         * kernel device absolute path (e.g. /dev/sdb). Returns null when the symlink
-         * is dangling, the file is missing, or the real path is not under /dev.
-         */
-        private String resolveToKernelDevice(String path) {
-            try {
-                Path real = Paths.get(path).toRealPath();
-                if (real.startsWith("/dev")) {
-                    return real.toString();
-                }
-            } catch (IOException e) {
-                logger.debug("Could not resolve [{}] to a kernel device: {}", path, e.getMessage());
-            }
-            return null;
         }
 
         /**
