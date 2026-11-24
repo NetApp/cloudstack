@@ -84,7 +84,15 @@ public class IscsiStorageCleanupMonitor implements Runnable{
         }
 
         private boolean isIscsiDisk(String path) {
-            return path.startsWith(ISCSI_PATH_PREFIX) && path.contains(KEYWORD_ISCSI) && path.contains(KEYWORD_IQN);
+            // Exclude partition symlinks (-partN). udev creates a by-path entry per
+            // partition when the LUN has a partition table. iscsiadm --logout is
+            // session-scoped, so cleaning up a partition entry would tear down the
+            // whole LUN's session. The whole-disk by-path entry (no -partN suffix)
+            // is what the monitor should operate on.
+            return path.startsWith(ISCSI_PATH_PREFIX)
+                    && path.contains(KEYWORD_ISCSI)
+                    && path.contains(KEYWORD_IQN)
+                    && !path.matches(REGEX_PART);
         }
 
         /**
