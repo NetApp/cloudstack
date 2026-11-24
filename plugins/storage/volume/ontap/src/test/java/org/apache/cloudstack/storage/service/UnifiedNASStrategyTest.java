@@ -49,6 +49,7 @@ import org.apache.cloudstack.storage.feign.model.FileCloneRequest;
 import org.apache.cloudstack.storage.feign.model.FileInfo;
 import org.apache.cloudstack.storage.feign.model.Job;
 import org.apache.cloudstack.storage.feign.model.OntapStorage;
+import org.apache.cloudstack.storage.feign.model.Volume;
 import org.apache.cloudstack.storage.feign.model.VolumeQosPolicy;
 import org.apache.cloudstack.storage.feign.model.response.JobResponse;
 import org.apache.cloudstack.storage.feign.model.response.OntapResponse;
@@ -1458,7 +1459,16 @@ public class UnifiedNASStrategyTest {
         when(feignException.getMessage()).thenReturn("clone failed");
         when(nasFeignClient.cloneFile(anyString(), any(FileCloneRequest.class))).thenThrow(feignException);
 
-        assertThrows(CloudRuntimeException.class, () -> strategy.cloneCloudStackVolume(request));
+        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
+                () -> strategy.cloneCloudStackVolume(request));
+
+        assertEquals("Failed to clone file: clone failed", thrown.getMessage());
+        ArgumentCaptor<FileCloneRequest> sent = ArgumentCaptor.forClass(FileCloneRequest.class);
+        verify(nasFeignClient).cloneFile(anyString(), sent.capture());
+        assertEquals("template-uuid", sent.getValue().getSourcePath());
+        assertEquals("volume-uuid", sent.getValue().getDestinationPath());
+        assertEquals("flexvol1", sent.getValue().getVolume().getName());
+        assertEquals("flexvol-uuid-1", sent.getValue().getVolume().getUuid());
     }
 
     @Test
@@ -1705,6 +1715,33 @@ public class UnifiedNASStrategyTest {
         created.setName("created-policy");
         OntapResponse<ExportPolicy> response = new OntapResponse<>(List.of(created));
         when(nasFeignClient.getExportPolicyResponse(anyString(), anyMap())).thenReturn(response);
+    }
+
+    private void assertExportPolicyWasCreated(int times) {
+        ArgumentCaptor<ExportPolicy> policy = ArgumentCaptor.forClass(ExportPolicy.class);
+        verify(nasFeignClient, times(times)).createExportPolicy(anyString(), policy.capture());
+        for (ExportPolicy sent : policy.getAllValues()) {
+            assertEquals("cs-svm1-flexvol", sent.getName());
+            assertNotNull(sent.getSvm());
+            assertEquals("svm1", sent.getSvm().getName());
+            assertEquals("10.1.1.1/32", sent.getRules().get(0).getClients().get(0).getMatch());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertExportPolicyWasLookedUp(int times) {
+        ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+        verify(nasFeignClient, times(times)).getExportPolicyResponse(anyString(), query.capture());
+        for (Map<String, Object> value : query.getAllValues()) {
+            assertEquals("cs-svm1-flexvol", value.get(OntapStorageConstants.NAME));
+        }
+    }
+
+    private static Volume exportPolicyUpdate(String policyName) {
+        return argThat(update -> update != null
+                && update.getNas() != null
+                && update.getNas().getExportPolicy() != null
+                && policyName.equals(update.getNas().getExportPolicy().getName()));
     }
 
     private static Job job(String state, String message) {
@@ -1986,11 +2023,21 @@ public class UnifiedNASStrategyTest {
         CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class,
                 () -> strategy.cloneCloudStackVolume(cloneRequest("src", "dst", "1")));
         assertTrue(feignFailure.getMessage().startsWith("Failed to clone file: "), feignFailure.getMessage());
+        assertTrue(feignFailure.getMessage().contains("clone refused"), feignFailure.getMessage());
 
         doThrow(new IllegalStateException("npe-ish")).when(nasFeignClient).cloneFile(anyString(), any());
         CloudRuntimeException genericFailure = assertThrows(CloudRuntimeException.class,
                 () -> strategy.cloneCloudStackVolume(cloneRequest("src", "dst", "1")));
         assertTrue(genericFailure.getMessage().contains("npe-ish"), genericFailure.getMessage());
+
+        ArgumentCaptor<FileCloneRequest> request = ArgumentCaptor.forClass(FileCloneRequest.class);
+        verify(nasFeignClient, times(2)).cloneFile(anyString(), request.capture());
+        for (FileCloneRequest sent : request.getAllValues()) {
+            assertEquals("flex-uuid", sent.getVolume().getUuid());
+            assertEquals("flexvol", sent.getVolume().getName());
+            assertEquals("src", sent.getSourcePath());
+            assertEquals("dst", sent.getDestinationPath());
+        }
     }
 
     // ------------------------------------------------- resizeCloudStackVolume
@@ -2019,7 +2066,9 @@ public class UnifiedNASStrategyTest {
 
         strategy.resizeCloudStackVolume(nfsVolume(volume, fileWithQos()), 2048L);
 
-        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("vol-uuid"), any(FileInfo.class));
+        ArgumentCaptor<FileInfo> updated = ArgumentCaptor.forClass(FileInfo.class);
+        verify(nasFeignClient).updateFile(anyString(), eq("flex-uuid"), eq("vol-uuid"), updated.capture());
+        assertEquals("qos-1", updated.getValue().getQosPolicy().getName());
     }
 
     // ------------------------------------------------- getCloudStackVolume / files
@@ -2084,15 +2133,17 @@ public class UnifiedNASStrategyTest {
     @Test
     public void deleteFileByPathFailsOnOtherErrors() {
         FeignException serverError = feignException(500, "ontap down");
-        doThrow(serverError).when(nasFeignClient).deleteFile(anyString(), anyString(), anyString());
+        doThrow(serverError).when(nasFeignClient).deleteFile(anyString(), eq("flex-uuid"), eq("f"));
         CloudRuntimeException feignFailure = assertThrows(CloudRuntimeException.class,
                 () -> strategy.deleteFileByPath("flex-uuid", "f"));
         assertTrue(feignFailure.getMessage().startsWith("Failed to delete file: "), feignFailure.getMessage());
+        assertTrue(feignFailure.getMessage().contains("ontap down"), feignFailure.getMessage());
 
-        doThrow(new IllegalStateException("boom")).when(nasFeignClient).deleteFile(anyString(), anyString(), anyString());
+        doThrow(new IllegalStateException("boom")).when(nasFeignClient).deleteFile(anyString(), eq("flex-uuid"), eq("f"));
         CloudRuntimeException genericFailure = assertThrows(CloudRuntimeException.class,
                 () -> strategy.deleteFileByPath("flex-uuid", "f"));
         assertTrue(genericFailure.getMessage().contains("boom"), genericFailure.getMessage());
+        verify(nasFeignClient, times(2)).deleteFile(anyString(), eq("flex-uuid"), eq("f"));
     }
 
     // ------------------------------------------------- unused access-group hooks
@@ -2115,8 +2166,11 @@ public class UnifiedNASStrategyTest {
 
         CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(group));
 
-        assertTrue(thrown.getMessage().contains("was not created on ONTAP"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains(
+                "Export policy cs-svm1-flexvol was not created on ONTAP"), thrown.getMessage());
         verify(volumeFeignClient, never()).updateVolume(anyString(), anyString(), any());
+        assertExportPolicyWasCreated(1);
+        assertExportPolicyWasLookedUp(1);
     }
 
     @Test
@@ -2129,6 +2183,9 @@ public class UnifiedNASStrategyTest {
                 () -> strategy.createAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
         assertTrue(thrown.getMessage().contains("Export policy creation verification failed"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("lookup failed"), thrown.getMessage());
+        assertExportPolicyWasCreated(1);
+        assertExportPolicyWasLookedUp(1);
     }
 
     @Test
@@ -2141,6 +2198,9 @@ public class UnifiedNASStrategyTest {
                 () -> strategy.createAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
         assertTrue(thrown.getMessage().contains("Failed to create export policy: "), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("bad policy"), thrown.getMessage());
+        assertExportPolicyWasCreated(1);
+        verify(nasFeignClient, never()).getExportPolicyResponse(anyString(), anyMap());
     }
 
     @Test
@@ -2150,10 +2210,14 @@ public class UnifiedNASStrategyTest {
         when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(null);
         AccessGroup group = accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null));
         CloudRuntimeException noResponse = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(group));
-        assertTrue(noResponse.getMessage().contains("Failed to update volume"), noResponse.getMessage());
+        assertTrue(noResponse.getMessage().contains("Failed to attach policy created-policyto volume flex-uuid"), noResponse.getMessage());
 
-        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(new JobResponse());
-        assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(group));
+        when(volumeFeignClient.updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"))).thenReturn(new JobResponse());
+        CloudRuntimeException emptyJob = assertThrows(CloudRuntimeException.class, () -> strategy.createAccessGroup(group));
+        assertTrue(emptyJob.getMessage().contains("Failed to attach policy created-policyto volume flex-uuid"), emptyJob.getMessage());
+        verify(volumeFeignClient, times(2)).updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"));
+        assertExportPolicyWasCreated(2);
+        assertExportPolicyWasLookedUp(2);
         verify(storagePoolDetailsDao, never()).addDetail(anyLong(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
@@ -2161,44 +2225,56 @@ public class UnifiedNASStrategyTest {
     public void createAccessGroupFailsWhenAttachJobFails() {
         poolDetailsForCreate();
         exportPolicyIsCreated();
-        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(jobResponse());
+        when(volumeFeignClient.updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"))).thenReturn(jobResponse());
         when(jobFeignClient.getJobByUUID(anyString(), eq("job-1"))).thenReturn(job(OntapStorageConstants.JOB_FAILURE, "volume busy"));
 
         CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
                 () -> strategy.createAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
-        assertTrue(thrown.getMessage().contains("volume busy"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("Job to update volume flex-uuid failed with error: volume busy"), thrown.getMessage());
+        verify(volumeFeignClient).updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"));
+        verify(jobFeignClient).getJobByUUID(anyString(), eq("job-1"));
+        assertExportPolicyWasCreated(1);
+        assertExportPolicyWasLookedUp(1);
     }
 
     @Test
     public void createAccessGroupFailsWhenJobStatusCannotBeFetched() {
         poolDetailsForCreate();
         exportPolicyIsCreated();
-        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(jobResponse());
+        when(volumeFeignClient.updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"))).thenReturn(jobResponse());
         FeignException clientException = feignException(403, "forbidden");
         assertTrue(clientException instanceof FeignException.FeignClientException);
-        when(jobFeignClient.getJobByUUID(anyString(), anyString())).thenThrow(clientException);
+        when(jobFeignClient.getJobByUUID(anyString(), eq("job-1"))).thenThrow(clientException);
 
         CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
                 () -> strategy.createAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
         assertTrue(thrown.getMessage().contains("Failed to fetch job status"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("forbidden"), thrown.getMessage());
+        verify(volumeFeignClient).updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"));
+        verify(jobFeignClient).getJobByUUID(anyString(), eq("job-1"));
+        assertExportPolicyWasCreated(1);
+        assertExportPolicyWasLookedUp(1);
     }
 
     @Test
     public void createAccessGroupRetriesWhenJobIsNotYetVisibleThenReportsItsFailure() {
         poolDetailsForCreate();
         exportPolicyIsCreated();
-        when(volumeFeignClient.updateVolume(anyString(), anyString(), any())).thenReturn(jobResponse());
-        when(jobFeignClient.getJobByUUID(anyString(), anyString()))
+        when(volumeFeignClient.updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"))).thenReturn(jobResponse());
+        when(jobFeignClient.getJobByUUID(anyString(), eq("job-1")))
                 .thenReturn(null)
                 .thenReturn(job(OntapStorageConstants.JOB_FAILURE, "gave up"));
 
         CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class,
                 () -> strategy.createAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
-        assertTrue(thrown.getMessage().contains("gave up"), thrown.getMessage());
-        verify(jobFeignClient, org.mockito.Mockito.times(2)).getJobByUUID(anyString(), eq("job-1"));
+        assertTrue(thrown.getMessage().contains("Job to update volume flex-uuid failed with error: gave up"), thrown.getMessage());
+        verify(volumeFeignClient).updateVolume(anyString(), eq("flex-uuid"), exportPolicyUpdate("created-policy"));
+        verify(jobFeignClient, times(2)).getJobByUUID(anyString(), eq("job-1"));
+        assertExportPolicyWasCreated(1);
+        assertExportPolicyWasLookedUp(1);
     }
 
     // ------------------------------------------------- createExportPolicyRequest
@@ -2265,6 +2341,8 @@ public class UnifiedNASStrategyTest {
                 () -> strategy.deleteAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
         assertTrue(thrown.getMessage().contains("Failed to delete export policy"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("ontap down"), thrown.getMessage());
+        verify(nasFeignClient).deleteExportPolicyById(anyString(), eq(POLICY_ID));
     }
 
     @Test
@@ -2425,7 +2503,9 @@ public class UnifiedNASStrategyTest {
 
         strategy.updateAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("  ", "192.168.5.5")));
 
-        assertEquals("192.168.5.5/32", existing.getRules().get(0).getClients().get(0).getMatch());
+        ArgumentCaptor<ExportPolicy> sent = ArgumentCaptor.forClass(ExportPolicy.class);
+        verify(nasFeignClient).updateExportPolicy(anyString(), eq(POLICY_ID), sent.capture());
+        assertEquals("192.168.5.5/32", sent.getValue().getRules().get(0).getClients().get(0).getMatch());
     }
 
     @Test
@@ -2440,6 +2520,10 @@ public class UnifiedNASStrategyTest {
                 () -> strategy.updateAccessGroup(accessGroup(AccessGroup.HostRuleAction.ADD, host("10.1.1.1", null))));
 
         assertTrue(thrown.getMessage().contains("Failed to update export policy for NFS host connection"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("patch failed"), thrown.getMessage());
+        ArgumentCaptor<ExportPolicy> sent = ArgumentCaptor.forClass(ExportPolicy.class);
+        verify(nasFeignClient).updateExportPolicy(anyString(), eq(POLICY_ID), sent.capture());
+        assertEquals("10.1.1.1/32", sent.getValue().getRules().get(0).getClients().get(0).getMatch());
     }
 
     // ------------------------------------------------- revertSnapshotForCloudStackVolume
@@ -2462,7 +2546,8 @@ public class UnifiedNASStrategyTest {
         strategy.revertSnapshotForCloudStackVolume("snap1", "flex-uuid", "snap-uuid", "/file.qcow2", null, "flexvol");
 
         verify(snapshotFeignClient).restoreFileFromSnapshotCli(anyString(), org.mockito.ArgumentMatchers.argThat(
-                request -> "/file.qcow2".equals(request.getPath())));
+                request -> "/file.qcow2".equals(request.getPath()) && "svm1".equals(request.getVserver())
+                        && "flexvol".equals(request.getVolume()) && "snap1".equals(request.getSnapshot())));
     }
 
     @Test

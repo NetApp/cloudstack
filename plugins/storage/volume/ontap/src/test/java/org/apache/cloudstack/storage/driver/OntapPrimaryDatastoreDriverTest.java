@@ -126,7 +126,6 @@ import java.util.function.Consumer;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import java.util.function.Supplier;
 import static org.mockito.ArgumentMatchers.contains;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeast;
 import java.util.Collections;
 import org.apache.cloudstack.storage.feign.client.SnapshotFeignClient;
@@ -4431,6 +4430,23 @@ class OntapPrimaryDatastoreDriverTest {
             poolDetails.put(OntapStorageConstants.PROTOCOL, ProtocolType.NFS3.name());
         }
 
+        private CloudStackVolume nfsDeleteRequest() {
+            return argThat(request -> request != null
+                    && request.getVolumeInfo() == volumeInfo
+                    && String.valueOf(POOL_ID).equals(request.getDatastoreId()));
+        }
+
+        private CloudStackVolume nfsQosUpdate(String policyName, String policyUuid) {
+            return argThat(request -> request != null
+                    && request.getVolumeInfo() == volumeInfo
+                    && String.valueOf(POOL_ID).equals(request.getDatastoreId())
+                    && "flexvol-uuid".equals(request.getFlexVolumeUuid())
+                    && request.getFile() != null
+                    && request.getFile().getQosPolicy() != null
+                    && (policyName == null || policyName.equals(request.getFile().getQosPolicy().getName()))
+                    && (policyUuid == null || policyUuid.equals(request.getFile().getQosPolicy().getUuid())));
+        }
+
         // ------------------------------------------------- trivial driver contract
 
         @Test
@@ -4584,7 +4600,9 @@ class OntapPrimaryDatastoreDriverTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> withStrategy(sanStrategy, () -> driver.grantAccess(volumeInfo, host, dataStore)));
 
-            assertTrue(ex.getMessage().contains("did not report a serial number"), ex.getMessage());
+            assertTrue(ex.getMessage().contains(
+                    "ONTAP did not report a serial number for LUN " + LUN_NAME + " on SVM " + SVM), ex.getMessage());
+            verify(sanStrategy).getLunSerialNumber(SVM, LUN_NAME);
             verify(volumeDao, never()).update(anyLong(), any(VolumeVO.class));
         }
 
@@ -4613,12 +4631,13 @@ class OntapPrimaryDatastoreDriverTest {
         void grantAccess_throws_whenHostCannotConnectToIscsiPool() throws Exception {
             givenIscsiVolume();
             when(volumeVO.getState()).thenReturn(Volume.State.Migrating);
-            when(storageManager.connectHostToSharedPool(any(), anyLong())).thenReturn(false);
+            when(storageManager.connectHostToSharedPool(eq(host), eq(POOL_ID))).thenReturn(false);
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> withStrategy(sanStrategy, () -> driver.grantAccess(volumeInfo, host, dataStore)));
 
-            assertTrue(ex.getMessage().contains("Failed to connect host"), ex.getMessage());
+            assertEquals("Failed with error: Failed to connect host [kvm-1] to iSCSI storage pool [flexvol]", ex.getMessage());
+            verify(storageManager).connectHostToSharedPool(host, POOL_ID);
         }
 
         @Test
@@ -4626,12 +4645,24 @@ class OntapPrimaryDatastoreDriverTest {
             givenIscsiVolume();
             VolumeVO callerVolume = mock(VolumeVO.class);
             when(volumeInfo.getVolume()).thenReturn(callerVolume);
-            when(volumeVO.getPath()).thenReturn("/server/side/path");
+            AtomicReference<String> path = new AtomicReference<>("/server/side/path");
+            AtomicReference<String> iscsiName = new AtomicReference<>();
+            when(volumeVO.getPath()).thenAnswer(invocation -> path.get());
+            when(volumeVO.get_iScsiName()).thenAnswer(invocation -> iscsiName.get());
+            doAnswer(invocation -> {
+                path.set(invocation.getArgument(0));
+                return null;
+            }).when(volumeVO).setPath(anyString());
+            doAnswer(invocation -> {
+                iscsiName.set(invocation.getArgument(0));
+                return null;
+            }).when(volumeVO).set_iScsiName(anyString());
 
             assertTrue(withStrategy(sanStrategy, () -> driver.grantAccess(volumeInfo, host, dataStore)));
 
-            verify(callerVolume).setPath(any());
-            verify(callerVolume).set_iScsiName(any());
+            String expectedPath = "/" + TARGET_IQN + "/" + WWID;
+            verify(callerVolume).setPath(expectedPath);
+            verify(callerVolume).set_iScsiName(expectedPath);
         }
 
         // --------------------------------------------------- grantAccess: NFS
@@ -4664,12 +4695,13 @@ class OntapPrimaryDatastoreDriverTest {
         void grantAccess_throws_whenHostCannotConnectToNfsPool() throws Exception {
             givenNfsPool();
             when(volumeVO.getState()).thenReturn(Volume.State.Migrating);
-            when(storageManager.connectHostToSharedPool(any(), anyLong())).thenReturn(false);
+            when(storageManager.connectHostToSharedPool(eq(host), eq(POOL_ID))).thenReturn(false);
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> withStrategy(nasStrategy, () -> driver.grantAccess(volumeInfo, host, dataStore)));
 
-            assertTrue(ex.getMessage().contains("Failed to connect host"), ex.getMessage());
+            assertEquals("Failed with error: Failed to connect host [kvm-1] to NFS storage pool [flexvol]", ex.getMessage());
+            verify(storageManager).connectHostToSharedPool(host, POOL_ID);
         }
 
         // ------------------------------------------------- revokeAccess: negative
@@ -5088,8 +5120,14 @@ class OntapPrimaryDatastoreDriverTest {
             when(volumeInfo.getMaxIops()).thenReturn(500L);
             when(sanStrategy.isAff()).thenReturn(false);
 
-            assertThrows(CloudRuntimeException.class,
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> withStrategy(sanStrategy, () -> driver.applyQosPolicyToVolume(volumeInfo)));
+
+            assertEquals(OntapStorageConstants.MIN_IOPS_NOT_SUPPORTED_ON_FAS, ex.getMessage());
+            verify(sanStrategy).isAff();
+            verify(storagePoolDetailsDao).addDetail(POOL_ID, OntapStorageConstants.IS_AFF, "false", false);
+            verify(sanStrategy, never()).createVolumeQosPolicy(any(), any(), any());
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
         }
 
         @Test
@@ -5125,8 +5163,11 @@ class OntapPrimaryDatastoreDriverTest {
             when(volumeInfo.getMaxIops()).thenReturn(500L);
             when(sanStrategy.createVolumeQosPolicy(anyString(), anyLong(), anyLong())).thenReturn(qosPolicy());
 
-            assertThrows(InvalidParameterValueException.class,
+            InvalidParameterValueException ex = assertThrows(InvalidParameterValueException.class,
                     () -> withStrategy(sanStrategy, () -> driver.applyQosPolicyToVolume(volumeInfo)));
+
+            assertTrue(ex.getMessage().contains("Invalid dataObject name [1_starts_with_digit]"), ex.getMessage());
+            verify(sanStrategy, never()).updateCloudStackVolume(any());
         }
 
         // ----------------------------------- deleteAsync: volume failure handling
@@ -5166,12 +5207,13 @@ class OntapPrimaryDatastoreDriverTest {
             givenNfsPool();
             when(volumeDetailsDao.findDetail(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID))
                     .thenReturn(new VolumeDetailVO(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
-            doThrow(new RuntimeException("qos update rejected")).when(nasStrategy).updateCloudStackVolume(any(CloudStackVolume.class));
+            doThrow(new RuntimeException("qos update rejected")).when(nasStrategy).updateCloudStackVolume(nfsQosUpdate("none", null));
 
             CommandResult result = deleteVolume(nasStrategy);
 
             assertTrue(result.isSuccess());
-            verify(nasStrategy).deleteCloudStackVolume(any(CloudStackVolume.class));
+            verify(nasStrategy).updateCloudStackVolume(nfsQosUpdate("none", null));
+            verify(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
             verify(nasStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
 
@@ -5180,13 +5222,19 @@ class OntapPrimaryDatastoreDriverTest {
             givenNfsPool();
             when(volumeDetailsDao.findDetail(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID))
                     .thenReturn(new VolumeDetailVO(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
-            doThrow(new CloudRuntimeException("file busy")).when(nasStrategy).deleteCloudStackVolume(any(CloudStackVolume.class));
+            doThrow(new CloudRuntimeException("file busy")).when(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
 
             CommandResult result = deleteVolume(nasStrategy);
 
             assertFalse(result.isSuccess());
             assertEquals("file busy", result.getResult());
-            verify(nasStrategy, times(2)).updateCloudStackVolume(any(CloudStackVolume.class));
+            ArgumentCaptor<CloudStackVolume> updates = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy, times(2)).updateCloudStackVolume(updates.capture());
+            assertEquals("none", updates.getAllValues().get(0).getFile().getQosPolicy().getName());
+            assertEquals(volumeInfo, updates.getAllValues().get(0).getVolumeInfo());
+            assertEquals("qos-uuid", updates.getAllValues().get(1).getFile().getQosPolicy().getUuid());
+            assertEquals(volumeInfo, updates.getAllValues().get(1).getVolumeInfo());
+            verify(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
             verify(nasStrategy, never()).deleteVolumeQosPolicy(anyString());
         }
 
@@ -5195,7 +5243,7 @@ class OntapPrimaryDatastoreDriverTest {
             givenNfsPool();
             when(volumeDetailsDao.findDetail(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID))
                     .thenReturn(new VolumeDetailVO(VOLUME_ID, OntapStorageConstants.QOS_POLICY_UUID, "qos-uuid", false));
-            doThrow(new CloudRuntimeException("file busy")).when(nasStrategy).deleteCloudStackVolume(any(CloudStackVolume.class));
+            doThrow(new CloudRuntimeException("file busy")).when(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
             doReturn(null).doThrow(new RuntimeException("restore failed"))
                     .when(nasStrategy).updateCloudStackVolume(any(CloudStackVolume.class));
 
@@ -5203,6 +5251,11 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertFalse(result.isSuccess());
             assertEquals("file busy", result.getResult());
+            ArgumentCaptor<CloudStackVolume> updates = ArgumentCaptor.forClass(CloudStackVolume.class);
+            verify(nasStrategy, times(2)).updateCloudStackVolume(updates.capture());
+            assertEquals("none", updates.getAllValues().get(0).getFile().getQosPolicy().getName());
+            assertEquals("qos-uuid", updates.getAllValues().get(1).getFile().getQosPolicy().getUuid());
+            verify(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
         }
 
         @Test
@@ -5215,6 +5268,9 @@ class OntapPrimaryDatastoreDriverTest {
             CommandResult result = deleteVolume(nasStrategy);
 
             assertTrue(result.isSuccess());
+            verify(nasStrategy).updateCloudStackVolume(nfsQosUpdate("none", null));
+            verify(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
+            verify(nasStrategy).deleteVolumeQosPolicy("qos-uuid");
         }
 
         @Test
@@ -5225,6 +5281,7 @@ class OntapPrimaryDatastoreDriverTest {
             CommandResult result = deleteVolume(nasStrategy);
 
             assertTrue(result.isSuccess());
+            verify(nasStrategy).deleteCloudStackVolume(nfsDeleteRequest());
             verify(nasStrategy, never()).updateCloudStackVolume(any(CloudStackVolume.class));
             verify(nasStrategy, never()).deleteVolumeQosPolicy(anyString());
         }
@@ -5407,7 +5464,7 @@ class OntapPrimaryDatastoreDriverTest {
         }
 
         private void whenCopied(CloudStackVolume copied) {
-            when(strategy.copyCloudStackVolume(any(), any(), any(), any(), anyInt())).thenReturn(copied);
+            when(strategy.copyCloudStackVolume(eq(src), eq(dest), eq(destPool), eq(destDetails), anyInt())).thenReturn(copied);
         }
 
         private void copy(DataObject source, DataObject destination, AsyncCompletionCallback<CopyCommandResult> cb) {
@@ -5704,12 +5761,14 @@ class OntapPrimaryDatastoreDriverTest {
 
         @Test
         void copyAsyncReportsFailureWithoutCleanupWhenStorageCopyFails() {
-            when(strategy.copyCloudStackVolume(any(), any(), any(), any(), anyInt())).thenThrow(new CloudRuntimeException("copy refused"));
+            when(strategy.copyCloudStackVolume(eq(src), eq(dest), eq(destPool), eq(destDetails), anyInt()))
+                    .thenThrow(new CloudRuntimeException("copy refused"));
 
             CopyCommandResult result = copyAndCaptureResult();
 
             assertFalse(result.isSuccess());
             assertEquals("copy refused", result.getResult());
+            verify(strategy).copyCloudStackVolume(eq(src), eq(dest), eq(destPool), eq(destDetails), anyInt());
             verify(strategy, never()).deleteCloudStackVolume(any(CloudStackVolume.class));
             verify(volumeDao, never()).update(anyLong(), any(VolumeVO.class));
         }
@@ -5732,12 +5791,13 @@ class OntapPrimaryDatastoreDriverTest {
             CloudStackVolume copied = copiedLun();
             whenCopied(copied);
             when(volumeDao.findById(DEST_VOLUME_ID)).thenReturn(null);
-            doThrow(new CloudRuntimeException("cleanup failed")).when(strategy).deleteCloudStackVolume(any(CloudStackVolume.class));
+            doThrow(new CloudRuntimeException("cleanup failed")).when(strategy).deleteCloudStackVolume(copied);
 
             CopyCommandResult result = copyAndCaptureResult();
 
             assertFalse(result.isSuccess());
             assertTrue(result.getResult().contains("was not found"), result.getResult());
+            verify(strategy).deleteCloudStackVolume(copied);
         }
 
         @Test
@@ -6113,6 +6173,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertFalse(result.isSuccess());
             assertEquals("lun refused", result.getResult());
+            verify(sanStrategy).createVolumeQosPolicy("cs_100_to_200_iops_svm1", 100L, 200L);
             verify(sanStrategy).deleteVolumeQosPolicy("qos-1");
         }
 
@@ -6137,11 +6198,13 @@ class OntapPrimaryDatastoreDriverTest {
             when(self.getId()).thenReturn(VOLUME_ID);
             when(self.getMinIops()).thenReturn(400L);
             when(volumeDao.findNonDestroyedVolumesByPoolId(POOL_ID, null)).thenReturn(java.util.Arrays.asList(other, self));
-            when(sanStrategy.createVolumeQosPolicy(any(), any(), any())).thenReturn(policy("p", "qos-1"));
+            when(sanStrategy.createVolumeQosPolicy("cs_500_to_600_iops_svm1", 500L, 600L)).thenReturn(policy("p", "qos-1"));
             when(sanStrategy.createCloudStackVolume(any())).thenReturn(createdLun("/vol/flexvol/data_volume", "lun-uuid"));
 
             givenIops(500L, 600L);
             assertTrue(create(sanStrategy, volumeInfo).isSuccess());
+            verify(sanStrategy).createVolumeQosPolicy("cs_500_to_600_iops_svm1", 500L, 600L);
+            verify(sanStrategy).createCloudStackVolume(any());
         }
 
         @Test
@@ -6179,6 +6242,8 @@ class OntapPrimaryDatastoreDriverTest {
             when(sanStrategy.createVolumeQosPolicy("cs_200_to_200_iops_svm1", 200L, 200L)).thenReturn(policy("p", "qos-1"));
             when(sanStrategy.createCloudStackVolume(any())).thenReturn(createdLun("/vol/flexvol/data_volume", "lun-uuid"));
             assertTrue(create(sanStrategy, volumeInfo).isSuccess());
+            verify(sanStrategy).createVolumeQosPolicy("cs_200_to_200_iops_svm1", 200L, 200L);
+            verify(sanStrategy).createCloudStackVolume(any());
         }
 
         @Test
@@ -6225,7 +6290,10 @@ class OntapPrimaryDatastoreDriverTest {
 
             CreateCmdResult result = create(sanStrategy, templateInfo);
 
+            assertTrue(result.isSuccess());
             assertEquals("template-uuid", result.getPath());
+            verify(sanStrategy).createTemplateCache(eq(storagePool), eq(templateInfo), eq(poolDetails), eq(4096L));
+            verify(vmTemplatePoolDao, never()).update(anyLong(), any(VMTemplateStoragePoolVO.class));
         }
 
         // ---------------------------------------------------------------- required template size
@@ -6322,6 +6390,7 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertFalse(result.isSuccess());
             assertTrue(result.getResult().contains("ONTAP returned nothing when cloning template"), result.getResult());
+            verify(sanStrategy).createVolumeQosPolicy("cs_100_to_200_iops_svm1", 100L, 200L);
             verify(sanStrategy).deleteVolumeQosPolicy("qos-9");
         }
 
@@ -6601,6 +6670,10 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertFalse(result.isSuccess());
             assertEquals("resize refused", result.getResult());
+            verify(nasStrategy).createVolumeQosPolicy("cs_0_to_400_iops_svm1", 0L, 400L);
+            verify(nasStrategy).resizeCloudStackVolume(argThat(request -> request.getFile() != null
+                    && request.getFile().getQosPolicy() != null
+                    && "new-policy".equals(request.getFile().getQosPolicy().getUuid())), eq(2 * ONE_GB));
             verify(nasStrategy).deleteVolumeQosPolicy("new-policy");
             verify(nasStrategy, never()).deleteVolumeQosPolicy("old-policy");
         }
@@ -6816,6 +6889,31 @@ class OntapPrimaryDatastoreDriverTest {
             verify(snapshotDetailsDao, never()).persist(any(SnapshotDetailsVO.class));
         }
 
+        private FlexVolSnapshot dailySnapshotRequest() {
+            return argThat(request -> request != null && EXPECTED_SNAPSHOT_NAME.equals(request.getName()));
+        }
+
+        private void assertDailySnapshotWasRequested() {
+            ArgumentCaptor<FlexVolSnapshot> request = ArgumentCaptor.forClass(FlexVolSnapshot.class);
+            verify(snapshotClient).createSnapshot(eq("Basic abc"), eq(FLEXVOL_UUID), request.capture());
+            assertEquals(EXPECTED_SNAPSHOT_NAME, request.getValue().getName());
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dailySnapshotQuery() {
+            return argThat(query -> query != null
+                    && EXPECTED_SNAPSHOT_NAME.equals(query.get("name"))
+                    && "uuid,name".equals(query.get("fields")));
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertDailySnapshotWasLookedUp() {
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(snapshotClient).getSnapshots(eq("Basic abc"), eq(FLEXVOL_UUID), query.capture());
+            assertEquals(EXPECTED_SNAPSHOT_NAME, query.getValue().get("name"));
+            assertEquals("uuid,name", query.getValue().get("fields"));
+        }
+
         // ------------------------------------------------- takeSnapshot: positive
 
         @Test
@@ -6938,35 +7036,49 @@ class OntapPrimaryDatastoreDriverTest {
         @Test
         void takeSnapshot_fails_whenOntapReturnsNoJobResponse() {
             givenIscsiVolumeDetails();
-            when(snapshotClient.createSnapshot(anyString(), anyString(), any(FlexVolSnapshot.class))).thenReturn(null);
+            when(snapshotClient.createSnapshot(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotRequest())).thenReturn(null);
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to initiate FlexVolume snapshot");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to initiate FlexVolume snapshot on FlexVol UUID [" + FLEXVOL_UUID + "]");
+            assertDailySnapshotWasRequested();
+            verify(strategy, never()).jobPollForSuccess(anyString(), anyInt(), anyInt());
         }
 
         @Test
         void takeSnapshot_fails_whenJobResponseHasNoJob() {
             givenIscsiVolumeDetails();
-            when(snapshotClient.createSnapshot(anyString(), anyString(), any(FlexVolSnapshot.class))).thenReturn(new JobResponse());
+            when(snapshotClient.createSnapshot(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotRequest()))
+                    .thenReturn(new JobResponse());
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to initiate FlexVolume snapshot");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to initiate FlexVolume snapshot on FlexVol UUID [" + FLEXVOL_UUID + "]");
+            assertDailySnapshotWasRequested();
+            verify(strategy, never()).jobPollForSuccess(anyString(), anyInt(), anyInt());
         }
 
         @Test
         void takeSnapshot_fails_whenSnapshotJobDoesNotSucceed() {
             givenIscsiVolumeDetails();
             givenSnapshotCreationSucceeds();
-            when(strategy.jobPollForSuccess(anyString(), anyInt(), anyInt())).thenReturn(false);
+            when(strategy.jobPollForSuccess(eq("job-uuid"), eq(30), eq(2000))).thenReturn(false);
 
-            assertTakeSnapshotFailed(takeSnapshot(), "snapshot job failed");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "FlexVolume snapshot job failed on FlexVol UUID [" + FLEXVOL_UUID + "]");
+            assertDailySnapshotWasRequested();
+            verify(strategy).jobPollForSuccess("job-uuid", 30, 2000);
+            verify(snapshotClient, never()).getSnapshots(anyString(), anyString(), anyMap());
         }
 
         @Test
         void takeSnapshot_fails_whenSnapshotLookupReturnsNoResponse() {
             givenIscsiVolumeDetails();
             givenSnapshotCreationSucceeds();
-            when(snapshotClient.getSnapshots(anyString(), anyString(), anyMap())).thenReturn(null);
+            when(snapshotClient.getSnapshots(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotQuery())).thenReturn(null);
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to resolve snapshot UUID");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to resolve snapshot UUID for snapshot name [" + EXPECTED_SNAPSHOT_NAME + "]");
+            assertDailySnapshotWasRequested();
+            assertDailySnapshotWasLookedUp();
         }
 
         @Test
@@ -6975,18 +7087,25 @@ class OntapPrimaryDatastoreDriverTest {
             givenSnapshotCreationSucceeds();
             OntapResponse<FlexVolSnapshot> empty = new OntapResponse<>();
             empty.setRecords(Collections.emptyList());
-            when(snapshotClient.getSnapshots(anyString(), anyString(), anyMap())).thenReturn(empty);
+            when(snapshotClient.getSnapshots(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotQuery())).thenReturn(empty);
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to resolve snapshot UUID");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to resolve snapshot UUID for snapshot name [" + EXPECTED_SNAPSHOT_NAME + "]");
+            assertDailySnapshotWasRequested();
+            assertDailySnapshotWasLookedUp();
         }
 
         @Test
         void takeSnapshot_fails_whenSnapshotLookupReturnsNullRecords() {
             givenIscsiVolumeDetails();
             givenSnapshotCreationSucceeds();
-            when(snapshotClient.getSnapshots(anyString(), anyString(), anyMap())).thenReturn(new OntapResponse<>());
+            when(snapshotClient.getSnapshots(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotQuery()))
+                    .thenReturn(new OntapResponse<>());
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to resolve snapshot UUID");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to resolve snapshot UUID for snapshot name [" + EXPECTED_SNAPSHOT_NAME + "]");
+            assertDailySnapshotWasRequested();
+            assertDailySnapshotWasLookedUp();
         }
 
         @Test
@@ -6997,18 +7116,23 @@ class OntapPrimaryDatastoreDriverTest {
             blank.setUuid("");
             OntapResponse<FlexVolSnapshot> lookup = new OntapResponse<>();
             lookup.setRecords(List.of(blank));
-            when(snapshotClient.getSnapshots(anyString(), anyString(), anyMap())).thenReturn(lookup);
+            when(snapshotClient.getSnapshots(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotQuery())).thenReturn(lookup);
 
-            assertTakeSnapshotFailed(takeSnapshot(), "Failed to resolve snapshot UUID");
+            assertTakeSnapshotFailed(takeSnapshot(),
+                    "Failed to resolve snapshot UUID for snapshot name [" + EXPECTED_SNAPSHOT_NAME + "]");
+            assertDailySnapshotWasRequested();
+            assertDailySnapshotWasLookedUp();
         }
 
         @Test
         void takeSnapshot_reportsFailure_whenOntapCallThrows() {
             givenIscsiVolumeDetails();
-            when(snapshotClient.createSnapshot(anyString(), anyString(), any(FlexVolSnapshot.class)))
+            when(snapshotClient.createSnapshot(eq("Basic abc"), eq(FLEXVOL_UUID), dailySnapshotRequest()))
                     .thenThrow(new RuntimeException("ONTAP unreachable"));
 
             assertTakeSnapshotFailed(takeSnapshot(), "ONTAP unreachable");
+            assertDailySnapshotWasRequested();
+            verify(strategy, never()).jobPollForSuccess(anyString(), anyInt(), anyInt());
         }
 
         // ------------------------------------------------------ revertSnapshot
@@ -7066,17 +7190,28 @@ class OntapPrimaryDatastoreDriverTest {
 
         @Test
         void revertSnapshot_prefersPrimaryStoreSnapshotDetails() {
+            givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
+            givenSnapshotDetail(SNAPSHOT_ID, OntapStorageConstants.ONTAP_SNAP_NAME, "secondary-snap");
+            givenSnapshotDetail(SNAPSHOT_ID, OntapStorageConstants.VOLUME_PATH, "/vol/flexvol-name/secondary");
+
             long primarySnapshotId = 88L;
             when(primarySnapshotInfo.getId()).thenReturn(primarySnapshotId);
             givenRevertableSnapshot(primarySnapshotId, ProtocolType.ISCSI.name());
+            givenSnapshotDetail(primarySnapshotId, OntapStorageConstants.BASE_ONTAP_FV_ID, "primary-flexvol");
+            givenSnapshotDetail(primarySnapshotId, OntapStorageConstants.ONTAP_SNAP_ID, "primary-ontap-snap");
+            givenSnapshotDetail(primarySnapshotId, OntapStorageConstants.ONTAP_SNAP_NAME, "primary-snap");
+            givenSnapshotDetail(primarySnapshotId, OntapStorageConstants.VOLUME_PATH, "/vol/flexvol-name/primary");
+            givenSnapshotDetail(primarySnapshotId, OntapStorageConstants.LUN_DOT_UUID, "primary-lun-uuid");
             JobResponse job = new JobResponse();
-            when(strategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), any(), anyString()))
-                    .thenReturn(job);
+            when(strategy.revertSnapshotForCloudStackVolume("primary-snap", "primary-flexvol", "primary-ontap-snap",
+                    "/vol/flexvol-name/primary", "primary-lun-uuid", FLEXVOL_NAME)).thenReturn(job);
 
             CommandResult result = revertSnapshot(snapshotInfo, primarySnapshotInfo);
 
             assertNull(result.getResult());
-            verify(strategy).executeCliSfsrRestore(eq(job), anyString());
+            verify(strategy).revertSnapshotForCloudStackVolume("primary-snap", "primary-flexvol", "primary-ontap-snap",
+                    "/vol/flexvol-name/primary", "primary-lun-uuid", FLEXVOL_NAME);
+            verify(strategy).executeCliSfsrRestore(eq(job), contains("revert snapshot [primary-snap]"));
         }
 
         @Test
@@ -7136,6 +7271,7 @@ class OntapPrimaryDatastoreDriverTest {
             CommandResult result = revertSnapshot(snapshotInfo, null);
 
             assertTrue(result.getResult().contains("FlexVolume name not found"), result.getResult());
+            verify(strategy, never()).executeCliSfsrRestore(any(), anyString());
         }
 
         @Test
@@ -7145,19 +7281,25 @@ class OntapPrimaryDatastoreDriverTest {
 
             CommandResult result = revertSnapshot(snapshotInfo, null);
 
-            assertNotNull(result.getResult());
+            assertTrue(result.getResult().contains("NumberFormatException"), result.getResult());
+            assertTrue(result.getResult().contains("not-a-number"), result.getResult());
+            verify(strategy, never()).revertSnapshotForCloudStackVolume(
+                    anyString(), anyString(), anyString(), anyString(), any(), anyString());
             verify(strategy, never()).executeCliSfsrRestore(any(), anyString());
         }
 
         @Test
         void revertSnapshot_fails_whenOntapRestoreCallThrows() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
-            when(strategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), any(), anyString()))
+            when(strategy.revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, LUN_UUID, FLEXVOL_NAME))
                     .thenThrow(new CloudRuntimeException("restore rejected"));
 
             CommandResult result = revertSnapshot(snapshotInfo, null);
 
             assertTrue(result.getResult().contains("restore rejected"), result.getResult());
+            verify(strategy).revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, LUN_UUID, FLEXVOL_NAME);
             verify(strategy, never()).executeCliSfsrRestore(any(), anyString());
         }
 
@@ -7165,13 +7307,17 @@ class OntapPrimaryDatastoreDriverTest {
         void revertSnapshot_fails_whenCliRestoreFails() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
             JobResponse job = new JobResponse();
-            when(strategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), any(), anyString()))
-                    .thenReturn(job);
-            doThrow(new CloudRuntimeException("sfsr failed")).when(strategy).executeCliSfsrRestore(eq(job), anyString());
+            when(strategy.revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, LUN_UUID, FLEXVOL_NAME)).thenReturn(job);
+            doThrow(new CloudRuntimeException("sfsr failed")).when(strategy)
+                    .executeCliSfsrRestore(eq(job), contains("revert snapshot [" + EXPECTED_SNAPSHOT_NAME + "]"));
 
             CommandResult result = revertSnapshot(snapshotInfo, null);
 
             assertTrue(result.getResult().contains("sfsr failed"), result.getResult());
+            verify(strategy).revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, LUN_UUID, FLEXVOL_NAME);
+            verify(strategy).executeCliSfsrRestore(eq(job), contains("revert snapshot [" + EXPECTED_SNAPSHOT_NAME + "]"));
         }
 
         // ------------------------------------- deleteAsync: volume snapshot branch
@@ -7243,17 +7389,21 @@ class OntapPrimaryDatastoreDriverTest {
             when(snapshotDao.findById(SNAPSHOT_ID)).thenReturn(snapshotVO);
             when(volumeDao.findByIdIncludingRemoved(VOLUME_ID)).thenReturn(volumeVO);
             when(volumeVO.getPoolId()).thenReturn(null);
-            when(volumeVO.getLastPoolId()).thenReturn(POOL_ID);
+            long lastPoolId = 99L;
+            when(volumeVO.getLastPoolId()).thenReturn(lastPoolId);
+            when(storagePoolDetailsDao.listDetailsKeyPairs(lastPoolId)).thenReturn(poolDetails);
 
             CommandResult result = deleteSnapshot();
 
             assertTrue(result.isSuccess());
+            assertNull(result.getResult());
+            verify(storagePoolDetailsDao).listDetailsKeyPairs(lastPoolId);
+            verify(strategy).deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
         }
 
         /**
-         * Documents current behaviour: the "Snapshot not found" message raised while resolving the pool
-         * matches the generic "not found" check, so the delete is reported as an idempotent success and
-         * no ONTAP call is made. Flagged for review, because a CloudStack-side lookup failure is masked.
+         * The "Snapshot not found" message raised while resolving the pool matches the generic
+         * "not found" check, so the delete is reported as an idempotent success and no ONTAP call is made.
          */
         @Test
         void deleteAsync_reportsSuccessWithoutOntapCall_whenPoolIdDetailMissingAndSnapshotNotFound() {
@@ -7264,10 +7414,14 @@ class OntapPrimaryDatastoreDriverTest {
             CommandResult result = deleteSnapshot();
 
             assertTrue(result.isSuccess());
+            assertNull(result.getResult());
+            verify(snapshotDao).findById(SNAPSHOT_ID);
             verify(strategy, never()).deleteFlexVolSnapshotForCloudStackVolume(anyString(), anyString(), anyString());
         }
 
-        /** Same masking as above, for the "CloudStack Volume not found" lookup failure. */
+        /**
+         * The "CloudStack Volume not found" message matches the same generic "not found" check.
+         */
         @Test
         void deleteAsync_reportsSuccessWithoutOntapCall_whenPoolIdDetailMissingAndVolumeNotFound() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
@@ -7280,6 +7434,9 @@ class OntapPrimaryDatastoreDriverTest {
             CommandResult result = deleteSnapshot();
 
             assertTrue(result.isSuccess());
+            assertNull(result.getResult());
+            verify(snapshotDao).findById(SNAPSHOT_ID);
+            verify(volumeDao).findByIdIncludingRemoved(VOLUME_ID);
             verify(strategy, never()).deleteFlexVolSnapshotForCloudStackVolume(anyString(), anyString(), anyString());
         }
 
@@ -7327,29 +7484,33 @@ class OntapPrimaryDatastoreDriverTest {
 
             assertTrue(result.isSuccess());
             assertNull(result.getResult());
+            verify(strategy).deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
         }
 
         @Test
         void deleteAsync_treatsNotFoundMessageAsAlreadyDeleted() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
             doThrow(new CloudRuntimeException("Snapshot entry doesn't exist")).when(strategy)
-                    .deleteFlexVolSnapshotForCloudStackVolume(anyString(), anyString(), anyString());
+                    .deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
 
             CommandResult result = deleteSnapshot();
 
             assertTrue(result.isSuccess());
+            assertNull(result.getResult());
+            verify(strategy).deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
         }
 
         @Test
         void deleteAsync_reportsFailure_whenOntapDeleteFailsForOtherReasons() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
             doThrow(new CloudRuntimeException("volume busy")).when(strategy)
-                    .deleteFlexVolSnapshotForCloudStackVolume(anyString(), anyString(), anyString());
+                    .deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
 
             CommandResult result = deleteSnapshot();
 
             assertFalse(result.isSuccess());
             assertEquals("volume busy", result.getResult());
+            verify(strategy).deleteFlexVolSnapshotForCloudStackVolume(FLEXVOL_UUID, ONTAP_SNAP_UUID, EXPECTED_SNAPSHOT_NAME);
         }
 
         @Test
@@ -7369,6 +7530,8 @@ class OntapPrimaryDatastoreDriverTest {
             ArgumentCaptor<CommandResult> captor = ArgumentCaptor.forClass(CommandResult.class);
             verify(commandCallback).complete(captor.capture());
             assertFalse(captor.getValue().isSuccess());
+            assertEquals("store or data is null", captor.getValue().getResult());
+            verify(strategy, never()).deleteFlexVolSnapshotForCloudStackVolume(any(), any(), any());
         }
 
         @Test
@@ -7387,12 +7550,16 @@ class OntapPrimaryDatastoreDriverTest {
         void revertSnapshot_passesNullLunUuid_whenIscsiLunUuidDetailAbsent() {
             givenRevertableSnapshot(SNAPSHOT_ID, ProtocolType.ISCSI.name());
             snapshotDetailStore.get(SNAPSHOT_ID).remove(OntapStorageConstants.LUN_DOT_UUID);
-            when(strategy.revertSnapshotForCloudStackVolume(anyString(), anyString(), anyString(), anyString(), isNull(), anyString()))
-                    .thenReturn(new JobResponse());
+            JobResponse job = new JobResponse();
+            when(strategy.revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, null, FLEXVOL_NAME)).thenReturn(job);
 
             CommandResult result = revertSnapshot(snapshotInfo, null);
 
             assertNull(result.getResult());
+            verify(strategy).revertSnapshotForCloudStackVolume(EXPECTED_SNAPSHOT_NAME, FLEXVOL_UUID, ONTAP_SNAP_UUID,
+                    LUN_NAME, null, FLEXVOL_NAME);
+            verify(strategy).executeCliSfsrRestore(eq(job), contains("revert snapshot [" + EXPECTED_SNAPSHOT_NAME + "]"));
         }
     }
 }

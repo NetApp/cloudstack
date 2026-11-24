@@ -1667,8 +1667,12 @@ public class OntapPrimaryDatastoreLifecycleTest {
 
         @Test
         void updateStoragePool_rejectsZeroOrNegativeIops() {
-            assertThrows(InvalidParameterValueException.class, () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("0")));
-            assertThrows(InvalidParameterValueException.class, () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("-10")));
+            assertEquals("Storage pool IOPS capacity must be greater than 0",
+                    assertThrows(InvalidParameterValueException.class,
+                            () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("0"))).getMessage());
+            assertEquals("Storage pool IOPS capacity must be greater than 0",
+                    assertThrows(InvalidParameterValueException.class,
+                            () -> lifecycle.updateStoragePool(storagePool, iopsUpdate("-10"))).getMessage());
             verifyNoInteractions(storagePoolDao);
         }
 

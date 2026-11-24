@@ -772,14 +772,17 @@ public class OntapDataMotionStrategyTest {
         Mockito.doReturn(new java.util.ArrayList<>(List.of(disabled))).when(resourceManager)
                 .getEligibleUpAndEnabledHostsInZoneForStorageConnection(Mockito.any(), Mockito.anyLong(), Mockito.eq(HypervisorType.KVM));
 
-        CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, () ->
+        CloudRuntimeException disabledOnly = assertThrows(CloudRuntimeException.class, () ->
                 strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback));
-        assertTrue(thrown.getMessage().contains("Unable to locate a host"), thrown.getMessage());
+        assertEquals("Unable to locate a host to migrate the volume on", disabledOnly.getMessage());
 
         Mockito.doReturn(null).when(resourceManager)
                 .getEligibleUpAndEnabledHostsInZoneForStorageConnection(Mockito.any(), Mockito.anyLong(), Mockito.eq(HypervisorType.KVM));
-        assertThrows(CloudRuntimeException.class, () ->
+        CloudRuntimeException noHosts = assertThrows(CloudRuntimeException.class, () ->
                 strategy.copyAsync(context.srcVolume, context.destVolume, (Host) null, context.callback));
+        assertEquals("Unable to locate a host to migrate the volume on", noHosts.getMessage());
+        Mockito.verify(resourceManager, Mockito.times(2)).getEligibleUpAndEnabledHostsInZoneForStorageConnection(
+                Mockito.eq(context.destVolume.getDataStore()), Mockito.anyLong(), Mockito.eq(HypervisorType.KVM));
     }
 
     @Test

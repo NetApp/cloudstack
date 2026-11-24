@@ -800,8 +800,11 @@ class OntapAsupManagerTest {
             asupManager.pushAsupForStoragePool(pool, new HashMap<>());
         }
         ArgumentCaptor<EmsApplicationLog> captor = ArgumentCaptor.forClass(EmsApplicationLog.class);
-        verify(mockStrategy, org.mockito.Mockito.atLeast(0)).sendAsupMessage(captor.capture());
-        return captor.getAllValues();
+        verify(mockStrategy, times(2)).sendAsupMessage(captor.capture());
+        List<EmsApplicationLog> messages = captor.getAllValues();
+        assertEquals(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT, messages.get(0).getEventId());
+        assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, messages.get(1).getEventId());
+        return messages;
     }
 
     private static VolumeVO volume(Volume.State state, Volume.Type type, Long size, Long instanceId) {
@@ -963,13 +966,28 @@ class OntapAsupManagerTest {
     }
 
     @Test
-    void asupTaskKeepsRunningWhenThePushThrows() {
-        when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
-                .thenThrow(new IllegalStateException("db down"));
+    void asupTaskKeepsRunningWhenThePushThrows() throws Exception {
+        asupManager.lastPushTime = java.time.Instant.now();
+        assertTrue(asupManager.start());
+        try {
+            ScheduledFuture<?> bookedBeforeTheFailure = (ScheduledFuture<?>) field("pendingRun");
+            assertNotNull(bookedBeforeTheFailure);
+            asupManager.lastPushTime = java.time.Instant.EPOCH;
+            when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
+                    .thenThrow(new IllegalStateException("db down"));
 
-        asupManager.new OntapAsupTask().run();
+            asupManager.new OntapAsupTask().run();
 
-        assertFalse(asupManager.lastPushTime.equals(java.time.Instant.EPOCH));
+            assertFalse(asupManager.lastPushTime.equals(java.time.Instant.EPOCH));
+            ScheduledFuture<?> bookedAfterTheFailure = (ScheduledFuture<?>) field("pendingRun");
+            assertNotNull(bookedAfterTheFailure);
+            assertNotSame(bookedBeforeTheFailure, bookedAfterTheFailure);
+            assertTrue(bookedBeforeTheFailure.isCancelled());
+            assertFalse(bookedAfterTheFailure.isDone());
+            assertTrue(bookedAfterTheFailure.getDelay(java.util.concurrent.TimeUnit.MILLISECONDS) > 0);
+        } finally {
+            assertTrue(asupManager.stop());
+        }
     }
 
     // ------------------------------------------------------------ pushAsupForStoragePool edge cases
@@ -1146,6 +1164,8 @@ class OntapAsupManagerTest {
         List<EmsApplicationLog> messages = pushPool();
 
         assertEquals(2, messages.size());
+        verify(broken, times(2)).writeValueAsString(any());
+        assertTrue(messages.get(0).getEventDescription().startsWith("{"), messages.get(0).getEventDescription());
         assertTrue(messages.get(1).getEventDescription().startsWith("{message="), messages.get(1).getEventDescription());
     }
 

@@ -2162,7 +2162,15 @@ public class StorageStrategyTest {
         void connect_fails_whenSvmResponseIsNull() {
             when(svmFeignClient.getSvmResponse(anyMap(), anyString())).thenReturn(null);
 
-            assertThrows(CloudRuntimeException.class, () -> strategy.connect(false));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, () -> strategy.connect(false));
+
+            assertEquals("No SVM found on the ONTAP cluster by the name svm1.", ex.getMessage());
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(svmFeignClient).getSvmResponse(query.capture(), anyString());
+            assertEquals("svm1", query.getValue().get(OntapStorageConstants.NAME));
+            assertEquals(OntapStorageConstants.AGGREGATES + OntapStorageConstants.COMMA + OntapStorageConstants.STATE
+                    + OntapStorageConstants.COMMA + OntapStorageConstants.NFS_ENABLED + OntapStorageConstants.COMMA
+                    + OntapStorageConstants.ISCSI_ENABLED, query.getValue().get(OntapStorageConstants.FIELDS));
         }
 
         @Test
@@ -2240,17 +2248,26 @@ public class StorageStrategyTest {
 
         @Test
         void chooseAggregate_rejectsEmptyCandidates() {
-            assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(null, 10L));
-            assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(Collections.emptyList(), 10L));
+            CloudRuntimeException nullList = assertThrows(CloudRuntimeException.class,
+                    () -> strategy.chooseAggregate(null, 10L));
+            CloudRuntimeException emptyList = assertThrows(CloudRuntimeException.class,
+                    () -> strategy.chooseAggregate(Collections.emptyList(), 10L));
+
+            assertEquals("No aggregates available to create volume on SVM svm1", nullList.getMessage());
+            assertEquals("No aggregates available to create volume on SVM svm1", emptyList.getMessage());
+            verifyNoInteractions(aggregateFeignClient);
         }
 
         @Test
         void chooseAggregate_rejectsInvalidSize() {
             List<Aggregate> candidates = List.of(aggregate("a1", "u1", null, null, null));
 
-            assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, null));
-            assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, 0L));
-            assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, -5L));
+            assertEquals("Invalid volume size provided: null",
+                    assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, null)).getMessage());
+            assertEquals("Invalid volume size provided: 0",
+                    assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, 0L)).getMessage());
+            assertEquals("Invalid volume size provided: -5",
+                    assertThrows(CloudRuntimeException.class, () -> strategy.chooseAggregate(candidates, -5L)).getMessage());
             verifyNoInteractions(aggregateFeignClient);
         }
 
@@ -2324,6 +2341,68 @@ public class StorageStrategyTest {
             return aggregate("aggr1", "aggr-uuid", null, "node1", Aggregate.StateEnum.ONLINE);
         }
 
+        private void assertVol1WasCreated(int times, long size) {
+            ArgumentCaptor<Volume> request = ArgumentCaptor.forClass(Volume.class);
+            verify(volumeFeignClient, times(times)).createVolumeWithJob(anyString(), request.capture());
+            for (Volume sent : request.getAllValues()) {
+                assertEquals("vol1", sent.getName());
+                assertEquals(size, sent.getSize());
+                assertEquals("svm1", sent.getSvm().getName());
+                assertEquals("/vol1", sent.getNas().getPath());
+                assertEquals("aggr-uuid", sent.getAggregates().get(0).getUuid());
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertVolumesWereListedByName(int times) {
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(volumeFeignClient, times(times)).getAllVolumes(anyString(), query.capture());
+            for (Map<String, Object> value : query.getAllValues()) {
+                assertEquals("vol1", value.get(OntapStorageConstants.NAME));
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertVolumeDetailsWereReadByName(int times) {
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(volumeFeignClient, times(times)).getVolume(anyString(), query.capture());
+            for (Map<String, Object> value : query.getAllValues()) {
+                assertEquals("vol1", value.get(OntapStorageConstants.NAME));
+            }
+        }
+
+        private void assertQosPolicyWasSent(int times) {
+            ArgumentCaptor<VolumeQosPolicy> sent = ArgumentCaptor.forClass(VolumeQosPolicy.class);
+            verify(qosFeignClient, times(times)).createPolicy(anyString(), sent.capture());
+            for (VolumeQosPolicy policy : sent.getAllValues()) {
+                assertEquals("cs_policy", policy.getName());
+                assertEquals("svm1", policy.getSvm().getName());
+                assertNull(policy.getFixed().getMinThroughputIops());
+                assertEquals(100L, policy.getFixed().getMaxThroughputIops());
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertQosPolicyWasLookedUp(int times) {
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(qosFeignClient, times(times)).getPolicies(anyString(), query.capture());
+            for (Map<String, Object> value : query.getAllValues()) {
+                assertEquals("cs_policy", value.get(OntapStorageConstants.NAME));
+                assertEquals("svm1", value.get(OntapStorageConstants.SVM_DOT_NAME));
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertIscsiServiceWasQueried(int times) {
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(sanFeignClient, times(times)).getIscsiServices(anyString(), query.capture());
+            for (Map<String, Object> value : query.getAllValues()) {
+                assertEquals("svm1", value.get(OntapStorageConstants.SVM_DOT_NAME));
+                assertEquals("enabled,target", value.get(OntapStorageConstants.FIELDS));
+                assertEquals("1", value.get("max_records"));
+            }
+        }
+
         @Test
         void createStorageVolume_rejectsInvalidSize() {
             assertThrows(CloudRuntimeException.class, () -> strategy.createStorageVolume("vol", null, chosenAggregate()));
@@ -2369,26 +2448,40 @@ public class StorageStrategyTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> strategy.createStorageVolume("vol1", 10L, chosenAggregate()));
 
-            assertTrue(ex.getMessage().contains("Failed to initiate volume creation"), ex.getMessage());
+            assertEquals("Failed to create volume: Failed to initiate volume creation for vol1", ex.getMessage());
+            assertVol1WasCreated(1, 10L);
+            verify(volumeFeignClient, never()).getAllVolumes(anyString(), anyMap());
         }
 
         @Test
         void createStorageVolume_fails_whenCreateCallReturnsNull() {
             when(volumeFeignClient.createVolumeWithJob(anyString(), any(Volume.class))).thenReturn(null);
 
-            assertThrows(CloudRuntimeException.class, () -> strategy.createStorageVolume("vol1", 10L, chosenAggregate()));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> strategy.createStorageVolume("vol1", 10L, chosenAggregate()));
+
+            assertEquals("Failed to create volume: Failed to initiate volume creation for vol1", ex.getMessage());
+            ArgumentCaptor<Volume> request = ArgumentCaptor.forClass(Volume.class);
+            verify(volumeFeignClient).createVolumeWithJob(anyString(), request.capture());
+            assertEquals("vol1", request.getValue().getName());
+            assertEquals(10L, request.getValue().getSize());
+            assertEquals("svm1", request.getValue().getSvm().getName());
+            assertEquals("aggr-uuid", request.getValue().getAggregates().get(0).getUuid());
+            verify(volumeFeignClient, never()).getAllVolumes(anyString(), anyMap());
         }
 
         @Test
         void createStorageVolume_fails_whenJobDoesNotSucceed() {
             StorageStrategy spied = spy(strategy);
-            doReturn(false).when(spied).jobPollForSuccess(anyString(), anyInt(), anyInt());
+            doReturn(false).when(spied).jobPollForSuccess(eq("job-1"), eq(30), eq(2000));
             when(volumeFeignClient.createVolumeWithJob(anyString(), any(Volume.class))).thenReturn(jobResponse("job-1"));
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> spied.createStorageVolume("vol1", 10L, chosenAggregate()));
 
-            assertTrue(ex.getMessage().contains("Volume creation job failed"), ex.getMessage());
+            assertEquals("Failed to create volume: Volume creation job failed for volume: vol1", ex.getMessage());
+            assertVol1WasCreated(1, 10L);
+            verify(spied).jobPollForSuccess("job-1", 30, 2000);
             verify(volumeFeignClient, never()).getAllVolumes(anyString(), anyMap());
         }
 
@@ -2399,7 +2492,10 @@ public class StorageStrategyTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> strategy.createStorageVolume("vol1", 10L, chosenAggregate()));
 
-            assertTrue(ex.getMessage().startsWith("Failed to create volume"), ex.getMessage());
+            assertTrue(ex.getMessage().startsWith("Failed to create volume: "), ex.getMessage());
+            assertTrue(ex.getMessage().contains("bad"), ex.getMessage());
+            assertVol1WasCreated(1, 10L);
+            verify(volumeFeignClient, never()).getAllVolumes(anyString(), anyMap());
         }
 
         @Test
@@ -2414,8 +2510,10 @@ public class StorageStrategyTest {
             for (int i = 0; i < 3; i++) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                         () -> spied.createStorageVolume("vol1", 10L, chosenAggregate()));
-                assertTrue(ex.getMessage().contains("not found after creation"), ex.getMessage());
+                assertEquals("Volume vol1 not found after creation.", ex.getMessage());
             }
+            assertVol1WasCreated(3, 10L);
+            assertVolumesWereListedByName(3);
         }
 
         @Test
@@ -2428,7 +2526,9 @@ public class StorageStrategyTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> spied.createStorageVolume("vol1", 10L, chosenAggregate()));
 
-            assertTrue(ex.getMessage().contains("Failed to retrieve details"), ex.getMessage());
+            assertEquals("Failed to retrieve details of the created volume vol1", ex.getMessage());
+            assertVol1WasCreated(1, 10L);
+            assertVolumesWereListedByName(1);
         }
 
         @Test
@@ -2439,11 +2539,17 @@ public class StorageStrategyTest {
                     .thenReturn(records(List.of(namedVolume("other", "u"))))
                     .thenReturn(records(List.of(namedVolume(null, "u"))));
 
-            for (int i = 0; i < 2; i++) {
+            String[] expected = {
+                    "Mismatch in created volume name. Expected: vol1, Found: other",
+                    "Mismatch in created volume name. Expected: vol1, Found: null"
+            };
+            for (String message : expected) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                         () -> spied.createStorageVolume("vol1", 10L, chosenAggregate()));
-                assertTrue(ex.getMessage().contains("Mismatch in created volume name"), ex.getMessage());
+                assertEquals(message, ex.getMessage());
             }
+            assertVol1WasCreated(2, 10L);
+            assertVolumesWereListedByName(2);
         }
 
         @Test
@@ -2457,11 +2563,19 @@ public class StorageStrategyTest {
                     .thenReturn(records(null))
                     .thenReturn(records(Collections.emptyList()));
 
-            for (int i = 0; i < 3; i++) {
+            String[] expected = {
+                    "Failed to fetch volume: vol1. Error: Failed to fetch volume vol1: Response is null",
+                    "Failed to fetch volume: vol1. Error: Failed to fetch volume vol1: Records list is null",
+                    "Failed to fetch volume: vol1. Error: Failed to fetch volume vol1: No records found"
+            };
+            for (String message : expected) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                         () -> spied.createStorageVolume("vol1", 10L, chosenAggregate()));
-                assertTrue(ex.getMessage().startsWith("Failed to fetch volume: vol1"), ex.getMessage());
+                assertEquals(message, ex.getMessage());
             }
+            assertVol1WasCreated(3, 10L);
+            assertVolumesWereListedByName(3);
+            assertVolumeDetailsWereReadByName(3);
         }
 
         // ------------------------------------------------------------- delete/get volume
@@ -2505,13 +2619,24 @@ public class StorageStrategyTest {
             when(volumeFeignClient.getVolumeByUUID(anyString(), eq("u1"), anyMap())).thenThrow(feignError(404, "missing"));
 
             assertNull(strategy.getStorageVolume("u1", Map.of("fields", "space.used")));
+
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("u1"), query.capture());
+            assertEquals("space.used", query.getValue().get("fields"));
         }
 
         @Test
         void getStorageVolume_wrapsOtherFailures() {
             when(volumeFeignClient.getVolumeByUUID(anyString(), eq("u1"), anyMap())).thenThrow(feignError(500, "oops"));
 
-            assertThrows(CloudRuntimeException.class, () -> strategy.getStorageVolume("u1", Map.of()));
+            CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
+                    () -> strategy.getStorageVolume("u1", Map.of()));
+
+            assertTrue(ex.getMessage().contains("Failed to fetch volume"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("oops"), ex.getMessage());
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(volumeFeignClient).getVolumeByUUID(anyString(), eq("u1"), query.capture());
+            assertTrue(query.getValue().isEmpty(), query.getValue().toString());
         }
 
         // ------------------------------------------------------------- getStoragePath
@@ -2533,6 +2658,12 @@ public class StorageStrategyTest {
                     .thenReturn(records(List.of(iscsiService("iqn.1992-08.com.netapp:sn.1:vs.3"))));
 
             assertEquals("iqn.1992-08.com.netapp:sn.1:vs.3", iscsi.getStoragePath());
+
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(sanFeignClient).getIscsiServices(anyString(), query.capture());
+            assertEquals("svm1", query.getValue().get(OntapStorageConstants.SVM_DOT_NAME));
+            assertEquals("enabled,target", query.getValue().get(OntapStorageConstants.FIELDS));
+            assertEquals("1", query.getValue().get("max_records"));
         }
 
         @Test
@@ -2545,8 +2676,9 @@ public class StorageStrategyTest {
 
             for (int i = 0; i < 3; i++) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, iscsi::getStoragePath);
-                assertTrue(ex.getMessage().contains("No iSCSI service found"), ex.getMessage());
+                assertEquals("No iSCSI service found for SVM: svm1", ex.getMessage());
             }
+            assertIscsiServiceWasQueried(3);
         }
 
         @Test
@@ -2560,8 +2692,9 @@ public class StorageStrategyTest {
 
             for (int i = 0; i < 2; i++) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, iscsi::getStoragePath);
-                assertTrue(ex.getMessage().contains("target IQN not found"), ex.getMessage());
+                assertEquals("iSCSI target IQN not found for SVM: svm1", ex.getMessage());
             }
+            assertIscsiServiceWasQueried(2);
         }
 
         @Test
@@ -2571,7 +2704,9 @@ public class StorageStrategyTest {
 
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class, iscsi::getStoragePath);
 
-            assertTrue(ex.getMessage().startsWith("Failed to retrieve storage path"), ex.getMessage());
+            assertTrue(ex.getMessage().startsWith("Failed to retrieve storage path: "), ex.getMessage());
+            assertTrue(ex.getMessage().contains("unauthorized"), ex.getMessage());
+            assertIscsiServiceWasQueried(1);
         }
 
         @Test
@@ -2584,7 +2719,10 @@ public class StorageStrategyTest {
         void getStoragePath_rejectsUnsupportedProtocol() {
             StorageStrategy noProtocol = newStrategy(null);
 
-            assertThrows(CloudRuntimeException.class, noProtocol::getStoragePath);
+            CloudRuntimeException thrown = assertThrows(CloudRuntimeException.class, noProtocol::getStoragePath);
+
+            assertEquals("Unsupported protocol for path retrieval: null", thrown.getMessage());
+            verifyNoInteractions(sanFeignClient);
         }
 
         // ------------------------------------------------------------- QoS: create
@@ -2646,6 +2784,17 @@ public class StorageStrategyTest {
             when(qosFeignClient.getPolicies(anyString(), anyMap())).thenReturn(records(List.of(existing)));
 
             assertSame(existing, strategy.createVolumeQosPolicy("cs_policy", null, 100L));
+
+            ArgumentCaptor<VolumeQosPolicy> sent = ArgumentCaptor.forClass(VolumeQosPolicy.class);
+            verify(qosFeignClient).createPolicy(anyString(), sent.capture());
+            assertEquals("cs_policy", sent.getValue().getName());
+            assertEquals("svm1", sent.getValue().getSvm().getName());
+            assertNull(sent.getValue().getFixed().getMinThroughputIops());
+            assertEquals(100L, sent.getValue().getFixed().getMaxThroughputIops());
+            ArgumentCaptor<Map<String, Object>> query = ArgumentCaptor.forClass(Map.class);
+            verify(qosFeignClient).getPolicies(anyString(), query.capture());
+            assertEquals("cs_policy", query.getValue().get(OntapStorageConstants.NAME));
+            assertEquals("svm1", query.getValue().get(OntapStorageConstants.SVM_DOT_NAME));
         }
 
         @Test
@@ -2655,7 +2804,9 @@ public class StorageStrategyTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> strategy.createVolumeQosPolicy("cs_policy", null, 100L));
 
-            assertTrue(ex.getMessage().contains("cs_policy"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("Failed to create ONTAP QoS policy [cs_policy]"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("bad"), ex.getMessage());
+            assertQosPolicyWasSent(1);
             verify(qosFeignClient, never()).getPolicies(anyString(), anyMap());
         }
 
@@ -2669,8 +2820,10 @@ public class StorageStrategyTest {
             for (int i = 0; i < 3; i++) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                         () -> strategy.createVolumeQosPolicy("cs_policy", null, 100L));
-                assertTrue(ex.getMessage().contains("Unable to get ONTAP QoS policy"), ex.getMessage());
+                assertEquals("Unable to get ONTAP QoS policy [cs_policy] after creation", ex.getMessage());
             }
+            assertQosPolicyWasSent(3);
+            assertQosPolicyWasLookedUp(3);
         }
 
         @Test
@@ -2682,8 +2835,10 @@ public class StorageStrategyTest {
             for (int i = 0; i < 2; i++) {
                 CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                         () -> strategy.createVolumeQosPolicy("cs_policy", null, 100L));
-                assertTrue(ex.getMessage().contains("empty response"), ex.getMessage());
+                assertEquals("Failed to fetch ONTAP QoS policy [cs_policy]: empty response", ex.getMessage());
             }
+            assertQosPolicyWasSent(2);
+            assertQosPolicyWasLookedUp(2);
         }
 
         @Test
@@ -2693,7 +2848,10 @@ public class StorageStrategyTest {
             CloudRuntimeException ex = assertThrows(CloudRuntimeException.class,
                     () -> strategy.createVolumeQosPolicy("cs_policy", null, 100L));
 
-            assertTrue(ex.getMessage().contains("Failed to fetch ONTAP QoS policy"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("Failed to fetch ONTAP QoS policy [cs_policy]"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("lookup failed"), ex.getMessage());
+            assertQosPolicyWasSent(1);
+            assertQosPolicyWasLookedUp(1);
         }
 
         // ------------------------------------------------------------- QoS: delete
