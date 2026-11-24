@@ -27,7 +27,9 @@ import org.libvirt.Domain;
 import org.libvirt.LibvirtException;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
@@ -104,6 +106,21 @@ public class IscsiStorageCleanupMonitor implements Runnable{
          * @param conn
          */
         private void updateDiskStatusMapWithInactiveIscsiSessions(Connect conn){
+            // VM XML and diskStatusMap keys can reference the same iSCSI LUN through
+            // different udev symlinks: by-path (ip-...-iscsi-...-lun-N) vs by-id
+            // (wwn-0x... for storage providers that identify LUNs by NAA WWID, such as
+            // ONTAP). A raw string compare misses that match and the session gets
+            // disconnected while VMs are still using it. Resolve both sides to the
+            // underlying kernel block device (e.g. /dev/sdb) so the match works for
+            // any symlink form.
+            Map<String, String> kernelDeviceToByPath = new HashMap<>();
+            for (String byPath : diskStatusMap.keySet()) {
+                String kernelDevice = resolveToKernelDevice(byPath);
+                if (kernelDevice != null) {
+                    kernelDeviceToByPath.put(kernelDevice, byPath);
+                }
+            }
+
             try {
                 int[] domains = conn.listDomains();
                 logger.debug(String.format("found %d domains", domains.length));
@@ -116,9 +133,18 @@ public class IscsiStorageCleanupMonitor implements Runnable{
 
                     //check the volume map. If an entry exists change the status to True
                     for (final LibvirtVMDef.DiskDef disk : disks) {
-                        if (diskStatusMap.containsKey(disk.getDiskPath())&&!disk.getDiskPath().matches(REGEX_PART)) {
-                            diskStatusMap.put(disk.getDiskPath(), true);
-                            logger.debug("active disk found by cleanup thread" + disk.getDiskPath());
+                        final String diskPath = disk.getDiskPath();
+                        if (diskPath == null || diskPath.matches(REGEX_PART)) {
+                            continue;
+                        }
+                        String kernelDevice = resolveToKernelDevice(diskPath);
+                        if (kernelDevice == null) {
+                            continue;
+                        }
+                        String byPath = kernelDeviceToByPath.get(kernelDevice);
+                        if (byPath != null) {
+                            diskStatusMap.put(byPath, true);
+                            logger.debug("active disk found by cleanup thread " + diskPath + " -> " + byPath);
                         }
                     }
                 }
@@ -126,6 +152,23 @@ public class IscsiStorageCleanupMonitor implements Runnable{
                 logger.warn("[ignored] Error trying to cleanup ", e);
             }
 
+        }
+
+        /**
+         * Resolves a /dev/disk/by-* symlink (or any path under /dev) to its underlying
+         * kernel device absolute path (e.g. /dev/sdb). Returns null when the symlink
+         * is dangling, the file is missing, or the real path is not under /dev.
+         */
+        private String resolveToKernelDevice(String path) {
+            try {
+                Path real = Paths.get(path).toRealPath();
+                if (real.startsWith("/dev")) {
+                    return real.toString();
+                }
+            } catch (IOException e) {
+                logger.debug("Could not resolve [{}] to a kernel device: {}", path, e.getMessage());
+            }
+            return null;
         }
 
         /**
