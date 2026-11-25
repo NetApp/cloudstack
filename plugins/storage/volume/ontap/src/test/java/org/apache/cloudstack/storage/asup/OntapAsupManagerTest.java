@@ -61,6 +61,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -75,8 +76,26 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.cloud.event.EventTypes;
+import com.cloud.utils.Ternary;
+import com.cloud.utils.db.GlobalLock;
+import com.cloud.utils.net.NetUtils;
+import org.apache.cloudstack.framework.config.ConfigKey;
+import org.apache.cloudstack.framework.messagebus.MessageBus;
+import org.apache.cloudstack.framework.messagebus.MessageSubscriber;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import java.lang.reflect.Field;
+import java.util.Date;
+import java.util.concurrent.ScheduledFuture;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.anyInt;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class OntapAsupManagerTest {
 
     // ── DAOs ──────────────────────────────────────────────────────────────────
@@ -87,6 +106,7 @@ class OntapAsupManagerTest {
     @Mock private VMSnapshotDao vmSnapshotDao;
     @Mock private ManagementService managementService;
     @Mock private ManagementServerHostDao managementServerHostDao;
+    @Mock private MessageBus messageBus;
 
     @InjectMocks
     private OntapAsupManager asupManager;
@@ -121,6 +141,10 @@ class OntapAsupManagerTest {
                 .thenReturn(OntapStorageConstants.ASUP_PLATFORM_TYPE_PERFORMANCE);
         lenient().when(managementService.getVersion()).thenReturn("4.23.0.0-SNAPSHOT");
         lenient().when(managementServerHostDao.listAll()).thenReturn(Collections.emptyList());
+        lenient().when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(poolDetails);
+        lenient().when(mockStrategy.getClusterInfo()).thenReturn(mockCluster);
+        lenient().when(mockStrategy.getClusterVersion(mockCluster)).thenReturn("9.17.1");
+        lenient().when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(Collections.emptyList());
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -604,6 +628,29 @@ class OntapAsupManagerTest {
     }
 
     @Test
+    void validateAsupInterval_errorMessagesNameTheKeyAndTheAllowedRange() {
+        InvalidParameterValueException outOfRange = assertThrows(InvalidParameterValueException.class,
+                () -> OntapConfigurationManager.AsupIntervalHours.validateValue("1"));
+        assertTrue(outOfRange.getMessage().contains(OntapStorageConstants.ASUP_INTERVAL_CONFIG_KEY), outOfRange.getMessage());
+        assertTrue(outOfRange.getMessage().contains(
+                "between " + OntapStorageConstants.ASUP_MIN_INTERVAL_HOURS + " hours and "
+                        + OntapStorageConstants.ASUP_MAX_INTERVAL_HOURS + " hours"), outOfRange.getMessage());
+
+        InvalidParameterValueException notInteger = assertThrows(InvalidParameterValueException.class,
+                () -> OntapConfigurationManager.AsupIntervalHours.validateValue("abc"));
+        assertTrue(notInteger.getMessage().contains("must be an integer"), notInteger.getMessage());
+    }
+
+    @Test
+    void configurationManagerPublishesItsComponentNameAndTheAsupIntervalKey() {
+        OntapConfigurationManager manager = new OntapConfigurationManager();
+
+        assertEquals("OntapConfigurationManager", manager.getConfigComponentName());
+        assertEquals(1, manager.getConfigKeys().length);
+        assertSame(OntapConfigurationManager.AsupIntervalHours, manager.getConfigKeys()[0]);
+    }
+
+    @Test
     void getAsupIntervalHours_fallsBackOutsideRange() {
         assertEquals(OntapStorageConstants.ASUP_DEFAULT_INTERVAL_HOURS,
                 asupManager.getAsupIntervalHours(null));
@@ -743,5 +790,440 @@ class OntapAsupManagerTest {
         when(vmSnap.getState()).thenReturn(state);
         lenient().when(vmSnap.getRemoved()).thenReturn(removed);
         return vmSnap;
+    }
+
+    // ------------------------------------------------------------ helpers
+
+    private List<EmsApplicationLog> pushPool() {
+        try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+            utils.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, new HashMap<>());
+        }
+        ArgumentCaptor<EmsApplicationLog> captor = ArgumentCaptor.forClass(EmsApplicationLog.class);
+        verify(mockStrategy, times(2)).sendAsupMessage(captor.capture());
+        List<EmsApplicationLog> messages = captor.getAllValues();
+        assertEquals(OntapStorageConstants.ASUP_EVENT_ID_HEARTBEAT, messages.get(0).getEventId());
+        assertEquals(OntapStorageConstants.ASUP_EVENT_ID_STORAGE_POOL, messages.get(1).getEventId());
+        return messages;
+    }
+
+    private static VolumeVO volume(Volume.State state, Volume.Type type, Long size, Long instanceId) {
+        VolumeVO volume = mock(VolumeVO.class);
+        when(volume.getId()).thenReturn(System.nanoTime());
+        when(volume.getState()).thenReturn(state);
+        when(volume.getVolumeType()).thenReturn(type);
+        when(volume.getSize()).thenReturn(size);
+        when(volume.getInstanceId()).thenReturn(instanceId);
+        return volume;
+    }
+
+    private Object field(String name) throws Exception {
+        Field field = OntapAsupManager.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(asupManager);
+    }
+
+    // ------------------------------------------------------------ lifecycle / scheduling
+
+    @Test
+    void configureSubscribesToConfigurationEdits() throws Exception {
+        assertTrue(asupManager.configure("OntapAsupManager", new HashMap<>()));
+
+        verify(messageBus).subscribe(eq(EventTypes.EVENT_CONFIGURATION_VALUE_EDIT), any(MessageSubscriber.class));
+    }
+
+    @Test
+    void stopWithoutStartIsHarmless() {
+        assertTrue(asupManager.stop());
+    }
+
+    @Test
+    void startBooksOnePendingRunAndStopShutsTheSchedulerDown() throws Exception {
+        asupManager.lastPushTime = java.time.Instant.now(); // not overdue, so the run is booked for later
+
+        assertTrue(asupManager.start());
+        try {
+            ScheduledFuture<?> pending = (ScheduledFuture<?>) field("pendingRun");
+            assertNotNull(pending);
+            assertFalse(pending.isDone());
+            assertTrue(pending.getDelay(java.util.concurrent.TimeUnit.MINUTES) > 0);
+        } finally {
+            assertTrue(asupManager.stop());
+        }
+
+        assertTrue(((java.util.concurrent.ScheduledExecutorService) field("asupScheduler")).isShutdown());
+    }
+
+    private MessageSubscriber configureAndCaptureSubscriber() throws Exception {
+        asupManager.configure("OntapAsupManager", new HashMap<>());
+        ArgumentCaptor<MessageSubscriber> captor = ArgumentCaptor.forClass(MessageSubscriber.class);
+        verify(messageBus).subscribe(eq(EventTypes.EVENT_CONFIGURATION_VALUE_EDIT), captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    void editingTheAsupIntervalRebooksThePendingRun() throws Exception {
+        MessageSubscriber subscriber = configureAndCaptureSubscriber();
+        asupManager.lastPushTime = java.time.Instant.now();
+        asupManager.start();
+        try {
+            ScheduledFuture<?> before = (ScheduledFuture<?>) field("pendingRun");
+
+            subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT,
+                    new Ternary<>(OntapConfigurationManager.AsupIntervalHours.key(), ConfigKey.Scope.Global, null));
+
+            ScheduledFuture<?> after = (ScheduledFuture<?>) field("pendingRun");
+            assertNotSame(before, after);
+            assertTrue(before.isCancelled());
+            assertFalse(after.isCancelled());
+        } finally {
+            asupManager.stop();
+        }
+    }
+
+    @Test
+    void unrelatedConfigurationEditsDoNotTouchTheSchedule() throws Exception {
+        MessageSubscriber subscriber = configureAndCaptureSubscriber();
+        asupManager.lastPushTime = java.time.Instant.now();
+        asupManager.start();
+        try {
+            ScheduledFuture<?> before = (ScheduledFuture<?>) field("pendingRun");
+
+            subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT,
+                    new Ternary<>("some.other.key", ConfigKey.Scope.Global, null));
+            subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, "not a ternary");
+            subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, null);
+
+            assertSame(before, field("pendingRun"));
+            assertFalse(before.isCancelled());
+        } finally {
+            asupManager.stop();
+        }
+    }
+
+    @Test
+    void editingTheIntervalBeforeStartOrAfterStopBooksNothing() throws Exception {
+        MessageSubscriber subscriber = configureAndCaptureSubscriber();
+        Ternary<String, ConfigKey.Scope, Long> edit =
+                new Ternary<>(OntapConfigurationManager.AsupIntervalHours.key(), ConfigKey.Scope.Global, null);
+
+        subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, edit);
+        assertNull(field("pendingRun"));
+
+        asupManager.lastPushTime = java.time.Instant.now();
+        asupManager.start();
+        asupManager.stop();
+        ScheduledFuture<?> beforeEdit = (ScheduledFuture<?>) field("pendingRun");
+        subscriber.onPublishMessage("sender", EventTypes.EVENT_CONFIGURATION_VALUE_EDIT, edit);
+        assertSame(beforeEdit, field("pendingRun"));
+    }
+
+    // ------------------------------------------------------------ pushAsupTelemetry locking
+
+    @Test
+    void pushTelemetryPushesEveryPoolWhileHoldingTheClusterLock() {
+        when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME)).thenReturn(List.of(pool));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(anyInt())).thenReturn(true);
+
+        try (MockedStatic<GlobalLock> locks = mockStatic(GlobalLock.class);
+             MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+            locks.when(() -> GlobalLock.getInternLock(OntapStorageConstants.ASUP_GLOBAL_LOCK_NAME)).thenReturn(lock);
+            utils.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+
+            asupManager.pushAsupTelemetry();
+        }
+
+        verify(mockStrategy, times(2)).sendAsupMessage(any(EmsApplicationLog.class));
+        verify(lock).unlock();
+        verify(lock).releaseRef();
+    }
+
+    @Test
+    void pushTelemetrySkipsTheCycleWhenAnotherServerHoldsTheLock() {
+        when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME)).thenReturn(List.of(pool));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(anyInt())).thenReturn(false);
+
+        try (MockedStatic<GlobalLock> locks = mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(OntapStorageConstants.ASUP_GLOBAL_LOCK_NAME)).thenReturn(lock);
+
+            asupManager.pushAsupTelemetry();
+        }
+
+        verify(mockStrategy, never()).sendAsupMessage(any(EmsApplicationLog.class));
+        verify(lock, never()).unlock();
+        verify(lock).releaseRef();
+    }
+
+    @Test
+    void pushTelemetryWithNullPoolListDoesNothing() {
+        when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME)).thenReturn(null);
+
+        asupManager.pushAsupTelemetry();
+
+        verify(mockStrategy, never()).sendAsupMessage(any(EmsApplicationLog.class));
+    }
+
+    @Test
+    void asupTaskKeepsRunningWhenThePushThrows() throws Exception {
+        asupManager.lastPushTime = java.time.Instant.now();
+        assertTrue(asupManager.start());
+        try {
+            ScheduledFuture<?> bookedBeforeTheFailure = (ScheduledFuture<?>) field("pendingRun");
+            assertNotNull(bookedBeforeTheFailure);
+            asupManager.lastPushTime = java.time.Instant.EPOCH;
+            when(storagePoolDao.findPoolsByProvider(OntapStorageConstants.ONTAP_PLUGIN_NAME))
+                    .thenThrow(new IllegalStateException("db down"));
+
+            asupManager.new OntapAsupTask().run();
+
+            assertFalse(asupManager.lastPushTime.equals(java.time.Instant.EPOCH));
+            ScheduledFuture<?> bookedAfterTheFailure = (ScheduledFuture<?>) field("pendingRun");
+            assertNotNull(bookedAfterTheFailure);
+            assertNotSame(bookedBeforeTheFailure, bookedAfterTheFailure);
+            assertTrue(bookedBeforeTheFailure.isCancelled());
+            assertFalse(bookedAfterTheFailure.isDone());
+            assertTrue(bookedAfterTheFailure.getDelay(java.util.concurrent.TimeUnit.MILLISECONDS) > 0);
+        } finally {
+            assertTrue(asupManager.stop());
+        }
+    }
+
+    // ------------------------------------------------------------ pushAsupForStoragePool edge cases
+
+    @Test
+    void poolWithoutStorageIpIsNotCachedAndStillGetsHeartbeat() {
+        poolDetails.remove(OntapStorageConstants.STORAGE_IP);
+        Map<String, OntapAsupManager.AsupClusterClient> cache = new HashMap<>();
+
+        try (MockedStatic<OntapStorageUtils> utils = mockStatic(OntapStorageUtils.class)) {
+            utils.when(() -> OntapStorageUtils.resolveStrategyFromPoolDetails(any())).thenReturn(mockStrategy);
+            asupManager.pushAsupForStoragePool(pool, cache);
+        }
+
+        assertTrue(cache.isEmpty());
+        verify(mockStrategy, times(2)).sendAsupMessage(any(EmsApplicationLog.class));
+    }
+
+    @Test
+    void poolWithNullDetailsIsSkipped() {
+        when(storagePoolDetailsDao.listDetailsKeyPairs(1L)).thenReturn(null);
+
+        asupManager.pushAsupForStoragePool(pool, new HashMap<>());
+
+        verify(mockStrategy, never()).sendAsupMessage(any(EmsApplicationLog.class));
+    }
+
+    @Test
+    void heartbeatUsesUnknownWhenClusterAndVersionsAreMissing() {
+        when(mockStrategy.getClusterInfo()).thenReturn(null);
+        when(mockStrategy.getClusterVersion(null)).thenReturn(null);
+        when(managementService.getVersion()).thenReturn(null);
+
+        List<EmsApplicationLog> messages = pushPool();
+
+        String heartbeat = messages.get(0).getEventDescription();
+        assertTrue(heartbeat.contains("\"ontapVersion\":\"unknown\""), heartbeat);
+        assertTrue(heartbeat.contains("\"ontapClusterModel\":\"unknown\""), heartbeat);
+        assertTrue(heartbeat.contains("\"ontapPlatformType\":\"unknown\""), heartbeat);
+        assertTrue(heartbeat.contains("\"clusterUuid\":\"unknown\""), heartbeat);
+        assertTrue(heartbeat.contains("\"cloudstackVersion\":\"unknown\""), heartbeat);
+    }
+
+    @Test
+    void poolMessageUsesUnknownForMissingPoolFields() {
+        when(pool.getName()).thenReturn(null);
+        when(pool.getStatus()).thenReturn(null);
+        poolDetails.remove(OntapStorageConstants.PROTOCOL);
+
+        List<EmsApplicationLog> messages = pushPool();
+
+        String description = messages.get(1).getEventDescription();
+        assertTrue(description.contains("\"poolName\":\"unknown\""), description);
+        assertTrue(description.contains("\"poolStatus\":\"unknown\""), description);
+        assertTrue(description.contains("\"protocol\":\"unknown\""), description);
+    }
+
+    @Test
+    void usageCountsOnlyVolumesThatExistOnOntap() {
+        List<VolumeVO> volumes = Arrays.asList(
+                volume(Volume.State.Ready, Volume.Type.ROOT, 10L, 100L),
+                volume(Volume.State.Ready, Volume.Type.DATADISK, 20L, null),
+                volume(Volume.State.Attaching, Volume.Type.DATADISK, null, null),
+                volume(Volume.State.Ready, Volume.Type.ISO, 5L, null),
+                volume(Volume.State.Allocated, Volume.Type.ROOT, 1000L, 101L));
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(volumes);
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertTrue(description.contains("\"rootDiskCount\":1"), description);
+        assertTrue(description.contains("\"dataDiskCount\":2"), description);
+        assertTrue(description.contains("\"totalLogicalSizeBytes\":35"), description);
+    }
+
+    @Test
+    void poolMessageStillSentWhenVolumesCannotBeLoaded() {
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenThrow(new IllegalStateException("db down"));
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertFalse(description.contains("rootDiskCount"), description);
+        assertTrue(description.contains("multiPrimaryStoragePoolVm"), description);
+    }
+
+    @Test
+    void nullVolumeListIsTreatedAsEmpty() {
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(null);
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertTrue(description.contains("\"rootDiskCount\":0"), description);
+        assertTrue(description.contains("\"volumeSnapshotCount\":0"), description);
+        assertTrue(description.contains("\"vmSnapshotCount\":0"), description);
+    }
+
+    @Test
+    void usageIsOmittedWhenAVolumeCannotBeRead() {
+        VolumeVO broken = mock(VolumeVO.class);
+        when(broken.getState()).thenThrow(new IllegalStateException("corrupt row"));
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(List.of(broken));
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertFalse(description.contains("rootDiskCount"), description);
+    }
+
+    @Test
+    void multiPrimaryPoolFlagIsOmittedWhenQueryFails() {
+        when(volumeDao.hasMultiPrimaryStoragePoolVm(1L)).thenThrow(new IllegalStateException("db down"));
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertFalse(description.contains("multiPrimaryStoragePoolVm"), description);
+    }
+
+    @Test
+    void snapshotCountsAreZeroWhenDaosReturnNull() {
+        VolumeVO root = volume(Volume.State.Ready, Volume.Type.ROOT, 10L, 100L);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(List.of(root));
+        when(snapshotDao.searchByVolumes(anyList())).thenReturn(null);
+        when(vmSnapshotDao.searchByVms(anyList())).thenReturn(null);
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertTrue(description.contains("\"volumeSnapshotCount\":0"), description);
+        assertTrue(description.contains("\"vmSnapshotCount\":0"), description);
+    }
+
+    @Test
+    void snapshotCountsAreOmittedWhenDaosFail() {
+        VolumeVO root = volume(Volume.State.Ready, Volume.Type.ROOT, 10L, 100L);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(List.of(root));
+        when(snapshotDao.searchByVolumes(anyList())).thenThrow(new IllegalStateException("db down"));
+        when(vmSnapshotDao.searchByVms(anyList())).thenThrow(new IllegalStateException("db down"));
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertFalse(description.contains("volumeSnapshotCount"), description);
+        assertFalse(description.contains("vmSnapshotCount"), description);
+    }
+
+    @Test
+    void snapshotCountsExcludeDestroyedExpungingAndRemovedSnapshots() {
+        VolumeVO root = volume(Volume.State.Ready, Volume.Type.ROOT, 10L, 100L);
+        when(volumeDao.findNonDestroyedVolumesByPoolId(eq(1L), isNull())).thenReturn(List.of(root));
+        SnapshotVO live = mock(SnapshotVO.class);
+        when(live.getState()).thenReturn(com.cloud.storage.Snapshot.State.BackedUp);
+        SnapshotVO destroyed = mock(SnapshotVO.class);
+        when(destroyed.getState()).thenReturn(com.cloud.storage.Snapshot.State.Destroyed);
+        when(snapshotDao.searchByVolumes(anyList())).thenReturn(List.of(live, destroyed));
+        VMSnapshotVO active = mock(VMSnapshotVO.class);
+        when(active.getState()).thenReturn(VMSnapshot.State.Ready);
+        VMSnapshotVO expunging = mock(VMSnapshotVO.class);
+        when(expunging.getState()).thenReturn(VMSnapshot.State.Expunging);
+        VMSnapshotVO removed = mock(VMSnapshotVO.class);
+        when(removed.getState()).thenReturn(VMSnapshot.State.Ready);
+        when(removed.getRemoved()).thenReturn(new Date());
+        when(vmSnapshotDao.searchByVms(anyList())).thenReturn(List.of(active, expunging, removed));
+
+        String description = pushPool().get(1).getEventDescription();
+
+        assertTrue(description.contains("\"volumeSnapshotCount\":1"), description);
+        assertTrue(description.contains("\"vmSnapshotCount\":1"), description);
+    }
+
+    @Test
+    void descriptionFallsBackToMapStringWhenJsonSerialisationFails() throws Exception {
+        ObjectMapper broken = mock(ObjectMapper.class);
+        when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("cannot serialise") { });
+        Field mapper = OntapAsupManager.class.getDeclaredField("objectMapper");
+        mapper.setAccessible(true);
+        mapper.set(asupManager, broken);
+
+        List<EmsApplicationLog> messages = pushPool();
+
+        assertEquals(2, messages.size());
+        verify(broken, times(2)).writeValueAsString(any());
+        assertTrue(messages.get(0).getEventDescription().startsWith("{"), messages.get(0).getEventDescription());
+        assertTrue(messages.get(1).getEventDescription().startsWith("{message="), messages.get(1).getEventDescription());
+    }
+
+    // ------------------------------------------------------------ helper edge cases
+
+    @Test
+    void cloudStackVersionIsUnknownWithoutManagementService() throws Exception {
+        Field service = OntapAsupManager.class.getDeclaredField("managementService");
+        service.setAccessible(true);
+        service.set(asupManager, null);
+
+        assertEquals(OntapStorageConstants.ASUP_UNKNOWN, asupManager.getCloudStackVersion());
+    }
+
+    @Test
+    void managementServerCountHandlesNullListAndDaoFailure() {
+        when(managementServerHostDao.listAll()).thenReturn(null);
+        assertEquals(0, asupManager.getManagementServerCount());
+
+        when(managementServerHostDao.listAll()).thenReturn(List.of(mock(ManagementServerHostVO.class)));
+        assertEquals(1, asupManager.getManagementServerCount());
+
+        when(managementServerHostDao.listAll()).thenThrow(new IllegalStateException("db down"));
+        assertEquals(0, asupManager.getManagementServerCount());
+    }
+
+    @Test
+    void computerNameFallsBackToUnknownWhenHostnameIsBlank() {
+        try (MockedStatic<NetUtils> net = mockStatic(NetUtils.class)) {
+            net.when(NetUtils::getCanonicalHostName).thenReturn(" ");
+            assertEquals(OntapStorageConstants.ASUP_UNKNOWN, asupManager.getComputerName());
+
+            net.when(NetUtils::getCanonicalHostName).thenReturn("mgmt-1");
+            assertEquals("mgmt-1", asupManager.getComputerName());
+        }
+    }
+
+    @Test
+    void operatingSystemDescriptionHandlesMissingProperties() {
+        String name = System.getProperty("os.name");
+        String version = System.getProperty("os.version");
+        String arch = System.getProperty("os.arch");
+        try {
+            System.setProperty("os.name", "TestOS");
+            System.setProperty("os.version", "1.2");
+            System.setProperty("os.arch", "x86");
+            assertEquals("TestOS 1.2 (x86)", asupManager.getOperatingSystem());
+
+            System.setProperty("os.version", " ");
+            System.setProperty("os.arch", "");
+            assertEquals("TestOS", asupManager.getOperatingSystem());
+
+            System.setProperty("os.name", " ");
+            assertEquals(OntapStorageConstants.ASUP_UNKNOWN, asupManager.getOperatingSystem());
+        } finally {
+            System.setProperty("os.name", name);
+            System.setProperty("os.version", version);
+            System.setProperty("os.arch", arch);
+        }
     }
 }

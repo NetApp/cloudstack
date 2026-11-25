@@ -209,6 +209,13 @@
                                 <goals>
                                     <goal>report</goal>
                                 </goals>
+                                <configuration>
+                                    <!-- Feign clients and request/response models are data holders
+                                         and generated-style glue with no business logic. -->
+                                    <excludes>
+                                        <exclude>org/apache/cloudstack/storage/feign/**</exclude>
+                                    </excludes>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>
