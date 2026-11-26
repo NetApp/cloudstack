@@ -32,8 +32,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class IscsiStorageCleanupMonitor implements Runnable{
     protected static final Logger LOGGER = LogManager.getLogger(IscsiStorageCleanupMonitor.class);
@@ -44,6 +46,7 @@ public class IscsiStorageCleanupMonitor implements Runnable{
     static final String KEYWORD_IQN = "iqn";
     static final String REGEX_PART = "\\S+part\\d+$";
     static final String DEV_PREFIX = "/dev";
+    static final String LUN_MARKER = "-lun-";
 
     private IscsiAdmStorageAdaptor iscsiStorageAdaptor;
 
@@ -92,6 +95,29 @@ public class IscsiStorageCleanupMonitor implements Runnable{
             LOGGER.debug("Could not resolve [{}] to a kernel device: {}", path, e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * Returns the target identifier shared by all LUNs of a by-path iSCSI entry — everything up
+     * to the {@code -lun-} suffix (portal + target IQN). Returns {@code null} when {@code path}
+     * is not an iSCSI by-path for a specific LUN.
+     *
+     * <p>{@code iscsiadm --logout} is session-scoped (keyed on target IQN + portal), so logging
+     * out any one by-path tears down the session for every LUN on the same target. On shared-
+     * target backends (e.g. ONTAP SVMs, where many LUNs map to one IQN) the monitor must
+     * preserve a session whenever another LUN on the same target is still in use by a VM.
+     *
+     * <p>Visible for testing.
+     */
+    static String extractTargetKey(String path) {
+        if (path == null) {
+            return null;
+        }
+        int idx = path.lastIndexOf(LUN_MARKER);
+        if (idx < 0) {
+            return null;
+        }
+        return path.substring(0, idx);
     }
 
 
@@ -198,12 +224,33 @@ public class IscsiStorageCleanupMonitor implements Runnable{
 
          * XXX: It is possible that someone had manually added an iSCSI volume.
          * we would not be able to detect that
+         *
+         * {@code iscsiadm --logout} is target-scoped. On shared-target backends (e.g. ONTAP SVMs
+         * that expose many LUNs under one IQN) logging out one inactive LUN would also kill the
+         * session for sibling LUNs still in use by other VMs on this host. Before disconnecting
+         * an inactive by-path entry, confirm no active LUN remains on the same target.
          */
         private void disconnectInactiveSessions(){
+            Set<String> activeTargets = new HashSet<>();
+            for (Map.Entry<String, Boolean> e : diskStatusMap.entrySet()) {
+                if (Boolean.TRUE.equals(e.getValue())) {
+                    String targetKey = IscsiStorageCleanupMonitor.extractTargetKey(e.getKey());
+                    if (targetKey != null) {
+                        activeTargets.add(targetKey);
+                    }
+                }
+            }
 
             for (String diskPath : diskStatusMap.keySet()) {
                 if (!diskStatusMap.get(diskPath)) {
                     if (Files.exists(Paths.get(diskPath))) {
+                        String targetKey = IscsiStorageCleanupMonitor.extractTargetKey(diskPath);
+                        if (targetKey != null && activeTargets.contains(targetKey)) {
+                            logger.debug("Preserving iSCSI session for inactive LUN [{}]: " +
+                                    "sibling LUN on target [{}] is still in use by a VM on this host",
+                                    diskPath, targetKey);
+                            continue;
+                        }
                         try {
                             logger.info("Cleaning up disk " + diskPath);
                             iscsiStorageAdaptor.disconnectPhysicalDiskByPath(diskPath);

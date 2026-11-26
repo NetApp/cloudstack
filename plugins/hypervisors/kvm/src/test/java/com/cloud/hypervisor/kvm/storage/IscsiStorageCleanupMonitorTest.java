@@ -32,7 +32,7 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 /**
- * Covers the two testable seams carved out of {@link IscsiStorageCleanupMonitor}:
+ * Covers the testable seams carved out of {@link IscsiStorageCleanupMonitor}:
  *
  *   isIscsiDisk           — the phase-1 scan filter, including the partition-suffix
  *                            exclusion that stops the monitor from passing udev
@@ -44,6 +44,14 @@ import org.junit.rules.TemporaryFolder;
  *                            by-path keys from phase 1 even though their strings
  *                            differ. Both forms must resolve to the same kernel
  *                            block device under /dev for the match to succeed.
+ *
+ *   extractTargetKey      — the shared-target guard used by phase 3 to avoid
+ *                            tearing down a session whose other LUNs are still in
+ *                            use by VMs on this host. {@code iscsiadm --logout} is
+ *                            target-scoped (portal + IQN), so for backends that
+ *                            expose many LUNs under one IQN (e.g. an ONTAP SVM)
+ *                            the monitor must keep the session when a sibling LUN
+ *                            is still active.
  */
 public class IscsiStorageCleanupMonitorTest {
 
@@ -238,5 +246,82 @@ public class IscsiStorageCleanupMonitorTest {
         assertEquals("by-id form and by-path form must converge at the kernel device",
                 resolvedById, resolvedByPath);
         assertEquals("/dev/null", resolvedById);
+    }
+
+    // ----------------------------------------------------------------------------
+    // extractTargetKey
+    // ----------------------------------------------------------------------------
+
+    /**
+     * Strips the per-LUN suffix and returns the (portal + IQN) prefix all LUNs of
+     * the same iSCSI target share. This key is what {@code iscsiadm --logout} acts
+     * on; collisions here mean "same session".
+     */
+    @Test
+    public void extractTargetKeyStripsLunSuffix() {
+        String key = IscsiStorageCleanupMonitor.extractTargetKey(ONTAP_WHOLE_DISK);
+        assertEquals(
+                "/dev/disk/by-path/ip-10.196.34.138:3260-iscsi-iqn.1992-08.com.netapp:sn.6dedd379dd0411f18be4005056bd8428:vs.3",
+                key);
+    }
+
+    @Test
+    public void extractTargetKeyReturnsNullForPathWithoutLunMarker() {
+        assertNull(IscsiStorageCleanupMonitor.extractTargetKey(
+                "/dev/disk/by-id/wwn-0x600a098078304d35503f61316c425743"));
+    }
+
+    @Test
+    public void extractTargetKeyReturnsNullForNull() {
+        assertNull(IscsiStorageCleanupMonitor.extractTargetKey(null));
+    }
+
+    /**
+     * Defensive: the key is cut at the LAST {@code -lun-} occurrence, so an iSCSI
+     * target whose IQN itself contained the substring would still yield a usable
+     * key rather than being mangled. Not observed in the wild, but costs nothing.
+     */
+    @Test
+    public void extractTargetKeyUsesLastLunMarkerOccurrence() {
+        String key = IscsiStorageCleanupMonitor.extractTargetKey(
+                "/dev/disk/by-path/ip-10.1.1.1:3260-iscsi-iqn.test:odd-lun-name-lun-7");
+        assertEquals(
+                "/dev/disk/by-path/ip-10.1.1.1:3260-iscsi-iqn.test:odd-lun-name",
+                key);
+    }
+
+    /**
+     * The field scenario the fix is for: all 6 LUNs of one ONTAP SVM share a single
+     * target key, so if any one of them is still in use by a VM the monitor must
+     * preserve the session rather than log out and tear down the sibling LUNs.
+     */
+    @Test
+    public void siblingOntapLunsShareOneTargetKey() {
+        String base = "/dev/disk/by-path/ip-10.196.34.138:3260-iscsi-iqn.1992-08.com.netapp:sn.6dedd379dd0411f18be4005056bd8428:vs.3";
+        String firstKey = null;
+        for (int lun = 0; lun < 6; lun++) {
+            String key = IscsiStorageCleanupMonitor.extractTargetKey(base + "-lun-" + lun);
+            if (firstKey == null) {
+                firstKey = key;
+            }
+            assertEquals("every LUN under one SVM target must collapse to the same key",
+                    firstKey, key);
+        }
+        assertEquals("the shared key is portal + IQN, no trailing LUN", base, firstKey);
+    }
+
+    /**
+     * SolidFire / IscsiAdm-style backends give each volume its own target IQN (the
+     * IQN encodes the volume id). Two such by-paths produce distinct keys, so the
+     * shared-target guard is a no-op and behavior for that backend is unchanged.
+     */
+    @Test
+    public void iscsiAdmStyleTargetsAreOneLunEachSoKeysAreDistinct() {
+        String a = IscsiStorageCleanupMonitor.extractTargetKey(
+                "/dev/disk/by-path/ip-192.168.233.10:3260-iscsi-iqn.2012-03.com.test:volume1-lun-0");
+        String b = IscsiStorageCleanupMonitor.extractTargetKey(
+                "/dev/disk/by-path/ip-192.168.233.10:3260-iscsi-iqn.2012-03.com.test:volume2-lun-0");
+
+        assertFalse("per-volume target IQNs must produce distinct keys", a.equals(b));
     }
 }
