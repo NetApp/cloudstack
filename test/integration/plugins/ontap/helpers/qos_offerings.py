@@ -400,23 +400,25 @@ class OntapQosOfferingsBase(OntapTestBase):
                    for item in self.__class__.extra_volumes):
             self.__class__.extra_volumes.append(volume)
 
-    def _delete_volume(self, volume):
-        self.__class__._cleanup_tracked_volume(volume)
+    def _delete_volume(self, volume, pool=None):
+        self.__class__._cleanup_tracked_volume(volume, pool=pool)
 
     @classmethod
-    def _cleanup_tracked_volume(cls, volume):
+    def _cleanup_tracked_volume(cls, volume, pool=None):
         """Remove one volume from CloudStack, then its ONTAP object.
 
         deleteVolume is tried first. destroyVolume(expunge=False) is the
         fallback used by the other suites when libvirt cannot expunge the
         volume. A shared QoS policy is removed only after its last object
-        is gone.
+        is gone. Pass pool when the volume is not on the class pool.
         """
         if volume is None or not getattr(volume, "id", None):
             return
         if getattr(cls, "apiClient", None) is None:
             return
-        policy_name, lun_path, nfs_path = cls._ontap_volume_identity(volume)
+        policy_name, lun_path, nfs_path = cls._ontap_volume_identity(
+            volume, pool=pool
+        )
         cls._detach_volume_if_attached(volume.id)
         try:
             cmd = deleteVolumeAPI.deleteVolumeCmd()
@@ -438,13 +440,13 @@ class OntapQosOfferingsBase(OntapTestBase):
                     "cleanup: destroyVolume also failed for %s: %s",
                     volume.id, destroy_exc,
                 )
-        cls._delete_ontap_volume_object(lun_path, nfs_path)
+        cls._delete_ontap_volume_object(lun_path, nfs_path, pool=pool)
         cls._delete_unused_qos_policy(policy_name)
 
     @classmethod
-    def _ontap_volume_identity(cls, volume):
+    def _ontap_volume_identity(cls, volume, pool=None):
         """LUN path or NFS file path, and the QoS policy name, if present."""
-        pool = getattr(cls, "pool", None)
+        pool = pool or getattr(cls, "pool", None)
         pool_name = getattr(pool, "name", None)
         nfs_path = getattr(volume, "path", None)
         lun_path = None
@@ -494,8 +496,8 @@ class OntapQosOfferingsBase(OntapTestBase):
             )
 
     @classmethod
-    def _delete_ontap_volume_object(cls, lun_path, nfs_path):
-        pool = getattr(cls, "pool", None)
+    def _delete_ontap_volume_object(cls, lun_path, nfs_path, pool=None):
+        pool = pool or getattr(cls, "pool", None)
         pool_name = getattr(pool, "name", None)
         ontap = getattr(cls, "ontap", None)
         if ontap is None or not pool_name:
@@ -564,8 +566,8 @@ class OntapQosOfferingsBase(OntapTestBase):
         svm = str(self.__class__.svm_name).replace(".", "_")
         return "cs_%d_to_%d_iops_%s" % (int(miniops), int(maxiops), svm)
 
-    def _backend(self, volume):
-        pool_name = self.__class__.pool.name
+    def _backend(self, volume, pool=None):
+        pool_name = (pool or self.__class__.pool).name
         deadline = time.time() + 90
         current = volume
         while time.time() < deadline:
@@ -646,7 +648,7 @@ class OntapQosOfferingsBase(OntapTestBase):
         self.assertEqual(int(current.memory), int(memory))
         return current
 
-    def _assert_qos(self, volume, miniops, maxiops):
+    def _assert_qos(self, volume, miniops, maxiops, pool=None):
         current = self._wait_ready(volume.id)
         self.assertEqual(int(getattr(current, "miniops", 0) or 0), int(miniops))
         self.assertEqual(int(getattr(current, "maxiops", 0) or 0), int(maxiops))
@@ -655,7 +657,7 @@ class OntapQosOfferingsBase(OntapTestBase):
         seen = None
         while time.time() < deadline:
             current = self._get_volume(volume.id) or current
-            seen = self._policy_on(self._backend(current))
+            seen = self._policy_on(self._backend(current, pool=pool))
             if seen == expected:
                 break
             time.sleep(5)
@@ -1272,6 +1274,55 @@ class OntapQosOfferingsBase(OntapTestBase):
         })
         self._assert_vm_compute(vm, cpu=1, speed=500, memory=768)
         self._assert_qos(self._root_volume(vm), 0, 580)
+
+    # ------------------------------------------------------------------
+    # A rejected resize changes nothing
+    # ------------------------------------------------------------------
+
+    @attr(tags=["ontap_qos"], required_hardware=True)
+    def test_29_rejected_resize_keeps_original_qos(self):
+        """A resize the driver rejects keeps the original policy and IOPS.
+
+        The volume sits on a pool whose IOPS capacity (100) is below the
+        minimum of the target offering (200), so the driver refuses the
+        resize. Afterwards CloudStack still reports the original IOPS, the
+        ONTAP object still carries the original policy, and no policy for
+        the target offering exists. Skipped on FAS, where a minimum IOPS
+        is rejected before the capacity check.
+        """
+        if not self.__class__.is_aff:
+            self.skipTest(
+                "Pool IOPS capacity is enforced on minimum IOPS, "
+                "which FAS rejects earlier"
+            )
+        original = self._disk_offering(disksize=1, miniops=50, maxiops=500)
+        rejected = self._disk_offering(disksize=2, miniops=200, maxiops=500)
+        pool = None
+        volume = None
+        try:
+            pool = self.__class__._create_qos_pool(
+                capacityiops=100,
+                name="QosResizeCap_%d" % random.randint(0, 99999),
+            )
+            self.__class__.pool2 = pool
+            volume = self._create_data_volume(original, pool=pool)
+            self._assert_qos(volume, 50, 500, pool=pool)
+
+            with self.assertRaises(Exception) as caught:
+                self._resize(volume, rejected)
+            self.assertIn(POOL_IOPS_EXCEEDED, str(caught.exception))
+
+            self._assert_qos(volume, 50, 500, pool=pool)
+            self._assert_policy_absent(200, 500)
+        finally:
+            if volume is not None:
+                self._delete_volume(volume, pool=pool)
+                if volume in self._volumes:
+                    self._volumes.remove(volume)
+                if volume in self.__class__.extra_volumes:
+                    self.__class__.extra_volumes.remove(volume)
+            self._force_delete_pool(pool)
+            self._delete_unused_qos_policy(self._policy_name(50, 500))
 
 
 def unittest_skip(reason):

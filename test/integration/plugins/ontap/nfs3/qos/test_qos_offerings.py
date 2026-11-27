@@ -59,6 +59,7 @@ Workflow:
   26  Hypervisor rate limits do not create an ONTAP policy
   27  Constrained custom compute with a fixed-IOPS root disk
   28  Constrained custom compute with custom IOPS at deploy
+  29  Rejected resize keeps the original policy and IOPS
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
