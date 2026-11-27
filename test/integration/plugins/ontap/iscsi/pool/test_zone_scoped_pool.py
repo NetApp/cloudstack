@@ -29,6 +29,8 @@ Test order — sequential workflow that must run in order:
   03  Disable zone-scoped pool — pool.state Disabled; FlexVol unchanged
   04  Enable zone-scoped pool — pool.state Up; FlexVol unchanged
   05  Delete zone-scoped pool — pool gone; FlexVol deleted; baseline restored
+  06  Zone-scoped pool accepts capacity IOPS — listStoragePools capacityiops
+      matches the value sent at create; FlexVol is online
 
 Prerequisites:
   - CloudStack management server with the NetApp ONTAP plugin deployed
@@ -176,7 +178,7 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _create_zone_pool(self):
+    def _create_zone_pool(self, capacityiops=None):
         """Create a zone-scoped iSCSI pool (no clusterid / podid)."""
         ps = self.testdata[TestData.primaryStorage]
         storage_ip = self.testdata[TestData.ontap][TestData.DETAIL_STORAGE_IP]
@@ -191,6 +193,8 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
         cmd.provider = ps[TestData.provider]
         cmd.tags = ps[TestData.tags]
         cmd.capacitybytes = ps["capacitybytes"]
+        if capacityiops is not None:
+            cmd.capacityiops = int(capacityiops)
         cmd.hypervisor = "KVM"
         cmd.managed = True
 
@@ -410,4 +414,52 @@ class TestOntapISCSIZoneScopedPool(OntapTestBase):
         )
         self._assert_igroup_baseline_unchanged(
             "after zone-scoped pool deletion"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 06 — Zone-scoped pool accepts capacity IOPS
+    # ------------------------------------------------------------------
+
+    @attr(tags=["iscsi_zone_pool"], required_hardware=True)
+    def test_06_zone_scoped_pool_accepts_capacity_iops(self):
+        """A zone-scoped pool stores the capacity IOPS given at create."""
+        capacity_iops = 5000
+        pool = self._create_zone_pool(capacityiops=capacity_iops)
+        self.__class__.pool2 = pool
+
+        self.assertEqual(
+            pool.state, "Up",
+            "Pool state should be 'Up', got '%s'" % pool.state
+        )
+        listed = list_storage_pools(self.apiClient, id=pool.id)
+        self.assertTrue(listed, "Zone-scoped pool missing after create")
+        self.assertEqual(
+            int(listed[0].capacityiops), capacity_iops,
+            "Pool capacity IOPS should be %d, got '%s'"
+            % (capacity_iops, listed[0].capacityiops)
+        )
+
+        ontap_vol = self.ontap.get_volume(pool.name)
+        self.assertIsNotNone(
+            ontap_vol,
+            "ONTAP FlexVol not found for pool '%s'" % pool.name
+        )
+        self.assertEqual(
+            ontap_vol.get("state"), "online",
+            "ONTAP FlexVol should be 'online', got '%s'" % ontap_vol.get("state")
+        )
+
+        pool_name = pool.name
+        self._enter_maintenance(pool.id)
+        self._delete_pool(pool.id, forced=True)
+        self.__class__.pool2 = None
+
+        try:
+            remaining = list_storage_pools(self.apiClient, id=pool.id)
+        except Exception:
+            remaining = None
+        self.assertFalse(remaining, "Pool still listed in CloudStack after deletion")
+        self.assertIsNone(
+            self.ontap.get_volume(pool_name),
+            "ONTAP FlexVol '%s' still exists after pool deletion" % pool_name
         )

@@ -46,16 +46,22 @@ test/integration/plugins/ontap/
 ├── guest_ssh.py                  # Guest SSH (paramiko) for the VM workflow suites
 ├── setup_env.sh                  # venv: Marvin plus requirements.txt
 ├── requirements.txt              # setuptools, pyvmomi, paramiko pins
-├── TEST_CASES.md                 # Full test case reference table (151 tests)
+├── TEST_CASES.md                 # Full test case reference table (211 tests)
 ├── README.md                     # This file
+│
+├── helpers/
+│   ├── qos_offerings.py              # Shared QoS cases; both qos suites inherit them
+│   └── ...                           # KVM host and template-cache helpers
 │
 ├── nfs3/
 │   ├── pool/
 │   │   ├── test_pool_lifecycle.py        # Pool create/disable/enable/maintenance/delete
 │   │   ├── test_pool_with_volumes.py     # Same lifecycle with a CS volume present
-│   │   └── test_zone_scoped_pool.py      # Zone-scoped pool (attachZone)
+│   │   └── test_zone_scoped_pool.py      # Zone-scoped pool (attachZone) + capacity IOPS
 │   ├── volume/
 │   │   └── test_volume_lifecycle.py      # Volume create/delete/negative-delete
+│   ├── qos/
+│   │   └── test_qos_offerings.py         # QoS policy on NFS files: disk/compute offerings, resize
 │   ├── instance/
 │   │   └── test_vm_volume_attach.py      # Pool + volume + VM + resize, snapshots, attach/detach + template cache
 │   └── template/
@@ -65,9 +71,11 @@ test/integration/plugins/ontap/
     ├── pool/
     │   ├── test_pool_lifecycle.py        # iSCSI pool lifecycle + igroup assertions
     │   ├── test_pool_with_volumes.py     # Same lifecycle with a LUN-backed volume
-    │   └── test_zone_scoped_pool.py      # Zone-scoped iSCSI pool
+    │   └── test_zone_scoped_pool.py      # Zone-scoped iSCSI pool + capacity IOPS
     ├── volume/
     │   └── test_volume_lifecycle.py      # LUN create/delete/negative-delete
+    ├── qos/
+    │   └── test_qos_offerings.py         # QoS policy on LUNs: disk/compute offerings, resize
     ├── instance/
     │   └── test_vm_volume_attach.py      # Pool + LUN + VM + resize, snapshots, LUN-map lifecycle + template cache
     └── template/
@@ -186,10 +194,10 @@ The test classes read `storageIP`, `svmName`, `username`, and `password` from th
 Run all suites for one protocol in a single batch, then inspect consolidated results:
 
 ```bash
-# iSCSI only — 6 suites, ~40–60 min
+# iSCSI only — 7 suites
 bash test/integration/plugins/ontap/run_tests.sh iscsi
 
-# NFS3 only — 6 suites, ~40–60 min
+# NFS3 only — 7 suites
 bash test/integration/plugins/ontap/run_tests.sh nfs3
 
 # Full plugin validation: iSCSI batch, then NFS3 batch
@@ -203,19 +211,25 @@ bash test/integration/plugins/ontap/run_tests.sh all
 # (the template-cache happy path runs inside the VM attach suites)
 bash test/integration/plugins/ontap/run_tests.sh nfs3_template_cache_negative
 bash test/integration/plugins/ontap/run_tests.sh iscsi_template_cache_negative
+
+# QoS offering suites
+bash test/integration/plugins/ontap/run_tests.sh nfs3_qos
+bash test/integration/plugins/ontap/run_tests.sh iscsi_qos
 ```
 
-Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
+Each protocol batch runs suites in this order: pool lifecycle → pool with volumes → volume lifecycle → QoS offerings → zone-scoped pool → VM attach (includes template cache seed / reuse / survive) → template cache negative (last).
 
 | Command | What it runs |
 | --------- | -------------- |
-| `run_tests.sh iscsi` | All 6 iSCSI suites + unified iSCSI report |
-| `run_tests.sh nfs3` | All 6 NFS3 suites + unified NFS3 report |
+| `run_tests.sh iscsi` | All 7 iSCSI suites + unified iSCSI report |
+| `run_tests.sh nfs3` | All 7 NFS3 suites + unified NFS3 report |
 | `run_tests.sh both` | iSCSI batch, then NFS3 batch + combined report |
 | `run_tests.sh all` | `setup_zone`, then `both` (iSCSI before NFS3) |
 | `run_tests.sh nfs3_workflow` | Single suite by tag (unchanged) |
 | `run_tests.sh nfs3_template_cache_negative` | NFS3 template-cache boundary/negative suite |
 | `run_tests.sh iscsi_template_cache_negative` | iSCSI template-cache boundary/negative suite |
+| `run_tests.sh nfs3_qos` | NFS3 QoS offerings suite |
+| `run_tests.sh iscsi_qos` | iSCSI QoS offerings suite |
 | `run_tests.sh setup_zone` | Zone setup only |
 | `run_tests.sh cleanup_zone` | Zone teardown (manual; destructive) |
 
@@ -371,6 +385,11 @@ another ONTAP pool is present.
 | `list_files_in_volume(vol_name)` | Files inside a FlexVol | NFS3 instance and pool lifecycle suites |
 | `write_file_in_volume(vol_name, filename, size_bytes)` | Write incompressible data into a FlexVol file (no VM) | NFS3/iSCSI pool lifecycle suites |
 | `delete_file_in_volume(vol_name, filename)` | Remove a FlexVol file | NFS3/iSCSI pool lifecycle suites |
+| `get_lun(svm_name, lun_path)` | One LUN record, including its `qos_policy` | iSCSI QoS suite |
+| `get_nfs_file(vol_name, file_name)` | One FlexVol file record, including its `qos_policy` | NFS3 QoS suite |
+| `get_qos_policy(svm_name, policy_name)` | SVM QoS policy: `uuid`, `object_count`, `fixed` min/max throughput | QoS suites |
+| `delete_qos_policy(svm_name, policy_name)` | Remove one SVM QoS policy; no-op when already gone | QoS suites (cleanup) |
+| `is_all_flash()` | True when every cluster node is all-flash optimized (AFF); false means FAS | QoS suites |
 
 ---
 
@@ -380,18 +399,60 @@ another ONTAP pool is present.
 | ------- | ------ | ------- | --------------- |
 | NFS3 Pool Lifecycle | `nfs3/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete, then re-create with a volume, reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or export policy |
 | NFS3 Pool with Volumes | `nfs3/pool/test_pool_with_volumes.py` | 12 | Lifecycle with a live volume, deletion with a pre-deleted FlexVol or export policy, and host cases for an inactive libvirt pool, a read-only NFS mount, and a deleted mount point |
-| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP/KVM verification, disable, enable, and delete |
+| NFS3 Zone-Scoped Pool | `nfs3/pool/test_zone_scoped_pool.py` | 6 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP/KVM verification, disable, enable, and delete, plus a pool created with capacity IOPS |
 | NFS3 Volume Lifecycle | `nfs3/volume/test_volume_lifecycle.py` | 5 | Volume is metadata-only; FlexVol unchanged on delete |
+| NFS3 QoS Offerings | `nfs3/qos/test_qos_offerings.py` | 29 | QoS policy on NFS files from disk offerings (max only, min and max, custom size, custom IOPS, provisioning types, shared policy, resize), compute offerings (fixed, own IOPS, bound disk, strict, custom, constrained), root plus data disks, rejected IOPS values, and a rejected resize that keeps the original policy; min IOPS apply on AFF and are rejected on FAS |
 | NFS3 VM + Volume Attach | `nfs3/instance/test_vm_volume_attach.py` | 29 | Full VM lifecycle with stopped-VM qcow2 grow, guest SSH, volume and VM snapshots; ROOT on tagged pool seeds/reuses template cache, which survives VM delete |
 | NFS3 Template Cache Negative | `nfs3/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 | iSCSI Pool Lifecycle | `iscsi/pool/test_pool_lifecycle.py` | 21 | Create rejects for aggregate space, invalid capacitybytes, and a duplicate FlexVol name; grow to 300 TiB, reject grow past 300 TiB, safe shrink, disable, resize while disabled, enable, maintenance, grow and shrink in maintenance, delete + igroups, then re-create with a volume (LUN), reject shrink below used capacity, deploy a VM and attach the volume, cleanup, plus empty-pool deletion with a pre-deleted FlexVol or igroups |
 | iSCSI Pool with Volumes | `iscsi/pool/test_pool_with_volumes.py` | 13 | Lifecycle with a live LUN, deletion with a pre-deleted FlexVol or igroups, maintenance with pre-deleted LUN maps, and host cases for a logged-out iSCSI session, an existing session during volume delete, and a replaced by-path symlink |
-| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 5 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP verification, disable, enable, and delete |
+| iSCSI Zone-Scoped Pool | `iscsi/pool/test_zone_scoped_pool.py` | 6 | Zone-scoped pool create, grow and shrink with CloudStack/ONTAP verification, disable, enable, and delete, plus a pool created with capacity IOPS |
 | iSCSI Volume Lifecycle | `iscsi/volume/test_volume_lifecycle.py` | 5 | LUN created per CS volume; LUN removed on delete |
+| iSCSI QoS Offerings | `iscsi/qos/test_qos_offerings.py` | 29 | Same 29 cases as the NFS3 suite, with the QoS policy checked on the ONTAP LUN |
 | iSCSI VM + Volume Attach | `iscsi/instance/test_vm_volume_attach.py` | 29 | Full VM lifecycle; stopped-VM LUN grow, LUN-map checks, guest SSH, volume and VM snapshots; ROOT on tagged pool seeds/reuses `cs_tmpl_*` LUN cache |
 | iSCSI Template Cache Negative | `iscsi/template/test_template_cache_negative.py` | 3 | Tag mismatch; undersized pool; out-of-band cache delete |
 
 For the goal, dependencies, and exact success criteria of every individual test, see [TEST_CASES.md](TEST_CASES.md).
+
+---
+
+## QoS offering suites
+
+`nfs3/qos/test_qos_offerings.py` and `iscsi/qos/test_qos_offerings.py` check that the IOPS on a CloudStack disk or compute offering end up as an ONTAP QoS policy on the right object: the NFS file or the iSCSI LUN. Each test creates its own offerings, creates a volume or VM, and asserts both sides: the volume's `miniops` / `maxiops` in CloudStack, and the policy name and throughput on the ONTAP object.
+
+The 29 cases live once in `helpers/qos_offerings.py`. Each protocol file is a small subclass that sets the protocol and pool URL scheme, so a change to a case applies to both suites. See Suites 13 and 14 in [TEST_CASES.md](TEST_CASES.md) for every case.
+
+| Area | Cases |
+| ------ | ------- |
+| Disk offerings | no IOPS, max only, min and max, min only, custom size, custom IOPS, thin/sparse/fat, shared policy, resize to a higher max, resize to no IOPS |
+| Rejected input | min above max on the offering, min of 0 on the offering, min above max on the volume, min above the pool IOPS capacity, and a resize the driver rejects (the volume keeps its original policy and IOPS, and no replacement policy is left) |
+| Compute offerings | fixed with an override disk, own IOPS, bound to a disk, strict offering rejecting an override, custom, custom root disk, custom IOPS at deploy, constrained custom |
+| Root and data disks | plain root with a QoS data disk, different policies on root and data, hypervisor rate limits creating no policy |
+
+### AFF and FAS
+
+The suite asks ONTAP which platform it is running on (`OntapRestClient.is_all_flash()`):
+
+- **AFF:** a minimum IOPS above 0 is applied. The test checks the policy `cs_<min>_to_<max>_iops_<svm>` on the object.
+- **FAS:** ONTAP supports only a maximum limit, so the plugin rejects a minimum above 0 before creating a policy. The same tests then expect `createVolume` to fail and expect no policy to be left behind.
+- The API error for that failure only says the volume create failed. The test finds the real reason in `vmops.log` on the management server.
+
+### Extra requirements
+
+- **Management server SSH (FAS only):** the log check connects to `mgtSvr[0].mgtSvrIp` from `ontap.cfg`, using the username and password of the first host under `zones[0].pods[0].clusters[0].hosts[0]`. It needs `paramiko` from the venv. If it is missing or the login fails, the FAS cases fail.
+- **MySQL access:** the API rejects a disk offering with a minimum of 0, so for max-only offerings the test sets `min_iops` / `max_iops` in the `disk_offering` table afterwards. This uses the `dbSvr` entry in `ontap.cfg`.
+- **VM cases:** need a ready KVM template and a routing host in the cluster, plus a guest network in an advanced zone. Without them those cases skip.
+- **Pool IOPS capacity cases:** `test_16_reject_pool_iops_capacity` and `test_29_rejected_resize_keeps_original_qos` each create and delete a second pool with `capacityiops=100`. Both skip on FAS.
+- **Disabled protocol:** the suite skips when its protocol has `enabled` set to false under `storagePool.protocols` in `ontap.cfg`.
+
+### Cleanup
+
+Each test removes its VMs and volumes, then the ONTAP LUN or file, then any `cs_` policy with no objects left. `tearDownClass` force-deletes the pool and its FlexVol. The NFS3 suite also unmounts the pool on the KVM hosts first and deletes the export policy.
+
+```bash
+bash test/integration/plugins/ontap/run_tests.sh nfs3_qos
+bash test/integration/plugins/ontap/run_tests.sh iscsi_qos
+```
 
 ---
 
@@ -407,6 +468,9 @@ For the goal, dependencies, and exact success criteria of every individual test,
 | Pool state never reaches `Maintenance` | KVM agent not responding | Check `cloudstack-agent` on KVM host; verify host is connected in CloudStack UI |
 | iSCSI `test_24` error 530 | KVM guest does not ACK SCSI hot-unplug | Detach of the data LUN from a running VM; see TEST_CASES.md Suite 10 `test_24_detach_volume_from_vm` |
 | ONTAP REST `401 Unauthorized` | Wrong credentials in `ontap.cfg` | Verify `username`/`password` under `ontap` section |
+| QoS suite on FAS: `createVolume` fails when a minimum IOPS is set | Expected: FAS supports only a maximum IOPS limit | None; the QoS cases assert this rejection on FAS and expect no policy left behind |
+| QoS FAS case fails with `NO_JAVA`, `NO_LOG`, or `ontap.cfg has no management server SSH login` | The test cannot read `vmops.log` on the management server | Check `mgtSvr[0].mgtSvrIp` and the first host's `username`/`password` in `ontap.cfg`, and that the venv has `paramiko` |
+| QoS VM cases skip with `No ready KVM template` / `Advanced zone has no guest network` | No ready template, routing host, or guest network for the QoS account | Run `setup_zone`, or wait for the template to download |
 | `ISCSI protocol is not enabled on SVM` / many pool tests EXCEPTION then FAIL | SVM iSCSI service off or no `data_iscsi` LIF | Enable iSCSI on the SVM and assign `default-data-iscsi` (or `default-data-blocks`) to at least one data LIF; `run_tests.sh` now fails this check before Marvin starts |
 | `No ready KVM user template available` | Template still downloading | Re-run `setup_zone` (step 12 waits for template readiness); or wait in CloudStack UI |
 | `setup_zone` steps 11–12 slow on first run | System VMs and template download after zone enable | Normal — first run may take up to ~60 min; re-runs pass quickly when already ready |

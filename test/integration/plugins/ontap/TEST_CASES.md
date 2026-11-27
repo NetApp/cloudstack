@@ -19,7 +19,7 @@
 
 # ONTAP Integration Test Cases
 
-Complete reference for all 151 test cases across 12 test suites.
+Complete reference for all 211 test cases across 14 test suites.
 Each suite is sequential — tests must run in numbered order; each step builds on state created by the previous step.
 
 ---
@@ -99,7 +99,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `nfs3/pool/test_zone_scoped_pool.py`
 **Class:** `TestOntapZoneScopedPool`
 **Tag:** `zone_pool`
-**Total:** 5 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected)
+**Total:** 6 tests | **Scope:** zone-scoped NFS3 pool (scope=ZONE, all hosts in zone connected). Test 06 is isolated: it creates and deletes its own pool after test 05 has deleted the first one
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
@@ -108,6 +108,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 03 | `test_03_disable_zone_scoped_pool` | Disable the zone-scoped pool | test_02 | `pool.state == "Disabled"` | FlexVol unchanged; export policy unchanged | positive |
 | 04 | `test_04_enable_zone_scoped_pool` | Re-enable the zone-scoped pool | test_03 | `pool.state == "Up"` | FlexVol unchanged; export policy unchanged | positive |
 | 05 | `test_05_delete_zone_scoped_pool` | Enter maintenance and force-delete the zone-scoped pool | test_04 | Pool no longer listed | FlexVol deleted; export policy deleted | positive |
+| 06 | `test_06_zone_scoped_pool_accepts_capacity_iops` | Create a zone-scoped pool with `capacityiops` 5000, then enter maintenance, unmount it on the KVM hosts, and force-delete it | isolated | `pool.state == "Up"`; `listStoragePools` returns `capacityiops` 5000; pool no longer listed after delete | FlexVol `online` after create; FlexVol and export policy deleted after delete | positive |
 
 ---
 
@@ -232,7 +233,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 **File:** `iscsi/pool/test_zone_scoped_pool.py`
 **Class:** `TestOntapISCSIZoneScopedPool`
 **Tag:** `iscsi_zone_pool`
-**Total:** 5 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE)
+**Total:** 6 tests | **Scope:** zone-scoped iSCSI pool (scope=ZONE). Test 06 is isolated: it creates and deletes its own pool after test 05 has deleted the first one
 
 | # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
 | --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
@@ -241,6 +242,7 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 | 03 | `test_03_disable_zone_scoped_pool` | Disable pool | test_02 | `pool.state == "Disabled"` | FlexVol unchanged; igroups unchanged | positive |
 | 04 | `test_04_enable_zone_scoped_pool` | Re-enable pool | test_03 | `pool.state == "Up"` | FlexVol unchanged; igroups unchanged | positive |
 | 05 | `test_05_delete_zone_scoped_pool` | Enter maintenance then delete pool | test_04 | Pool no longer listed | FlexVol and test-pool maps deleted; shared igroup baseline restored | positive |
+| 06 | `test_06_zone_scoped_pool_accepts_capacity_iops` | Create a zone-scoped pool with `capacityiops` 5000, then enter maintenance and force-delete it | isolated | `pool.state == "Up"`; `listStoragePools` returns `capacityiops` 5000; pool no longer listed after delete | FlexVol `online` after create; FlexVol deleted after delete | positive |
 
 ---
 
@@ -334,20 +336,112 @@ Each suite is sequential — tests must run in numbered order; each step builds 
 
 ---
 
+## Suite 13 — NFS3 QoS Offerings
+
+**File:** `nfs3/qos/test_qos_offerings.py` (shared cases in `helpers/qos_offerings.py`)
+**Class:** `TestOntapNFS3QosOfferings`
+**Tag:** `nfs3_qos`
+**Total:** 29 tests | **Scope:** QoS policy placement on NFS3 files for disk offerings, compute offerings, root and data disks, and resize. One cluster-scoped pool is created in `setUpClass`
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
+| 01 | `test_01_fixed_disk_without_iops` | Fixed disk offering with no IOPS | setUpClass (`pool`) | Volume reaches `Ready`; `miniops` and `maxiops` are 0 | The file has no QoS policy | positive |
+| 02 | `test_02_fixed_disk_max_iops_only` | Fixed disk offering with a maximum only. The offering's min IOPS is set to 0 in `disk_offering` after create, because the API rejects a minimum of 0 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 410 | The file carries `cs_0_to_410_iops_<svm>`; the policy's max throughput is 410 | positive |
+| 03 | `test_03_fixed_disk_min_and_max_iops` | Fixed disk offering with a minimum of 120 and a maximum of 460 | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 120 and `maxiops` 460. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message for that volume | AFF: the file carries `cs_120_to_460_iops_<svm>` with min 120 and max 460. FAS: no `cs_120_to_460_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 04 | `test_04_fixed_disk_min_iops_only` | Fixed disk offering with a minimum of 180 and no maximum | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 180 and `maxiops` 0. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message | AFF: the file carries `cs_180_to_0_iops_<svm>`. FAS: no `cs_180_to_0_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 05 | `test_05_custom_size_disk_with_fixed_iops` | Custom-size disk offering whose IOPS are fixed on the offering (0 and 470); the volume is created at 1 GB | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 470 | The file carries `cs_0_to_470_iops_<svm>` | positive |
+| 06 | `test_06_custom_iops_disk_max_only` | Custom-IOPS disk offering; `createVolume` passes `miniops` 0 and `maxiops` 480 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 480 | The file carries `cs_0_to_480_iops_<svm>` | positive |
+| 07 | `test_07_custom_iops_disk_min_and_max` | Custom-IOPS disk offering; `createVolume` passes `miniops` 130 and `maxiops` 490 | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 130 and `maxiops` 490. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message | AFF: the file carries `cs_130_to_490_iops_<svm>`. FAS: no `cs_130_to_490_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 08 | `test_08_custom_size_and_custom_iops` | Disk offering with both custom size and custom IOPS; `createVolume` passes size 1 GB, `miniops` 0 and `maxiops` 500 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 500 | The file carries `cs_0_to_500_iops_<svm>` | positive |
+| 09 | `test_09_provisioning_types_keep_iops` | Thin, sparse, and fat disk offerings each keep a max-only policy (511, 512, 513). Each volume is deleted before the next one is created | setUpClass (`pool`) | Each volume reaches `Ready` with its `maxiops` and `miniops` 0 | Each file carries `cs_0_to_<max>_iops_<svm>`; after its volume is deleted that policy is removed | positive |
+| 10 | `test_10_shared_policy_survives_until_last_volume` | Two volumes from the same offering (0 and 610) share one policy until the last volume is deleted | setUpClass (`pool`) | Both volumes reach `Ready` with `maxiops` 610; the second volume is still `Ready` after the first is deleted | Both files carry `cs_0_to_610_iops_<svm>` and `object_count` is at least 2 when ONTAP reports it; the policy survives the first delete and is removed after the second | positive |
+| 11 | `test_11_resize_replaces_qos_policy` | `resizeVolume` onto a disk offering with a higher maximum (415 to 825) | setUpClass (`pool`) | Volume is `Ready` again with `maxiops` 825 | The file switches to `cs_0_to_825_iops_<svm>`; `cs_0_to_415_iops_<svm>` is removed | positive |
+| 12 | `test_12_resize_clears_qos_policy` | `resizeVolume` onto a disk offering that has no IOPS (from 430) | setUpClass (`pool`) | Volume is `Ready` again with `miniops` and `maxiops` 0 | The file has no QoS policy; `cs_0_to_430_iops_<svm>` is removed | positive |
+| 13 | `test_13_reject_disk_offering_min_above_max` | `createDiskOffering` with `miniops` 500 and `maxiops` 100 | setUpClass (`pool`) | `createDiskOffering` fails with `min IOPS must be less than or equal to the max IOPS` | No ONTAP object is involved | negative |
+| 14 | `test_14_reject_disk_offering_min_iops_zero` | `createDiskOffering` with `miniops` 0 and `maxiops` 100 | setUpClass (`pool`) | `createDiskOffering` fails with `min IOPS must be greater than 0` | No ONTAP object is involved | negative |
+| 15 | `test_15_reject_custom_iops_min_above_max` | `createVolume` on a custom-IOPS offering with `miniops` 400 and `maxiops` 100 | setUpClass (`pool`) | `createVolume` fails with `min IOPS must be less than or equal to the max IOPS`; no volume of that name remains | No file is created | negative |
+| 16 | `test_16_reject_pool_iops_capacity` | A minimum above the pool's IOPS capacity is rejected. Creates a second pool with `capacityiops` 100 and requests `miniops` 200. Skipped on FAS, which rejects a minimum earlier | setUpClass (creates and deletes a second pool) | `createVolume` fails with `Insufficient IOPS capacity`; no volume of that name remains; the second pool is deleted afterwards | No `cs_200_to_200_iops_<svm>` policy exists afterwards; the second pool's FlexVol is deleted | negative (skipped on FAS) |
+| 17 | `test_17_fixed_compute_override_qos_disk` | Fixed compute offering plus an override root disk offering with a maximum of 440 (8 GB) | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT file carries `cs_0_to_440_iops_<svm>` | positive |
+| 18 | `test_18_compute_offering_with_its_own_iops` | Compute offering that carries its own maximum of 450 on its implicit disk offering | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT file carries `cs_0_to_450_iops_<svm>` | positive |
+| 19 | `test_19_compute_bound_to_qos_disk` | Compute offering bound to a disk offering with a maximum of 455 (8 GB) | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT file carries `cs_0_to_455_iops_<svm>` | positive |
+| 20 | `test_20_strict_compute_rejects_disk_override` | Strict compute offering bound to one disk offering; deploy with a different override disk offering | setUpClass (`pool`) | `deployVirtualMachine` fails with `errorCode: 431` and `strictly mapped to its disk offering` | No ONTAP object is created for the rejected deploy | negative |
+| 21 | `test_21_custom_compute_with_qos_disk` | Custom compute offering bound to a disk offering with a maximum of 485; deploy details give 1 CPU, 500 MHz, 512 MB | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT file carries `cs_0_to_485_iops_<svm>` | positive |
+| 22 | `test_22_custom_compute_custom_root_disk` | Custom compute offering with a custom-size, custom-IOPS root disk; `rootdisksize` 8 and deploy details `minIops` 0 and `maxIops` 540 | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool with `maxiops` 540 | The ROOT file carries `cs_0_to_540_iops_<svm>` | positive |
+| 23 | `test_23_custom_iops_on_compute_offering` | Fixed compute offering with custom IOPS; deploy details give `minIops` 0 and `maxIops` 530 | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool with `maxiops` 530 | The ROOT file carries `cs_0_to_530_iops_<svm>` | positive |
+| 24 | `test_24_root_without_iops_and_qos_data_disk` | Root disk with no IOPS and an attached data disk with a maximum of 545 | setUpClass (`pool`) | VM reaches `Running`; data volume attaches and is `Ready` with `maxiops` 545 | The ROOT file has no QoS policy; the data file carries `cs_0_to_545_iops_<svm>` | positive |
+| 25 | `test_25_root_and_data_use_different_policies` | Root disk with a maximum of 550 and an attached data disk with a maximum of 560 | setUpClass (`pool`) | VM reaches `Running`; both volumes are `Ready` with their own `maxiops` | The ROOT file carries `cs_0_to_550_iops_<svm>` and the data file carries `cs_0_to_560_iops_<svm>`; the ROOT policy is unchanged after the attach | positive |
+| 26 | `test_26_hypervisor_rate_limits_do_not_create_ontap_policy` | Disk offering with hypervisor read-rate limits (`bytesreadrate` and `iopsreadrate`) and no min/max IOPS | setUpClass (`pool`) | Volume reaches `Ready`; `miniops` and `maxiops` are 0 | The file has no QoS policy | positive |
+| 27 | `test_27_constrained_compute_fixed_iops` | Constrained custom compute offering (1 to 2 CPUs, 512 to 1024 MB, 500 MHz) bound to a disk offering with a maximum of 570; deploy with 2 CPUs and 1024 MB | setUpClass (`pool`) | Offering reports customized, 500 MHz, and the four CPU and memory limits; VM reports 2 CPUs, 500 MHz, 1024 MB; ROOT volume is `Ready` on the pool | The ROOT file carries `cs_0_to_570_iops_<svm>` | positive |
+| 28 | `test_28_constrained_compute_custom_iops` | Constrained custom compute offering bound to a custom-IOPS root disk; deploy with 1 CPU, 768 MB, `minIops` 0 and `maxIops` 580 | setUpClass (`pool`) | Offering reports the same limits; VM reports 1 CPU, 500 MHz, 768 MB; ROOT volume is `Ready` on the pool with `maxiops` 580 | The ROOT file carries `cs_0_to_580_iops_<svm>` | positive |
+| 29 | `test_29_rejected_resize_keeps_original_qos` | A resize the driver rejects keeps the original QoS. Creates a second pool with `capacityiops` 100 and a volume with min 50 and max 500, then resizes it onto a disk offering with min 200. Skipped on FAS, where a minimum IOPS is rejected earlier | setUpClass (creates and deletes a second pool) | `resizeVolume` fails with `Insufficient IOPS capacity`; the volume is `Ready` with `miniops` 50 and `maxiops` 500 | The file still carries `cs_50_to_500_iops_<svm>` with min 50 and max 500; no `cs_200_to_500_iops_<svm>` policy exists; the second pool's FlexVol is deleted afterwards | negative (skipped on FAS) |
+
+> **AFF and FAS:** the suite reads the platform from ONTAP (`OntapRestClient.is_all_flash()`). A minimum IOPS above 0 is applied only on AFF. On FAS the plugin rejects it before ONTAP creates a policy; the API error only says the volume create failed, so the test reads the FAS message from `vmops.log` on the management server over SSH. Policy names follow `cs_<min>_to_<max>_iops_<svm>`, with dots in the SVM name replaced by underscores.
+>
+> **Isolation and cleanup:** each test is independent. `tearDown` destroys the test's VMs and volumes, then removes the ONTAP file and any `cs_` policy with no remaining objects. `tearDownClass` unmounts the pool on the KVM hosts, then force-deletes the pool, the FlexVol, and the export policy.
+
+---
+
+## Suite 14 — iSCSI QoS Offerings
+
+**File:** `iscsi/qos/test_qos_offerings.py` (shared cases in `helpers/qos_offerings.py`)
+**Class:** `TestOntapISCSIQosOfferings`
+**Tag:** `iscsi_qos`
+**Total:** 29 tests | **Scope:** QoS policy placement on iSCSI LUNs for disk offerings, compute offerings, root and data disks, and resize. One cluster-scoped pool is created in `setUpClass`
+
+| # | Test method | Goal | Depends on | CloudStack success criteria | ONTAP success criteria | Type |
+| --- | ------------- | ------ | ------------ | ----------------------------- | ------------------------ | ------ |
+| 01 | `test_01_fixed_disk_without_iops` | Fixed disk offering with no IOPS | setUpClass (`pool`) | Volume reaches `Ready`; `miniops` and `maxiops` are 0 | The LUN has no QoS policy | positive |
+| 02 | `test_02_fixed_disk_max_iops_only` | Fixed disk offering with a maximum only. The offering's min IOPS is set to 0 in `disk_offering` after create, because the API rejects a minimum of 0 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 410 | The LUN carries `cs_0_to_410_iops_<svm>`; the policy's max throughput is 410 | positive |
+| 03 | `test_03_fixed_disk_min_and_max_iops` | Fixed disk offering with a minimum of 120 and a maximum of 460 | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 120 and `maxiops` 460. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message for that volume | AFF: the LUN carries `cs_120_to_460_iops_<svm>` with min 120 and max 460. FAS: no `cs_120_to_460_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 04 | `test_04_fixed_disk_min_iops_only` | Fixed disk offering with a minimum of 180 and no maximum | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 180 and `maxiops` 0. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message | AFF: the LUN carries `cs_180_to_0_iops_<svm>`. FAS: no `cs_180_to_0_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 05 | `test_05_custom_size_disk_with_fixed_iops` | Custom-size disk offering whose IOPS are fixed on the offering (0 and 470); the volume is created at 1 GB | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 470 | The LUN carries `cs_0_to_470_iops_<svm>` | positive |
+| 06 | `test_06_custom_iops_disk_max_only` | Custom-IOPS disk offering; `createVolume` passes `miniops` 0 and `maxiops` 480 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 480 | The LUN carries `cs_0_to_480_iops_<svm>` | positive |
+| 07 | `test_07_custom_iops_disk_min_and_max` | Custom-IOPS disk offering; `createVolume` passes `miniops` 130 and `maxiops` 490 | setUpClass (`pool`) | AFF: volume `Ready` with `miniops` 130 and `maxiops` 490. FAS: `createVolume` fails and the management log holds the FAS minimum-IOPS message | AFF: the LUN carries `cs_130_to_490_iops_<svm>`. FAS: no `cs_130_to_490_iops_<svm>` policy exists afterwards | positive on AFF, negative on FAS |
+| 08 | `test_08_custom_size_and_custom_iops` | Disk offering with both custom size and custom IOPS; `createVolume` passes size 1 GB, `miniops` 0 and `maxiops` 500 | setUpClass (`pool`) | Volume reaches `Ready` with `miniops` 0 and `maxiops` 500 | The LUN carries `cs_0_to_500_iops_<svm>` | positive |
+| 09 | `test_09_provisioning_types_keep_iops` | Thin, sparse, and fat disk offerings each keep a max-only policy (511, 512, 513). Each volume is deleted before the next one is created | setUpClass (`pool`) | Each volume reaches `Ready` with its `maxiops` and `miniops` 0 | Each LUN carries `cs_0_to_<max>_iops_<svm>`; after its volume is deleted that policy is removed | positive |
+| 10 | `test_10_shared_policy_survives_until_last_volume` | Two volumes from the same offering (0 and 610) share one policy until the last volume is deleted | setUpClass (`pool`) | Both volumes reach `Ready` with `maxiops` 610; the second volume is still `Ready` after the first is deleted | Both LUNs carry `cs_0_to_610_iops_<svm>` and `object_count` is at least 2 when ONTAP reports it; the policy survives the first delete and is removed after the second | positive |
+| 11 | `test_11_resize_replaces_qos_policy` | `resizeVolume` onto a disk offering with a higher maximum (415 to 825) | setUpClass (`pool`) | Volume is `Ready` again with `maxiops` 825 | The LUN switches to `cs_0_to_825_iops_<svm>`; `cs_0_to_415_iops_<svm>` is removed | positive |
+| 12 | `test_12_resize_clears_qos_policy` | `resizeVolume` onto a disk offering that has no IOPS (from 430) | setUpClass (`pool`) | Volume is `Ready` again with `miniops` and `maxiops` 0 | The LUN has no QoS policy; `cs_0_to_430_iops_<svm>` is removed | positive |
+| 13 | `test_13_reject_disk_offering_min_above_max` | `createDiskOffering` with `miniops` 500 and `maxiops` 100 | setUpClass (`pool`) | `createDiskOffering` fails with `min IOPS must be less than or equal to the max IOPS` | No ONTAP object is involved | negative |
+| 14 | `test_14_reject_disk_offering_min_iops_zero` | `createDiskOffering` with `miniops` 0 and `maxiops` 100 | setUpClass (`pool`) | `createDiskOffering` fails with `min IOPS must be greater than 0` | No ONTAP object is involved | negative |
+| 15 | `test_15_reject_custom_iops_min_above_max` | `createVolume` on a custom-IOPS offering with `miniops` 400 and `maxiops` 100 | setUpClass (`pool`) | `createVolume` fails with `min IOPS must be less than or equal to the max IOPS`; no volume of that name remains | No LUN is created | negative |
+| 16 | `test_16_reject_pool_iops_capacity` | A minimum above the pool's IOPS capacity is rejected. Creates a second pool with `capacityiops` 100 and requests `miniops` 200. Skipped on FAS, which rejects a minimum earlier | setUpClass (creates and deletes a second pool) | `createVolume` fails with `Insufficient IOPS capacity`; no volume of that name remains; the second pool is deleted afterwards | No `cs_200_to_200_iops_<svm>` policy exists afterwards; the second pool's FlexVol is deleted | negative (skipped on FAS) |
+| 17 | `test_17_fixed_compute_override_qos_disk` | Fixed compute offering plus an override root disk offering with a maximum of 440 (8 GB) | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT LUN carries `cs_0_to_440_iops_<svm>` | positive |
+| 18 | `test_18_compute_offering_with_its_own_iops` | Compute offering that carries its own maximum of 450 on its implicit disk offering | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT LUN carries `cs_0_to_450_iops_<svm>` | positive |
+| 19 | `test_19_compute_bound_to_qos_disk` | Compute offering bound to a disk offering with a maximum of 455 (8 GB) | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT LUN carries `cs_0_to_455_iops_<svm>` | positive |
+| 20 | `test_20_strict_compute_rejects_disk_override` | Strict compute offering bound to one disk offering; deploy with a different override disk offering | setUpClass (`pool`) | `deployVirtualMachine` fails with `errorCode: 431` and `strictly mapped to its disk offering` | No ONTAP object is created for the rejected deploy | negative |
+| 21 | `test_21_custom_compute_with_qos_disk` | Custom compute offering bound to a disk offering with a maximum of 485; deploy details give 1 CPU, 500 MHz, 512 MB | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool | The ROOT LUN carries `cs_0_to_485_iops_<svm>` | positive |
+| 22 | `test_22_custom_compute_custom_root_disk` | Custom compute offering with a custom-size, custom-IOPS root disk; `rootdisksize` 8 and deploy details `minIops` 0 and `maxIops` 540 | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool with `maxiops` 540 | The ROOT LUN carries `cs_0_to_540_iops_<svm>` | positive |
+| 23 | `test_23_custom_iops_on_compute_offering` | Fixed compute offering with custom IOPS; deploy details give `minIops` 0 and `maxIops` 530 | setUpClass (`pool`) | VM reaches `Running`; ROOT volume is `Ready` on the pool with `maxiops` 530 | The ROOT LUN carries `cs_0_to_530_iops_<svm>` | positive |
+| 24 | `test_24_root_without_iops_and_qos_data_disk` | Root disk with no IOPS and an attached data disk with a maximum of 545 | setUpClass (`pool`) | VM reaches `Running`; data volume attaches and is `Ready` with `maxiops` 545 | The ROOT LUN has no QoS policy; the data LUN carries `cs_0_to_545_iops_<svm>` | positive |
+| 25 | `test_25_root_and_data_use_different_policies` | Root disk with a maximum of 550 and an attached data disk with a maximum of 560 | setUpClass (`pool`) | VM reaches `Running`; both volumes are `Ready` with their own `maxiops` | The ROOT LUN carries `cs_0_to_550_iops_<svm>` and the data LUN carries `cs_0_to_560_iops_<svm>`; the ROOT policy is unchanged after the attach | positive |
+| 26 | `test_26_hypervisor_rate_limits_do_not_create_ontap_policy` | Disk offering with hypervisor read-rate limits (`bytesreadrate` and `iopsreadrate`) and no min/max IOPS | setUpClass (`pool`) | Volume reaches `Ready`; `miniops` and `maxiops` are 0 | The LUN has no QoS policy | positive |
+| 27 | `test_27_constrained_compute_fixed_iops` | Constrained custom compute offering (1 to 2 CPUs, 512 to 1024 MB, 500 MHz) bound to a disk offering with a maximum of 570; deploy with 2 CPUs and 1024 MB | setUpClass (`pool`) | Offering reports customized, 500 MHz, and the four CPU and memory limits; VM reports 2 CPUs, 500 MHz, 1024 MB; ROOT volume is `Ready` on the pool | The ROOT LUN carries `cs_0_to_570_iops_<svm>` | positive |
+| 28 | `test_28_constrained_compute_custom_iops` | Constrained custom compute offering bound to a custom-IOPS root disk; deploy with 1 CPU, 768 MB, `minIops` 0 and `maxIops` 580 | setUpClass (`pool`) | Offering reports the same limits; VM reports 1 CPU, 500 MHz, 768 MB; ROOT volume is `Ready` on the pool with `maxiops` 580 | The ROOT LUN carries `cs_0_to_580_iops_<svm>` | positive |
+| 29 | `test_29_rejected_resize_keeps_original_qos` | A resize the driver rejects keeps the original QoS. Creates a second pool with `capacityiops` 100 and a volume with min 50 and max 500, then resizes it onto a disk offering with min 200. Skipped on FAS, where a minimum IOPS is rejected earlier | setUpClass (creates and deletes a second pool) | `resizeVolume` fails with `Insufficient IOPS capacity`; the volume is `Ready` with `miniops` 50 and `maxiops` 500 | The LUN still carries `cs_50_to_500_iops_<svm>` with min 50 and max 500; no `cs_200_to_500_iops_<svm>` policy exists; the second pool's FlexVol is deleted afterwards | negative (skipped on FAS) |
+
+> **AFF and FAS:** the suite reads the platform from ONTAP (`OntapRestClient.is_all_flash()`). A minimum IOPS above 0 is applied only on AFF. On FAS the plugin rejects it before ONTAP creates a policy; the API error only says the volume create failed, so the test reads the FAS message from `vmops.log` on the management server over SSH. Policy names follow `cs_<min>_to_<max>_iops_<svm>`, with dots in the SVM name replaced by underscores.
+>
+> **Isolation and cleanup:** each test is independent. `tearDown` destroys the test's VMs and volumes, then removes the ONTAP LUN and any `cs_` policy with no remaining objects. `tearDownClass` force-deletes the pool and the FlexVol.
+
+---
+
 ## Cross-suite summary
 
 | Suite | Protocol | Scope | Tests | Status |
 | ------- | --------- | ------- | ------- | -------- |
 | NFS3 Pool Lifecycle | NFS3 | Cluster | 21 | ✅ |
 | NFS3 Pool with Volumes | NFS3 | Cluster | 12 | ✅ |
-| NFS3 Zone-Scoped Pool | NFS3 | Zone | 5 | ✅ |
+| NFS3 Zone-Scoped Pool | NFS3 | Zone | 6 | ✅ |
 | NFS3 Volume Lifecycle | NFS3 | Cluster | 5 | ✅ |
+| NFS3 QoS Offerings | NFS3 | Cluster | 29 | 🆕 |
 | NFS3 VM + Volume Attach | NFS3 | Cluster | 29 | ⏳ resize and snapshot cases pending lab validation |
 | NFS3 Template Cache Negative | NFS3 | Cluster | 3 | 🆕 |
 | iSCSI Pool Lifecycle | iSCSI | Cluster | 21 | ✅ |
 | iSCSI Pool with Volumes | iSCSI | Cluster | 13 | ✅ |
-| iSCSI Zone-Scoped Pool | iSCSI | Zone | 5 | ✅ |
+| iSCSI Zone-Scoped Pool | iSCSI | Zone | 6 | ✅ |
 | iSCSI Volume Lifecycle | iSCSI | Cluster | 5 | ✅ |
+| iSCSI QoS Offerings | iSCSI | Cluster | 29 | 🆕 |
 | iSCSI VM + Volume Attach | iSCSI | Cluster | 29 | ⏳ resize and snapshot cases pending lab validation; detach limitation |
 | iSCSI Template Cache Negative | iSCSI | Cluster | 3 | 🆕 |
-| **Total** | | | **151** | **Resize and snapshot cases pending lab validation** |
+| **Total** | | | **211** | **Resize and snapshot cases pending lab validation** |
